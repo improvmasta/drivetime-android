@@ -4,6 +4,8 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.bluetooth.BluetoothManager
+import android.content.Context
 import android.content.Intent
 import android.location.Location
 import android.os.Build
@@ -18,7 +20,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.jupiterns.drivetime.obd.Elm327Client
 
 /**
  * Foreground service: streams GPS fixes into the Uploader while driving.
@@ -31,6 +36,9 @@ class LocationService : Service() {
     private lateinit var settings: Settings
     private lateinit var uploader: Uploader
     private val fused by lazy { LocationServices.getFusedLocationProviderClient(this) }
+
+    private var obd: Elm327Client? = null
+    @Volatile private var latestObd: Elm327Client.ObdSample? = null
 
     private val callback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
@@ -53,7 +61,33 @@ class LocationService : Service() {
         }
         settings.loggingEnabled = true
         requestUpdates()
+        startObd()
         return START_STICKY
+    }
+
+    /** Connect the ELM327 dongle (if configured) and poll PIDs into latestObd. */
+    private fun startObd() {
+        val mac = settings.obdMac
+        if (mac.isBlank() || obd != null) return
+        scope.launch {
+            try {
+                val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+                    ?: return@launch
+                val client = Elm327Client()
+                client.connect(adapter.getRemoteDevice(mac))
+                obd = client
+                var ticks = 0
+                while (isActive && client.isConnected()) {
+                    val s = client.readSample()
+                    // poll DTCs occasionally (~every 3 min), not every tick
+                    latestObd = if (ticks % 120 == 0) s.copy(dtcs = client.readDtcs()) else s
+                    ticks++
+                    delay(1500)
+                }
+            } catch (e: Exception) {
+                // dongle off/unpaired — keep logging GPS without engine data
+            }
+        }
     }
 
     private fun requestUpdates() {
@@ -75,7 +109,8 @@ class LocationService : Service() {
             epochSec = loc.time / 1000,
             speedMps = if (loc.hasSpeed()) loc.speed else null,
             accuracyM = if (loc.hasAccuracy()) loc.accuracy else null,
-            courseDeg = if (loc.hasBearing()) loc.bearing else null
+            courseDeg = if (loc.hasBearing()) loc.bearing else null,
+            obd = latestObd
         )
         scope.launch { uploader.flush() }
     }
@@ -83,6 +118,7 @@ class LocationService : Service() {
     override fun onDestroy() {
         settings.loggingEnabled = false
         fused.removeLocationUpdates(callback)
+        obd?.close(); obd = null
         scope.launch { uploader.flush() }
         scope.cancel()
         super.onDestroy()

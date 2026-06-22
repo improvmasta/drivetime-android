@@ -1,10 +1,14 @@
 package org.jupiterns.drivetime
 
 import android.Manifest
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -44,7 +48,41 @@ class MainActivity : AppCompatActivity() {
         }
         b.batteryAllow.setOnClickListener { Battery.requestExemption(this) }
         b.batterySettings.setOnClickListener { Battery.openAppSettings(this) }
+        b.obdDevice.setOnClickListener { pickObdDevice() }
+        updateObdLabel()
         refreshStatus()
+    }
+
+    private fun updateObdLabel() {
+        b.obdDevice.text = "OBD dongle: " + (settings.obdName.ifBlank { "none" })
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun pickObdDevice() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
+            != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.BLUETOOTH_CONNECT), 2)
+            return
+        }
+        val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+        val bonded = adapter?.bondedDevices?.toList().orEmpty()
+        if (bonded.isEmpty()) {
+            b.status.text = "No paired Bluetooth devices — pair the OBD dongle first"
+            return
+        }
+        val names = bonded.map { "${it.name}\n${it.address}" }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Select OBD dongle")
+            .setItems(names) { _, i ->
+                settings.obdMac = bonded[i].address
+                settings.obdName = bonded[i].name ?: bonded[i].address
+                updateObdLabel()
+            }
+            .setNeutralButton("Clear") { _, _ ->
+                settings.obdMac = ""; settings.obdName = ""; updateObdLabel()
+            }
+            .show()
     }
 
     override fun onResume() { super.onResume(); refreshStatus() }
@@ -64,6 +102,8 @@ class MainActivity : AppCompatActivity() {
         val perms = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
             perms.add(Manifest.permission.POST_NOTIFICATIONS)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && settings.obdMac.isNotBlank())
+            perms.add(Manifest.permission.BLUETOOTH_CONNECT)
         val missing = perms.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }

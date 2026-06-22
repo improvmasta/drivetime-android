@@ -7,6 +7,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import org.jupiterns.drivetime.obd.Elm327Client
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -27,13 +28,24 @@ class Uploader(context: Context, private val settings: Settings) {
     private val JSON = "application/json".toMediaType()
 
     @Synchronized
-    fun enqueue(lat: Double, lon: Double, epochSec: Long, speedMps: Float?, accuracyM: Float?, courseDeg: Float?) {
+    fun enqueue(lat: Double, lon: Double, epochSec: Long, speedMps: Float?, accuracyM: Float?,
+                courseDeg: Float?, obd: Elm327Client.ObdSample? = null) {
         val o = JSONObject()
             .put("_type", "location")
             .put("lat", lat).put("lon", lon).put("tst", epochSec)
         if (speedMps != null) o.put("vel", Math.round(speedMps * 3.6))   // km/h, OwnTracks units
         if (accuracyM != null) o.put("acc", Math.round(accuracyM))
         if (courseDeg != null) o.put("cog", Math.round(courseDeg))
+        if (obd != null) {
+            obd.rpm?.let { o.put("rpm", it) }
+            obd.obdKph?.let { o.put("obd_kph", it) }
+            obd.engineLoad?.let { o.put("engine_load", it) }
+            obd.coolantC?.let { o.put("coolant_c", it) }
+            obd.throttle?.let { o.put("throttle", it) }
+            obd.maf?.let { o.put("maf", it) }
+            obd.voltage?.let { o.put("voltage", it) }
+            if (obd.dtcs.isNotEmpty()) o.put("dtc", org.json.JSONArray(obd.dtcs))
+        }
         queueFile.appendText(o.toString() + "\n")
     }
 

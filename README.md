@@ -14,12 +14,21 @@ Plan & decisions: see drivetime's `NATIVE_APP.md`.
 - [x] `Uploader` — batched POST to `/api/ingest` with an on-disk offline queue
 - [x] Routine/automation control (START/STOP/TOGGLE intents) — see below
 - [x] Keep-awake guidance (battery-optimization exemption + Samsung sleeping-apps steps)
+- [x] **OBD-II via custom ELM327 layer** — RPM, speed, load, coolant, throttle,
+  MAF, battery voltage + DTCs; merged onto each GPS fix (see OBD setup)
 - [ ] Drive auto start/stop (OBD-connected **or** activity-recognition) — wiring TBD
 - [ ] Background-location permission flow polish
 
+## OBD setup
+Pair the ELM327 dongle in Android Bluetooth settings, then tap **OBD dongle** in
+the app and select it. While logging, the app connects over Bluetooth SPP, runs
+the ELM327 init, and polls PIDs every ~1.5 s (DTCs ~every 3 min), attaching the
+latest engine snapshot to each uploaded fix. If the dongle is off/unpaired, GPS
+logging continues without engine data.
+
 ## Phases
-- **A** GPS logger *(here)* → **B** OBD via custom ELM327 layer (RPM, load, MPG,
-  voltage, DTCs) → **C** Android Auto glanceable screens → **D** commute alerts.
+- **A** GPS logger ✓ → **B** OBD (custom ELM327) ✓ → **C** Android Auto glanceable
+  screens → **D** commute alerts.
 
 ## Build & install
 CI builds `drivetime-debug-apk` on each push (Actions → artifact). Download and

@@ -24,6 +24,14 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("logging_enabled", false)
         set(v) = prefs.edit().putBoolean("logging_enabled", v).apply()
 
+    /** Paired OBD-II (ELM327) dongle, if configured. */
+    var obdMac: String
+        get() = prefs.getString("obd_mac", "") ?: ""
+        set(v) = prefs.edit().putString("obd_mac", v).apply()
+    var obdName: String
+        get() = prefs.getString("obd_name", "") ?: ""
+        set(v) = prefs.edit().putString("obd_name", v).apply()
+
     val ingestUrl: String
         get() = "$serverUrl/api/ingest?key=$token"
 
