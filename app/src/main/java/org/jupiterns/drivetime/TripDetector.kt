@@ -27,10 +27,10 @@ object TripDetector {
         val transitions = listOf(
             ActivityTransition.Builder()
                 .setActivityType(DetectedActivity.IN_VEHICLE)
-                .setActivityTransitionType(ActivityTransition.ACTIVITY_TRANSITION_ENTER).build(),
+                .setActivityTransition(ActivityTransition.ACTIVITY_TRANSITION_ENTER).build(),
             ActivityTransition.Builder()
                 .setActivityType(DetectedActivity.IN_VEHICLE)
-                .setActivityTransitionType(ActivityTransition.ACTIVITY_TRANSITION_EXIT).build(),
+                .setActivityTransition(ActivityTransition.ACTIVITY_TRANSITION_EXIT).build(),
         )
         ActivityRecognition.getClient(ctx)
             .requestActivityTransitionUpdates(ActivityTransitionRequest(transitions), pendingIntent(ctx))
