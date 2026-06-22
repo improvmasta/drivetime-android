@@ -16,8 +16,9 @@ Plan & decisions: see drivetime's `NATIVE_APP.md`.
 - [x] Keep-awake guidance (battery-optimization exemption + Samsung sleeping-apps steps)
 - [x] **OBD-II via custom ELM327 layer** — RPM, speed, load, coolant, throttle,
   MAF, battery voltage + DTCs; merged onto each GPS fix (see OBD setup)
-- [x] **Android Auto** glanceable screen (live speed/RPM/coolant/battery + Start/Stop)
-- [ ] Drive auto start/stop (OBD-connected **or** activity-recognition) — wiring TBD
+- [x] **Android Auto** screen — live stats when logging; today's **leave-by** card when idle
+- [x] **Auto start/stop** when driving (activity-recognition IN_VEHICLE)
+- [x] **Alerts** — polls the server (WorkManager) and notifies for commute/fault codes
 - [ ] Background-location permission flow polish
 
 ## OBD setup
@@ -36,9 +37,17 @@ To see it (sideloaded, non-Play app): on the phone, Android Auto → Settings �
 tap *Version* repeatedly to unlock **Developer settings** → enable **Unknown
 sources**. drivetime then appears in the Android Auto launcher.
 
+## Auto start/stop & alerts
+- **Auto start/stop**: enable "Auto start/stop when driving" — uses Google
+  activity-recognition; entering a vehicle starts logging, exiting stops it.
+  (OBD-connect is the other half of the trigger, inside the service.)
+- **Alerts**: enable "Commute & fault-code alerts" — a 15-min WorkManager job
+  pulls `/api/alerts` and posts notifications (e.g. a new check-engine code),
+  then marks them read.
+
 ## Phases
-- **A** GPS logger ✓ → **B** OBD (custom ELM327) ✓ → **C** Android Auto ✓ →
-  **D** commute alerts.
+- **A** GPS logger ✓ → **B** OBD (custom ELM327) ✓ → **C** Android Auto ✓
+  (live + leave-by card) → **D** commute alerts ✓ (notifications + auto-trip).
 
 ## Build & install
 CI builds `drivetime-debug-apk` on each push (Actions → artifact). Download and

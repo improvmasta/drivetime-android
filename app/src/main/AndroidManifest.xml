@@ -65,6 +65,11 @@
             </intent-filter>
         </receiver>
 
+        <!-- Auto start/stop: receives activity-recognition transitions -->
+        <receiver
+            android:name=".ActivityTransitionReceiver"
+            android:exported="false" />
+
         <!-- Android Auto -->
         <service
             android:name=".car.DrivetimeCarAppService"

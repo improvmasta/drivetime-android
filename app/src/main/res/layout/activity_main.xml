@@ -72,6 +72,19 @@
                 android:text="Stop" />
         </LinearLayout>
 
+        <CheckBox
+            android:id="@+id/autoTrip"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Auto start/stop when driving" />
+
+        <CheckBox
+            android:id="@+id/alerts"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Commute &amp; fault-code alerts" />
+
         <TextView
             android:id="@+id/status"
             android:layout_width="wrap_content"

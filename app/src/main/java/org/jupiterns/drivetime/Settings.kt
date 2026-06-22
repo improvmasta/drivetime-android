@@ -32,6 +32,16 @@ class Settings(context: Context) {
         get() = prefs.getString("obd_name", "") ?: ""
         set(v) = prefs.edit().putString("obd_name", v).apply()
 
+    /** Auto start/stop logging on driving (activity-recognition IN_VEHICLE). */
+    var autoTrip: Boolean
+        get() = prefs.getBoolean("auto_trip", false)
+        set(v) = prefs.edit().putBoolean("auto_trip", v).apply()
+
+    /** Poll the server for alerts and post notifications. */
+    var alertsEnabled: Boolean
+        get() = prefs.getBoolean("alerts_enabled", false)
+        set(v) = prefs.edit().putBoolean("alerts_enabled", v).apply()
+
     val ingestUrl: String
         get() = "$serverUrl/api/ingest?key=$token"
 

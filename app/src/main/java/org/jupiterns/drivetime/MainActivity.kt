@@ -49,6 +49,26 @@ class MainActivity : AppCompatActivity() {
         b.batteryAllow.setOnClickListener { Battery.requestExemption(this) }
         b.batterySettings.setOnClickListener { Battery.openAppSettings(this) }
         b.obdDevice.setOnClickListener { pickObdDevice() }
+
+        b.autoTrip.isChecked = settings.autoTrip
+        b.autoTrip.setOnCheckedChangeListener { _, on ->
+            settings.autoTrip = on
+            if (on) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                    ContextCompat.checkSelfPermission(this, Manifest.permission.ACTIVITY_RECOGNITION)
+                    != PackageManager.PERMISSION_GRANTED) {
+                    ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.ACTIVITY_RECOGNITION), 3)
+                }
+                TripDetector.enable(this)
+            } else TripDetector.disable(this)
+        }
+
+        b.alerts.isChecked = settings.alertsEnabled
+        b.alerts.setOnCheckedChangeListener { _, on ->
+            settings.alertsEnabled = on
+            if (on) AlertWorker.schedule(this) else AlertWorker.cancel(this)
+        }
+
         updateObdLabel()
         refreshStatus()
     }
