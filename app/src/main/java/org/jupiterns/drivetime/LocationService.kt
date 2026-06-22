@@ -47,6 +47,11 @@ class LocationService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == Control.ACTION_STOP) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        settings.loggingEnabled = true
         requestUpdates()
         return START_STICKY
     }
@@ -76,6 +81,7 @@ class LocationService : Service() {
     }
 
     override fun onDestroy() {
+        settings.loggingEnabled = false
         fused.removeLocationUpdates(callback)
         scope.launch { uploader.flush() }
         scope.cancel()

@@ -19,6 +19,11 @@ class Settings(context: Context) {
         get() = prefs.getInt("interval_sec", 3)
         set(v) = prefs.edit().putInt("interval_sec", v).apply()
 
+    /** Whether the logging service is currently meant to be running. */
+    var loggingEnabled: Boolean
+        get() = prefs.getBoolean("logging_enabled", false)
+        set(v) = prefs.edit().putBoolean("logging_enabled", v).apply()
+
     val ingestUrl: String
         get() = "$serverUrl/api/ingest?key=$token"
 

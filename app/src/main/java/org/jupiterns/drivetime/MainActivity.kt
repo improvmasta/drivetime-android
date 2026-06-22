@@ -48,9 +48,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshStatus() {
         val q = Uploader(this, settings).queuedCount()
-        b.status.text = if (settings.isConfigured)
-            "Configured · ${q} fix(es) queued"
-        else "Not configured"
+        b.status.text = when {
+            !settings.isConfigured -> "Not configured"
+            settings.loggingEnabled -> "● Logging · ${q} fix(es) queued"
+            else -> "○ Idle · ${q} fix(es) queued"
+        }
     }
 
     private fun ensurePermissions() {

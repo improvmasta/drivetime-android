@@ -32,5 +32,30 @@
             android:name=".LocationService"
             android:exported="false"
             android:foregroundServiceType="location" />
+
+        <!-- Routine/automation control: launch with one of the actions below. -->
+        <activity
+            android:name=".ControlActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="org.jupiterns.drivetime.action.START" />
+                <action android:name="org.jupiterns.drivetime.action.STOP" />
+                <action android:name="org.jupiterns.drivetime.action.TOGGLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <receiver
+            android:name=".ControlReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="org.jupiterns.drivetime.action.START" />
+                <action android:name="org.jupiterns.drivetime.action.STOP" />
+                <action android:name="org.jupiterns.drivetime.action.TOGGLE" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

@@ -12,6 +12,7 @@ Plan & decisions: see drivetime's `NATIVE_APP.md`.
 - [x] Settings (server URL, ingest token, fix interval)
 - [x] Foreground `LocationService` streaming fixes via FusedLocationProvider
 - [x] `Uploader` — batched POST to `/api/ingest` with an on-disk offline queue
+- [x] Routine/automation control (START/STOP/TOGGLE intents) — see below
 - [ ] Drive auto start/stop (OBD-connected **or** activity-recognition) — wiring TBD
 - [ ] Background-location permission flow polish
 
@@ -33,6 +34,38 @@ gradle wrapper --gradle-version 8.7   # first time (no wrapper jar committed)
 ## Configure on the phone
 Open the app → set **Server URL** (`https://drivetime.jupiterns.org`) and the
 **ingest token** (same as the server's `DRIVETIME_TOKEN`) → Save → Start logging.
+
+## Routine / automation control
+Logging can be started/stopped by any intent-capable automation, so it only runs
+when needed (battery). Three actions:
+
+| Action | Effect |
+|---|---|
+| `org.jupiterns.drivetime.action.START` | start logging |
+| `org.jupiterns.drivetime.action.STOP` | stop logging |
+| `org.jupiterns.drivetime.action.TOGGLE` | flip current state |
+
+Two entry points: **ControlActivity** (launch it — most reliable for *starting*
+from the background) and **ControlReceiver** (broadcast — great for STOP).
+
+Examples:
+```bash
+# adb / Tasker "Launch Activity":
+am start  -n org.jupiterns.drivetime/.ControlActivity -a org.jupiterns.drivetime.action.START
+am start  -n org.jupiterns.drivetime/.ControlActivity -a org.jupiterns.drivetime.action.STOP
+# broadcast (Tasker/MacroDroid "Send Intent", target = Broadcast Receiver):
+am broadcast -n org.jupiterns.drivetime/.ControlReceiver -a org.jupiterns.drivetime.action.STOP
+```
+- **Tasker / MacroDroid:** "Launch Activity" (START) or "Send Intent → Broadcast"
+  (STOP), component as above. These can be the bridge for **Samsung Modes &
+  Routines** (run a Tasker task) and **Home Assistant** (companion-app intent).
+- **Google Assistant routines:** add the launch-activity intent as a custom action.
+- Tip: pair a "leaving home on a weekday morning" trigger → START with an
+  "arrived home / engine off" trigger → STOP. Phase B can also auto-start on
+  OBD-connect; routines are the manual/scheduled override.
+
+> Background *start* on Android 12+ may need the automation app to have
+> "Display over other apps"/foreground exemptions. STOP always works.
 
 ## Enabling signed release builds (next)
 Generate a release keystore, add `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`,
