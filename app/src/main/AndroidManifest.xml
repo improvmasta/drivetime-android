@@ -14,11 +14,17 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
 
+    <uses-feature android:name="android.hardware.type.automotive" android:required="false" />
+
     <application
         android:allowBackup="true"
         android:label="drivetime"
         android:supportsRtl="true"
         android:theme="@style/Theme.Drivetime">
+
+        <meta-data
+            android:name="androidx.car.app.minCarApiLevel"
+            android:value="1" />
 
         <activity
             android:name=".MainActivity"
@@ -58,5 +64,15 @@
                 <action android:name="org.jupiterns.drivetime.action.TOGGLE" />
             </intent-filter>
         </receiver>
+
+        <!-- Android Auto -->
+        <service
+            android:name=".car.DrivetimeCarAppService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="androidx.car.app.CarAppService" />
+                <category android:name="androidx.car.app.category.POI" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

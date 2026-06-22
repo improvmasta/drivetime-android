@@ -81,6 +81,9 @@ class LocationService : Service() {
                     val s = client.readSample()
                     // poll DTCs occasionally (~every 3 min), not every tick
                     latestObd = if (ticks % 120 == 0) s.copy(dtcs = client.readDtcs()) else s
+                    LiveState.rpm = s.rpm
+                    LiveState.coolantC = s.coolantC
+                    LiveState.voltage = s.voltage
                     ticks++
                     delay(1500)
                 }
@@ -112,11 +115,16 @@ class LocationService : Service() {
             courseDeg = if (loc.hasBearing()) loc.bearing else null,
             obd = latestObd
         )
+        LiveState.logging = true
+        LiveState.speedMph = if (loc.hasSpeed()) Math.round(loc.speed * 2.2369362f) else null
+        LiveState.updatedAt = System.currentTimeMillis()
         scope.launch { uploader.flush() }
     }
 
     override fun onDestroy() {
         settings.loggingEnabled = false
+        LiveState.logging = false
+        LiveState.clear()
         fused.removeLocationUpdates(callback)
         obd?.close(); obd = null
         scope.launch { uploader.flush() }

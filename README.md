@@ -16,6 +16,7 @@ Plan & decisions: see drivetime's `NATIVE_APP.md`.
 - [x] Keep-awake guidance (battery-optimization exemption + Samsung sleeping-apps steps)
 - [x] **OBD-II via custom ELM327 layer** — RPM, speed, load, coolant, throttle,
   MAF, battery voltage + DTCs; merged onto each GPS fix (see OBD setup)
+- [x] **Android Auto** glanceable screen (live speed/RPM/coolant/battery + Start/Stop)
 - [ ] Drive auto start/stop (OBD-connected **or** activity-recognition) — wiring TBD
 - [ ] Background-location permission flow polish
 
@@ -26,9 +27,18 @@ the ELM327 init, and polls PIDs every ~1.5 s (DTCs ~every 3 min), attaching the
 latest engine snapshot to each uploaded fix. If the dongle is off/unpaired, GPS
 logging continues without engine data.
 
+## Android Auto
+A glanceable dashboard (Car App Library `PaneTemplate`): live **speed, RPM,
+coolant, battery voltage** and a **Start/Stop** toggle, refreshing every ~2 s.
+It shares live data with the logging service in-process (`LiveState`).
+
+To see it (sideloaded, non-Play app): on the phone, Android Auto → Settings →
+tap *Version* repeatedly to unlock **Developer settings** → enable **Unknown
+sources**. drivetime then appears in the Android Auto launcher.
+
 ## Phases
-- **A** GPS logger ✓ → **B** OBD (custom ELM327) ✓ → **C** Android Auto glanceable
-  screens → **D** commute alerts.
+- **A** GPS logger ✓ → **B** OBD (custom ELM327) ✓ → **C** Android Auto ✓ →
+  **D** commute alerts.
 
 ## Build & install
 CI builds `drivetime-debug-apk` on each push (Actions → artifact). Download and
