@@ -71,5 +71,50 @@
             android:layout_height="wrap_content"
             android:paddingTop="16dp"
             android:text="Not configured" />
+
+        <LinearLayout
+            android:id="@+id/batteryRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone"
+            android:background="#33F85149"
+            android:padding="12dp"
+            android:layout_marginTop="20dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="#F85149"
+                android:textStyle="bold"
+                android:text="⚠ Keep drivetime awake" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="4dp"
+                android:text="Battery optimization can stop logging mid-drive. Allow background use below. On Samsung, also remove drivetime from Settings → Battery → Background usage limits → Sleeping / Deep sleeping apps." />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:paddingTop="8dp">
+
+                <Button
+                    android:id="@+id/batteryAllow"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Allow background" />
+
+                <Button
+                    android:id="@+id/batterySettings"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="App settings" />
+            </LinearLayout>
+        </LinearLayout>
     </LinearLayout>
 </ScrollView>

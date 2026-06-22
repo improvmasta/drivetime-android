@@ -34,6 +34,7 @@ class MainActivity : AppCompatActivity() {
         b.start.setOnClickListener {
             if (!settings.isConfigured) { b.status.text = "Set server URL + token first"; return@setOnClickListener }
             ensurePermissions()
+            if (!Battery.isExempt(this)) Battery.requestExemption(this)
             startForegroundService(Intent(this, LocationService::class.java))
             refreshStatus()
         }
@@ -41,6 +42,8 @@ class MainActivity : AppCompatActivity() {
             stopService(Intent(this, LocationService::class.java))
             refreshStatus()
         }
+        b.batteryAllow.setOnClickListener { Battery.requestExemption(this) }
+        b.batterySettings.setOnClickListener { Battery.openAppSettings(this) }
         refreshStatus()
     }
 
@@ -53,6 +56,8 @@ class MainActivity : AppCompatActivity() {
             settings.loggingEnabled -> "● Logging · ${q} fix(es) queued"
             else -> "○ Idle · ${q} fix(es) queued"
         }
+        b.batteryRow.visibility = if (Battery.isExempt(this)) android.view.View.GONE
+                                  else android.view.View.VISIBLE
     }
 
     private fun ensurePermissions() {

@@ -13,6 +13,7 @@ Plan & decisions: see drivetime's `NATIVE_APP.md`.
 - [x] Foreground `LocationService` streaming fixes via FusedLocationProvider
 - [x] `Uploader` — batched POST to `/api/ingest` with an on-disk offline queue
 - [x] Routine/automation control (START/STOP/TOGGLE intents) — see below
+- [x] Keep-awake guidance (battery-optimization exemption + Samsung sleeping-apps steps)
 - [ ] Drive auto start/stop (OBD-connected **or** activity-recognition) — wiring TBD
 - [ ] Background-location permission flow polish
 
@@ -34,6 +35,17 @@ gradle wrapper --gradle-version 8.7   # first time (no wrapper jar committed)
 ## Configure on the phone
 Open the app → set **Server URL** (`https://drivetime.jupiterns.org`) and the
 **ingest token** (same as the server's `DRIVETIME_TOKEN`) → Save → Start logging.
+
+## Keeping it awake (important on Samsung)
+Doze and Samsung's "Sleeping / Deep sleeping apps" lists will kill a background
+GPS service and drop fixes mid-drive. The app detects when it isn't exempt and
+shows a banner with two buttons:
+- **Allow background** → system battery-optimization-exemption dialog.
+- **App settings** → app info, where you also: Samsung → Battery → *unrestricted*,
+  and Settings → Battery → Background usage limits → remove drivetime from
+  *Sleeping apps* / *Deep sleeping apps*.
+The banner hides once the app is exempt. Starting logging also prompts for the
+exemption if it's missing.
 
 ## Routine / automation control
 Logging can be started/stopped by any intent-capable automation, so it only runs
