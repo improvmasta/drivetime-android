@@ -31,6 +31,13 @@ class Settings(context: Context) {
         get() = prefs.getInt("light_interval_sec", 60)
         set(v) = prefs.edit().putInt("light_interval_sec", v).apply()
 
+    /** Seconds between *batched* upload flushes. Fixes are buffered to the on-disk
+     *  queue and sent in bursts on this cadence (radio-friendly) instead of one POST
+     *  per fix; a regained connection or a full batch flushes early. */
+    var uploadIntervalSec: Int
+        get() = prefs.getInt("upload_interval_sec", 45)
+        set(v) = prefs.edit().putInt("upload_interval_sec", v).apply()
+
     /**
      * Tracking mode = the *desired* behaviour, set by the user or a routine:
      *   AUTO    — the DriveDetector decides Light vs Driving from car-BT/OBD/speed.

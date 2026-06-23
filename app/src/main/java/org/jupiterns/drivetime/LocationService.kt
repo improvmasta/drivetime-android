@@ -11,6 +11,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.location.Location
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -58,6 +60,14 @@ class LocationService : Service() {
 
     private var currentTier = DriveDetector.Tier.LIGHT
     private var requestedIntervalMs = -1L         // active LocationRequest interval (avoid churn)
+    private var pendingSinceFlush = 0             // fixes enqueued since the last flush trigger
+
+    private val connectivity by lazy { getSystemService(ConnectivityManager::class.java) }
+    /** Flush as soon as a usable network returns, so a dead-zone backlog clears
+     *  immediately instead of waiting for the next periodic tick. */
+    private val netCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) { flushNow() }
+    }
 
     // Within-drive adaptive-sampling state (dense vs idle).
     private var idleMode = false
@@ -95,7 +105,26 @@ class LocationService : Service() {
             addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
             addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
         }, ContextCompat.RECEIVER_NOT_EXPORTED)
+        runCatching { connectivity.registerDefaultNetworkCallback(netCallback) }
         startObdLoop()
+        startUploadLoop()
+    }
+
+    /** Periodic batched flush: send whatever's queued on the upload cadence. The
+     *  backoff guard inside flush() keeps this from hammering during an outage. */
+    private fun startUploadLoop() {
+        scope.launch {
+            while (isActive) {
+                delay(settings.uploadIntervalSec * 1000L)
+                flushNow()
+            }
+        }
+    }
+
+    /** Trigger a (single-flight, draining) flush and reset the size counter. */
+    private fun flushNow() {
+        pendingSinceFlush = 0
+        scope.launch { uploader.flush() }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -172,7 +201,9 @@ class LocationService : Service() {
         LiveState.logging = true
         LiveState.speedMph = if (loc.hasSpeed()) Math.round(loc.speed * 2.2369362f) else null
         LiveState.updatedAt = System.currentTimeMillis()
-        scope.launch { uploader.flush() }
+        // Batched upload: buffer to the durable queue; flush on the periodic tick,
+        // when a full batch has accumulated, or when connectivity returns.
+        if (++pendingSinceFlush >= BATCH_FIXES) flushNow()
 
         val speed = if (loc.hasSpeed()) loc.speed else 0f
         movingHint = speed >= MOVING_MPS
@@ -258,6 +289,7 @@ class LocationService : Service() {
         LiveState.logging = false
         LiveState.clear()
         runCatching { unregisterReceiver(btReceiver) }
+        runCatching { connectivity.unregisterNetworkCallback(netCallback) }
         fused.removeLocationUpdates(callback)
         obd?.close(); obd = null
         // Final flush off the cancelled scope so a last batch isn't dropped.
@@ -316,5 +348,9 @@ class LocationService : Service() {
         // OBD probe cadence.
         private const val OBD_IDLE_MS = 120_000L      // recheck/probe interval when not driving
         private const val OBD_RETRY_DRIVE_MS = 5_000L // fast reconnect while driving
+
+        // Upload batching: flush early once this many fixes have queued since the last
+        // flush, so dense driving doesn't hold more than ~a minute between periodic ticks.
+        private const val BATCH_FIXES = 25
     }
 }

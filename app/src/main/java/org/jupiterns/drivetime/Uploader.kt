@@ -66,48 +66,53 @@ class Uploader(context: Context, private val settings: Settings) {
     }
 
     /**
-     * Try to send the queue. Non-blocking-by-contract for the caller's lock: the
-     * network call happens outside [LOCK] (so a slow POST never blocks the locator
-     * thread that's appending fixes) and is guarded by [flushing] so only one flush
-     * runs at a time. Returns true when the queue is empty afterwards.
+     * Drain the queue, sending it in [MAX_BATCH]-sized POSTs until it's empty (so a
+     * backlog from a dead-zone clears in one call, not one batch per flush). The
+     * network call happens outside [LOCK] (a slow POST never blocks the locator
+     * thread appending fixes) and is guarded by [flushing] so only one flush runs at
+     * a time. Returns true when the queue is empty afterwards.
      */
     fun flush(): Boolean {
         if (!settings.isConfigured) return false
         if (System.currentTimeMillis() < nextAttemptAt) return false   // in backoff window
         if (!flushing.compareAndSet(false, true)) return false          // another flush in flight
         try {
-            val batch = synchronized(LOCK) {
-                if (!queueFile.exists()) return true
-                queueFile.readLines().filter { it.isNotBlank() }.take(MAX_BATCH)
+            var sweeps = 0
+            while (sweeps++ < MAX_FLUSH_BATCHES) {
+                val batch = synchronized(LOCK) {
+                    if (!queueFile.exists()) return true
+                    queueFile.readLines().filter { it.isNotBlank() }.take(MAX_BATCH)
+                }
+                if (batch.isEmpty()) {
+                    synchronized(LOCK) { if (queuedCountLocked() == 0) queueFile.delete() }
+                    return true
+                }
+                val body = JSONArray()
+                batch.forEach { runCatching { body.put(JSONObject(it)) } }  // skip any corrupt line
+                val req = Request.Builder()
+                    .url(settings.ingestUrl)
+                    .post(body.toString().toRequestBody(JSON))
+                    .build()
+                val ok = try {
+                    client.newCall(req).execute().use { it.isSuccessful }
+                } catch (e: Exception) {
+                    false
+                }
+                if (ok) {
+                    // Drop exactly the lines we sent. Only enqueue (append-only) can have
+                    // touched the file meanwhile, so the head is still our batch — even if
+                    // one or more lines were unparseable, they're consumed and won't wedge.
+                    val empty = synchronized(LOCK) { dropHeadLocked(batch.size) }
+                    failures = 0
+                    nextAttemptAt = 0L
+                    if (empty) return true   // else loop to send the next batch
+                } else {
+                    failures++
+                    nextAttemptAt = System.currentTimeMillis() + backoffMs(failures)
+                    return false
+                }
             }
-            if (batch.isEmpty()) {
-                synchronized(LOCK) { if (queuedCountLocked() == 0) queueFile.delete() }
-                return true
-            }
-            val body = JSONArray()
-            batch.forEach { runCatching { body.put(JSONObject(it)) } }  // skip any corrupt line
-            val req = Request.Builder()
-                .url(settings.ingestUrl)
-                .post(body.toString().toRequestBody(JSON))
-                .build()
-            val ok = try {
-                client.newCall(req).execute().use { it.isSuccessful }
-            } catch (e: Exception) {
-                false
-            }
-            return if (ok) {
-                // Drop exactly the lines we sent. Only enqueue (append-only) can have
-                // touched the file meanwhile, so the head is still our batch — even if
-                // one or more lines were unparseable, they're consumed and won't wedge.
-                val empty = synchronized(LOCK) { dropHeadLocked(batch.size) }
-                failures = 0
-                nextAttemptAt = 0L
-                empty
-            } else {
-                failures++
-                nextAttemptAt = System.currentTimeMillis() + backoffMs(failures)
-                false
-            }
+            return false   // hit the per-call sweep cap; the next flush continues draining
         } finally {
             flushing.set(false)
         }
@@ -154,6 +159,7 @@ class Uploader(context: Context, private val settings: Settings) {
         private const val QUEUE = "queue.jsonl"
         private const val QUEUE_TMP = "queue.tmp"
         private const val MAX_BATCH = 500                 // fixes per POST
+        private const val MAX_FLUSH_BATCHES = 50          // POSTs per flush() call (drain bound)
         private const val MAX_QUEUE_BYTES = 16L * 1024 * 1024   // ~16 MB hard cap on backlog
         private const val BACKOFF_BASE_MS = 5_000L
         private const val BACKOFF_MAX_MS = 5 * 60_000L
