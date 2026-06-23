@@ -58,7 +58,7 @@ permission revocation. Treat "the app quietly stopped" as the #1 bug class.
 ### 1d. Data integrity & offline queue
 - [built] On-disk queue survives kill/crash; writes are now **atomic** (temp-file + rename on trim), **size-capped** (16 MB, drop-oldest), and **ordered**.
 - [built] **Verify-before-delete** — only the exact lines acked by the server are dropped (fixes appended mid-POST are preserved); single-flight + process-wide lock so service/watchdog can't double-drain; **exponential backoff + jitter** on failure.
-- [built] **Batched flush triggers** — periodic (`uploadIntervalSec` ≈45s), batch-full (`BATCH_FIXES`), and **connectivity-regained** (`NetworkCallback`), instead of one POST per fix; `flush()` drains the whole backlog per call. → [next] app-foreground / charging triggers.
+- [built] **Batched flush triggers** — periodic (`uploadIntervalSec` ≈45s), batch-full (`BATCH_FIXES`), and **connectivity-regained** (`NetworkCallback`), instead of one POST per fix; `flush()` drains the whole backlog per call. → [next] **tier-aware cadence** — near-real-time (~10s) while `DRIVING` for live position / live ETA / Android Auto, slower while `LIGHT`; plus app-foreground / charging triggers.
 - [built] Idempotent uploads (server `INSERT OR IGNORE`) — keep dedup keys stable (epoch + lat/lon).
 
 ### 1e. Connectivity & sensors
