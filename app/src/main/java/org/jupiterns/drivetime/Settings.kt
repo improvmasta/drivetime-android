@@ -14,16 +14,48 @@ class Settings(context: Context) {
         get() = prefs.getString("token", "") ?: ""
         set(v) = prefs.edit().putString("token", v.trim()).apply()
 
-    /** Seconds between GPS fixes while moving. */
+    /** Seconds between GPS fixes while *driving and moving* (the dense tier). */
     var intervalSec: Int
         get() = prefs.getInt("interval_sec", 3)
         set(v) = prefs.edit().putInt("interval_sec", v).apply()
 
-    /** Seconds between fixes while stopped (adaptive back-off): keeps a light
-     *  "still parked here" pulse instead of the moving-rate flood. */
+    /** Seconds between fixes while *driving but stopped* (red light / traffic):
+     *  adaptive back-off so a stop doesn't flood at the moving rate. */
     var idleIntervalSec: Int
         get() = prefs.getInt("idle_interval_sec", 20)
         set(v) = prefs.edit().putInt("idle_interval_sec", v).apply()
+
+    /** Seconds between fixes when *not driving* (the light background tier):
+     *  a sparse, low-power everyday-location pulse that ramps to dense on a drive. */
+    var lightIntervalSec: Int
+        get() = prefs.getInt("light_interval_sec", 60)
+        set(v) = prefs.edit().putInt("light_interval_sec", v).apply()
+
+    /**
+     * Tracking mode = the *desired* behaviour, set by the user or a routine:
+     *   AUTO    — the DriveDetector decides Light vs Driving from car-BT/OBD/speed.
+     *   DRIVING — force the dense tier (routine "I'm driving").
+     *   LIGHT   — force the sparse tier (routine "eco / battery saver").
+     *   OFF     — no logging (service stopped).
+     */
+    var trackingMode: String
+        get() = prefs.getString("tracking_mode", MODE_AUTO) ?: MODE_AUTO
+        set(v) = prefs.edit().putString("tracking_mode", v).apply()
+
+    /** In AUTO, let sustained/high GPS speed promote to Driving when neither the car
+     *  Bluetooth nor the OBD dongle is connected (the backstop trigger). */
+    var driveBySpeed: Boolean
+        get() = prefs.getBoolean("drive_by_speed", true)
+        set(v) = prefs.edit().putBoolean("drive_by_speed", v).apply()
+
+    /** Car Bluetooth device (stereo / head unit). Its connection is the #1 "I'm
+     *  driving" signal — deterministic, no activity-recognition guessing. */
+    var carBtMac: String
+        get() = prefs.getString("car_bt_mac", "") ?: ""
+        set(v) = prefs.edit().putString("car_bt_mac", v).apply()
+    var carBtName: String
+        get() = prefs.getString("car_bt_name", "") ?: ""
+        set(v) = prefs.edit().putString("car_bt_name", v).apply()
 
     /** End a trip after this many minutes stationary, as a backstop for a missed
      *  activity-recognition "exited vehicle". 0 disables; only used with autoTrip. */
@@ -59,4 +91,11 @@ class Settings(context: Context) {
 
     val isConfigured: Boolean
         get() = serverUrl.isNotBlank() && token.isNotBlank()
+
+    companion object {
+        const val MODE_AUTO = "auto"
+        const val MODE_DRIVING = "driving"
+        const val MODE_LIGHT = "light"
+        const val MODE_OFF = "off"
+    }
 }

@@ -3,10 +3,12 @@
     <string name="app_name">drivetime</string>
 
     <!-- App Shortcut labels (surfaced in Samsung Modes & Routines "app actions"). -->
-    <string name="sc_start_short">Start logging</string>
-    <string name="sc_start_long">Start drive logging</string>
-    <string name="sc_stop_short">Stop logging</string>
-    <string name="sc_stop_long">Stop drive logging</string>
-    <string name="sc_toggle_short">Toggle logging</string>
-    <string name="sc_toggle_long">Toggle drive logging</string>
+    <string name="sc_driving_short">Driving mode</string>
+    <string name="sc_driving_long">Force granular driving logging</string>
+    <string name="sc_auto_short">Auto mode</string>
+    <string name="sc_auto_long">Auto-detect driving (car BT / OBD / speed)</string>
+    <string name="sc_eco_short">Eco mode</string>
+    <string name="sc_eco_long">Light background logging only</string>
+    <string name="sc_off_short">Stop logging</string>
+    <string name="sc_off_long">Turn drivetime logging off</string>
 </resources>

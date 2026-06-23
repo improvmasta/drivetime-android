@@ -1,42 +1,53 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   Static App Shortcuts — the Samsung Modes & Routines hook (Pillar 2/3).
-  Modes & Routines enumerates an app's shortcuts under "app actions"; each one
-  here launches the no-UI ControlActivity with a control action, so a routine can
-  Start/Stop/Toggle logging with no extra automation app. The action strings match
-  Control.ACTION_* and ControlActivity reads them via getIntent().action.
+  Modes & Routines enumerates these under "app actions"; each launches the no-UI
+  ControlActivity with a Control.ACTION_* mode action, so a routine can set the
+  tracking mode with no extra automation app. Actions match Control.ACTION_* and
+  ControlActivity forwards the intent to Control.apply.
 -->
 <shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
 
     <shortcut
-        android:shortcutId="drivetime_start"
+        android:shortcutId="drivetime_mode_driving"
         android:enabled="true"
-        android:shortcutShortLabel="@string/sc_start_short"
-        android:shortcutLongLabel="@string/sc_start_long">
+        android:shortcutShortLabel="@string/sc_driving_short"
+        android:shortcutLongLabel="@string/sc_driving_long">
         <intent
-            android:action="org.jupiterns.drivetime.action.START"
+            android:action="org.jupiterns.drivetime.action.MODE_DRIVING"
             android:targetPackage="org.jupiterns.drivetime"
             android:targetClass="org.jupiterns.drivetime.ControlActivity" />
     </shortcut>
 
     <shortcut
-        android:shortcutId="drivetime_stop"
+        android:shortcutId="drivetime_mode_auto"
         android:enabled="true"
-        android:shortcutShortLabel="@string/sc_stop_short"
-        android:shortcutLongLabel="@string/sc_stop_long">
+        android:shortcutShortLabel="@string/sc_auto_short"
+        android:shortcutLongLabel="@string/sc_auto_long">
+        <intent
+            android:action="org.jupiterns.drivetime.action.MODE_AUTO"
+            android:targetPackage="org.jupiterns.drivetime"
+            android:targetClass="org.jupiterns.drivetime.ControlActivity" />
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="drivetime_mode_eco"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/sc_eco_short"
+        android:shortcutLongLabel="@string/sc_eco_long">
+        <intent
+            android:action="org.jupiterns.drivetime.action.MODE_ECO"
+            android:targetPackage="org.jupiterns.drivetime"
+            android:targetClass="org.jupiterns.drivetime.ControlActivity" />
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="drivetime_off"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/sc_off_short"
+        android:shortcutLongLabel="@string/sc_off_long">
         <intent
             android:action="org.jupiterns.drivetime.action.STOP"
-            android:targetPackage="org.jupiterns.drivetime"
-            android:targetClass="org.jupiterns.drivetime.ControlActivity" />
-    </shortcut>
-
-    <shortcut
-        android:shortcutId="drivetime_toggle"
-        android:enabled="true"
-        android:shortcutShortLabel="@string/sc_toggle_short"
-        android:shortcutLongLabel="@string/sc_toggle_long">
-        <intent
-            android:action="org.jupiterns.drivetime.action.TOGGLE"
             android:targetPackage="org.jupiterns.drivetime"
             android:targetClass="org.jupiterns.drivetime.ControlActivity" />
     </shortcut>

@@ -12,7 +12,7 @@ import android.os.Bundle
 class ControlActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        Control.apply(this, intent?.action)
+        Control.apply(this, intent)
         finish()
     }
 }

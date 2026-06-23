@@ -12,6 +12,6 @@ import android.content.Intent
  */
 class ControlReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        Control.apply(context, intent.action)
+        Control.apply(context, intent)
     }
 }

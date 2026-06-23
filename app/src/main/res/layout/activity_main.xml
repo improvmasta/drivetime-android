@@ -35,7 +35,7 @@
             android:id="@+id/interval"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:hint="Fix interval (seconds)"
+            android:hint="Driving fix interval (seconds)"
             android:inputType="number" />
 
         <Button
@@ -45,11 +45,25 @@
             android:text="Save" />
 
         <Button
+            android:id="@+id/carBt"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Car Bluetooth: none" />
+
+        <Button
             android:id="@+id/obdDevice"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:text="OBD dongle: none" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="8dp"
+            android:textSize="12sp"
+            android:text="Driving is detected automatically from car Bluetooth, the OBD dongle, then speed — no activity-recognition guessing. Start = Auto; routines/shortcuts can force Driving / Eco / Off." />
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -71,13 +85,6 @@
                 android:layout_weight="1"
                 android:text="Stop" />
         </LinearLayout>
-
-        <CheckBox
-            android:id="@+id/autoTrip"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="Auto start/stop when driving" />
 
         <CheckBox
             android:id="@+id/alerts"

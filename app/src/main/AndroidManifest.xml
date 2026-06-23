@@ -57,6 +57,10 @@
                 <action android:name="org.jupiterns.drivetime.action.START" />
                 <action android:name="org.jupiterns.drivetime.action.STOP" />
                 <action android:name="org.jupiterns.drivetime.action.TOGGLE" />
+                <action android:name="org.jupiterns.drivetime.action.MODE_AUTO" />
+                <action android:name="org.jupiterns.drivetime.action.MODE_DRIVING" />
+                <action android:name="org.jupiterns.drivetime.action.MODE_ECO" />
+                <action android:name="org.jupiterns.drivetime.action.SET" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
@@ -68,6 +72,10 @@
                 <action android:name="org.jupiterns.drivetime.action.START" />
                 <action android:name="org.jupiterns.drivetime.action.STOP" />
                 <action android:name="org.jupiterns.drivetime.action.TOGGLE" />
+                <action android:name="org.jupiterns.drivetime.action.MODE_AUTO" />
+                <action android:name="org.jupiterns.drivetime.action.MODE_DRIVING" />
+                <action android:name="org.jupiterns.drivetime.action.MODE_ECO" />
+                <action android:name="org.jupiterns.drivetime.action.SET" />
             </intent-filter>
         </receiver>
 

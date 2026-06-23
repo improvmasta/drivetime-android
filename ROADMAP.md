@@ -25,9 +25,9 @@ Master product roadmap lives in `drivetime/ROADMAP.md`; this is the client half.
   MAF/fuel/voltage + DTCs merged onto each fix; dongle picker.
 - [built] **Phase C** — **Android Auto** pane (Car App Library): live stats logging / leave-by idle.
 - [built] **Phase D** — **AlertWorker** (15-min WorkManager poll of `/api/alerts`) → notifications.
-- [built] **Auto start/stop** — activity-recognition IN_VEHICLE transitions (`TripDetector` + `ActivityTransitionReceiver`).
+- [built] **Tiered tracking + layered drive detection** — always-on **Light** background logging that ramps to dense **Driving** via `DriveDetector` (car-BT → OBD-connect → speed cascade, *not* activity-recognition). Routine/shortcut can force a tier. *(Supersedes the activity-recognition `TripDetector`, retired because its slow-traffic car/bike guess was the unreliable part.)*
 - [built] **Routine control** — `START/STOP/TOGGLE` intents (`ControlActivity`/`ControlReceiver`, `org.jupiterns.drivetime.action.*`).
-- [built] **Adaptive sampling + stationary watchdog** — dense while moving, `idleIntervalSec` while stopped, auto-end a parked trip.
+- [built] **Adaptive sampling** within Driving — dense while moving, `idleIntervalSec` at red lights; tier exit is now the detector's job (drops to Light), not a stationary trip-end.
 - [built] **Dawarich mirror** — server forwards a >50m-filtered copy (drivetime side); app is the single GPS source.
 - [built] Keep-awake guidance (battery-exemption prompt + Samsung sleeping-apps steps).
 - [ ] **Background-location permission flow polish** — the one open Phase-A item.
@@ -93,7 +93,7 @@ Routine can invoke**, and to **report state back** so a Routine can react.
 
 **Inbound — what a Routine can do to the app:**
 - [built] `START` / `STOP` / `TOGGLE` logging (`ControlReceiver`, `org.jupiterns.drivetime.action.*`).
-- [next] `SET key=<setting> value=<v>` — change any single setting live (tracking density, `idleIntervalSec`, `autoTrip`, `obdEnabled`, `alerts`, `dawarichForward`, gps priority…). One verb, no preset object needed — the Routine composes the "mode."
+- [built→next] `SET key=mode value=<auto|driving|eco|off>` is live (sets the tracking mode; plus discrete `MODE_AUTO/MODE_DRIVING/MODE_ECO` actions for shortcuts). → extend `SET` to the rest (`idleIntervalSec`, `lightIntervalSec`, gps priority…). One verb — the Routine composes the "mode."
 - [next] `QUERY` → emit current state.
 
 **How Routines actually invoke it** (so it works with Samsung's real capabilities):
@@ -130,8 +130,8 @@ Routine can invoke**, and to **report state back** so a Routine can react.
 Deciding *when* to log is mostly your phone's Samsung Modes & Routines (Pillar 2).
 The app keeps only lightweight, no-setup triggers so it still works before you wire
 a single routine:
-- [built] **Activity-recognition IN_VEHICLE** start/stop, with the stationary watchdog as the stop backstop.
-- [next] **Car Bluetooth** connect/disconnect as an optional built-in start/stop (the most reliable "am I driving" signal) — for when you'd rather not build a routine.
+- [built] **Car Bluetooth** connect/disconnect — the #1 built-in driving signal (deterministic; pick the car device in Settings), layered with **OBD-connect** and a **sustained-speed backstop** in `DriveDetector`. Any one promotes to Driving; connection signals hold Driving even at a dead stop.
+- ~~Activity-recognition IN_VEHICLE~~ — **retired**: its low-speed car/bike/walk guess was exactly the misclassification we're avoiding. Code remains but is no longer armed.
 - [idea] Geofence / time / charging triggers — only if you'd prefer them in-app; otherwise skip, since the Pillar-2 API already lets a Samsung Routine do exactly these.
 
 ---
