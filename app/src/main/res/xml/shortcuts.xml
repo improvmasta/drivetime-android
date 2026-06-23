@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Static App Shortcuts — the Samsung Modes & Routines hook (Pillar 2/3).
+  Modes & Routines enumerates an app's shortcuts under "app actions"; each one
+  here launches the no-UI ControlActivity with a control action, so a routine can
+  Start/Stop/Toggle logging with no extra automation app. The action strings match
+  Control.ACTION_* and ControlActivity reads them via getIntent().action.
+-->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <shortcut
+        android:shortcutId="drivetime_start"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/sc_start_short"
+        android:shortcutLongLabel="@string/sc_start_long">
+        <intent
+            android:action="org.jupiterns.drivetime.action.START"
+            android:targetPackage="org.jupiterns.drivetime"
+            android:targetClass="org.jupiterns.drivetime.ControlActivity" />
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="drivetime_stop"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/sc_stop_short"
+        android:shortcutLongLabel="@string/sc_stop_long">
+        <intent
+            android:action="org.jupiterns.drivetime.action.STOP"
+            android:targetPackage="org.jupiterns.drivetime"
+            android:targetClass="org.jupiterns.drivetime.ControlActivity" />
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="drivetime_toggle"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/sc_toggle_short"
+        android:shortcutLongLabel="@string/sc_toggle_long">
+        <intent
+            android:action="org.jupiterns.drivetime.action.TOGGLE"
+            android:targetPackage="org.jupiterns.drivetime"
+            android:targetClass="org.jupiterns.drivetime.ControlActivity" />
+    </shortcut>
+
+</shortcuts>

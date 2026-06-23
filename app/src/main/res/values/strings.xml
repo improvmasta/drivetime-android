@@ -1,4 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">drivetime</string>
+
+    <!-- App Shortcut labels (surfaced in Samsung Modes & Routines "app actions"). -->
+    <string name="sc_start_short">Start logging</string>
+    <string name="sc_start_long">Start drive logging</string>
+    <string name="sc_stop_short">Stop logging</string>
+    <string name="sc_stop_long">Stop drive logging</string>
+    <string name="sc_toggle_short">Toggle logging</string>
+    <string name="sc_toggle_long">Toggle drive logging</string>
 </resources>

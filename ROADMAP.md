@@ -97,7 +97,7 @@ Routine can invoke**, and to **report state back** so a Routine can react.
 - [next] `QUERY` → emit current state.
 
 **How Routines actually invoke it** (so it works with Samsung's real capabilities):
-- [next] **App Shortcuts** (dynamic + pinnable) — the Samsung-native hook: a Routine's *Open app → shortcut* action launches a no-UI `ControlActivity` shortcut (Start, Stop, "High-accuracy", "Battery-saver"…). This is the path that needs **no extra apps**.
+- [built] **App Shortcuts** — static Start/Stop/Toggle shortcuts (`res/xml/shortcuts.xml`, published via the launcher activity's `android.app.shortcuts` meta-data) each launch the no-UI `ControlActivity`. This is the Samsung *Open app → shortcut* hook that needs **no extra apps**. → [next] dynamic/pinnable shortcuts for parameterized presets ("High-accuracy", "Battery-saver") once `SET` lands.
 - [next] **Custom intents** to `ControlReceiver` — for **Good Lock → RoutinePlus**, Tasker, MacroDroid, or Home Assistant, which can send arbitrary broadcasts/extras.
 - [next] **Quick Settings tiles** — manual one-tap from the shade; also flippable by some automation.
 
@@ -115,7 +115,7 @@ Routine can invoke**, and to **report state back** so a Routine can react.
 
 | Surface | Who drives it | What it does |
 |---|---|---|
-| [next] **App Shortcuts** (`ShortcutManager`) | **Samsung Modes & Routines (native)** | *Open app → shortcut* runs a no-UI control action — needs no extra apps |
+| [built] **App Shortcuts** (`res/xml/shortcuts.xml`) | **Samsung Modes & Routines (native)** | *Open app → shortcut* runs a no-UI control action (Start/Stop/Toggle) — needs no extra apps |
 | [built→next] **Broadcast intents** (`ControlReceiver`) | Good Lock RoutinePlus / Tasker / MacroDroid / HA | full `START/STOP/TOGGLE/SET/QUERY` |
 | [next] **Quick Settings tiles** (`TileService`) | you, manually | logging toggle + quick setting from the shade |
 | [next] **State broadcast out** (`STATE_CHANGED`) | Routines / Modes / HA | react to logging/queue/OBD state |
