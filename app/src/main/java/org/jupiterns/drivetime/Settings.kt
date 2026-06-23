@@ -14,10 +14,22 @@ class Settings(context: Context) {
         get() = prefs.getString("token", "") ?: ""
         set(v) = prefs.edit().putString("token", v.trim()).apply()
 
-    /** Seconds between GPS fixes while driving. */
+    /** Seconds between GPS fixes while moving. */
     var intervalSec: Int
         get() = prefs.getInt("interval_sec", 3)
         set(v) = prefs.edit().putInt("interval_sec", v).apply()
+
+    /** Seconds between fixes while stopped (adaptive back-off): keeps a light
+     *  "still parked here" pulse instead of the moving-rate flood. */
+    var idleIntervalSec: Int
+        get() = prefs.getInt("idle_interval_sec", 20)
+        set(v) = prefs.edit().putInt("idle_interval_sec", v).apply()
+
+    /** End a trip after this many minutes stationary, as a backstop for a missed
+     *  activity-recognition "exited vehicle". 0 disables; only used with autoTrip. */
+    var stationaryStopMin: Int
+        get() = prefs.getInt("stationary_stop_min", 5)
+        set(v) = prefs.edit().putInt("stationary_stop_min", v).apply()
 
     /** Whether the logging service is currently meant to be running. */
     var loggingEnabled: Boolean

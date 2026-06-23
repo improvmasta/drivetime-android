@@ -32,11 +32,17 @@ object Control {
         val svc = Intent(context, LocationService::class.java)
         if (start) {
             if (!settings.isConfigured) return false
+            // Record desired-state and arm the watchdog *before* starting, so logging
+            // still resumes even if this background FGS-start is throttled.
+            settings.loggingEnabled = true
+            Watchdog.schedule(context)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
                 context.startForegroundService(svc)
             else
                 context.startService(svc)
         } else {
+            settings.loggingEnabled = false   // intentional stop
+            Watchdog.cancel(context)
             context.stopService(svc)
         }
         return start

@@ -39,10 +39,14 @@ class MainActivity : AppCompatActivity() {
             if (!settings.isConfigured) { b.status.text = "Set server URL + token first"; return@setOnClickListener }
             ensurePermissions()
             if (!Battery.isExempt(this)) Battery.requestExemption(this)
+            settings.loggingEnabled = true
+            Watchdog.schedule(this)
             startForegroundService(Intent(this, LocationService::class.java))
             refreshStatus()
         }
         b.stop.setOnClickListener {
+            settings.loggingEnabled = false
+            Watchdog.cancel(this)
             stopService(Intent(this, LocationService::class.java))
             refreshStatus()
         }

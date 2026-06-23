@@ -5,7 +5,8 @@ the in-car telemetry source. Logs high-frequency GPS (and, in Phase B, reads the
 OBD-II dongle directly) and posts it to drivetime's `/api/ingest`. Later phases add
 Android Auto screens and commute alerts.
 
-Plan & decisions: see drivetime's `NATIVE_APP.md`.
+Plan & decisions: see **[`ROADMAP.md`](ROADMAP.md)** (client roadmap — robustness +
+a control API driven by Samsung Modes & Routines) and drivetime's `NATIVE_APP.md`.
 
 ## Status — Phase A (GPS logger)
 - [x] Project + CI (builds a debug APK on every push)
