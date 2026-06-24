@@ -9,6 +9,7 @@ object LiveState {
     @Volatile var tier: String? = null        // "DRIVING" | "LIGHT" — current sampling tier
     @Volatile var driveReason: String? = null  // why: "car BT" | "OBD" | "speed" | "forced" | "auto"
     @Volatile var speedMph: Int? = null
+    @Volatile var obdConnected = false
     @Volatile var rpm: Int? = null
     @Volatile var coolantC: Int? = null
     @Volatile var voltage: Double? = null
@@ -16,6 +17,6 @@ object LiveState {
 
     fun clear() {
         tier = null; driveReason = null
-        speedMph = null; rpm = null; coolantC = null; voltage = null
+        speedMph = null; obdConnected = false; rpm = null; coolantC = null; voltage = null
     }
 }

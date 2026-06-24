@@ -97,10 +97,12 @@ class LocationService : Service() {
     override fun onCreate() {
         super.onCreate()
         isRunning = true
+        EventLog.init(this)
         settings = Settings(this)
         uploader = Uploader(this, settings)
         detector = DriveDetector(settings)
         startForeground(NOTIF_ID, buildNotification("Starting…"))
+        EventLog.info("Logging service started")
         ContextCompat.registerReceiver(this, btReceiver, IntentFilter().apply {
             addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
             addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
@@ -157,7 +159,13 @@ class LocationService : Service() {
     }
 
     private fun applyTier(tier: DriveDetector.Tier) {
+        val changed = tier != currentTier
         currentTier = tier
+        if (changed) when (tier) {
+            DriveDetector.Tier.DRIVING -> EventLog.info("Driving detected (${detector.reason()})")
+            DriveDetector.Tier.LIGHT -> EventLog.info("Light background tracking")
+            else -> {}
+        }
         when (tier) {
             DriveDetector.Tier.DRIVING -> {
                 idleMode = false; slowCount = 0; lastMoveLoc = null
@@ -258,6 +266,8 @@ class LocationService : Service() {
                     client.connect(adapter.getRemoteDevice(mac))
                     obd = client
                     detector.obdConnected = true
+                    LiveState.obdConnected = true
+                    EventLog.info("OBD connected")
                     main.post { reevaluate() }
                     var ticks = 0
                     while (isActive && client.isConnected()) {
@@ -270,9 +280,11 @@ class LocationService : Service() {
                 } catch (e: Exception) {
                     // dongle off/unpaired/out of range — keep logging GPS without engine data
                 } finally {
+                    if (LiveState.obdConnected) EventLog.info("OBD disconnected")
                     obd?.close(); obd = null
                     latestObd = null
                     detector.obdConnected = false
+                    LiveState.obdConnected = false
                     main.post { reevaluate() }
                 }
                 // Reconnect fast while driving, slowly otherwise.
@@ -288,6 +300,8 @@ class LocationService : Service() {
         isRunning = false
         LiveState.logging = false
         LiveState.clear()
+        if (settings.loggingEnabled) EventLog.warn("Logging stopped by system — will auto-resume")
+        else EventLog.info("Logging stopped")
         runCatching { unregisterReceiver(btReceiver) }
         runCatching { connectivity.unregisterNetworkCallback(netCallback) }
         fused.removeLocationUpdates(callback)

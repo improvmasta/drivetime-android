@@ -41,6 +41,11 @@
                 android:resource="@xml/shortcuts" />
         </activity>
 
+        <activity
+            android:name=".LogActivity"
+            android:exported="false"
+            android:label="Activity log" />
+
         <service
             android:name=".LocationService"
             android:exported="false"

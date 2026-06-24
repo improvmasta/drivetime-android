@@ -60,7 +60,9 @@ class Uploader(context: Context, private val settings: Settings) {
             if (obd.dtcs.isNotEmpty()) o.put("dtc", JSONArray(obd.dtcs))
         }
         synchronized(LOCK) {
+            ensureCountLocked()
             queueFile.appendText(o.toString() + "\n")
+            queuedApprox++
             enforceCapLocked()
         }
     }
@@ -84,7 +86,7 @@ class Uploader(context: Context, private val settings: Settings) {
                     queueFile.readLines().filter { it.isNotBlank() }.take(MAX_BATCH)
                 }
                 if (batch.isEmpty()) {
-                    synchronized(LOCK) { if (queuedCountLocked() == 0) queueFile.delete() }
+                    synchronized(LOCK) { if (queuedCountLocked() == 0) { queueFile.delete(); queuedApprox = 0 } }
                     return true
                 }
                 val body = JSONArray()
@@ -94,20 +96,32 @@ class Uploader(context: Context, private val settings: Settings) {
                     .header("Authorization", settings.authHeader)
                     .post(body.toString().toRequestBody(JSON))
                     .build()
-                val ok = try {
-                    client.newCall(req).execute().use { it.isSuccessful }
+                lastAttemptAt = System.currentTimeMillis()
+                val err = try {
+                    client.newCall(req).execute().use {
+                        when {
+                            it.isSuccessful -> null
+                            it.code == 401 -> "Auth failed — check username/password"
+                            else -> "Server returned HTTP ${it.code}"
+                        }
+                    }
                 } catch (e: Exception) {
-                    false
+                    e.message ?: e.javaClass.simpleName
                 }
-                if (ok) {
+                if (err == null) {
                     // Drop exactly the lines we sent. Only enqueue (append-only) can have
                     // touched the file meanwhile, so the head is still our batch — even if
                     // one or more lines were unparseable, they're consumed and won't wedge.
                     val empty = synchronized(LOCK) { dropHeadLocked(batch.size) }
+                    if (failures > 0) EventLog.info("Upload recovered — back online")
                     failures = 0
                     nextAttemptAt = 0L
+                    lastError = null
+                    lastSuccessAt = System.currentTimeMillis()
                     if (empty) return true   // else loop to send the next batch
                 } else {
+                    if (failures == 0 || err != lastError) EventLog.warn("Upload failed: $err")
+                    lastError = err
                     failures++
                     nextAttemptAt = System.currentTimeMillis() + backoffMs(failures)
                     return false
@@ -119,9 +133,19 @@ class Uploader(context: Context, private val settings: Settings) {
         }
     }
 
-    fun queuedCount(): Int = synchronized(LOCK) { queuedCountLocked() }
+    /** Cached queued count, so the dashboard can poll cheaply (no file read per tick). */
+    fun queuedCount(): Int = synchronized(LOCK) { ensureCountLocked(); queuedApprox }
+
+    /** Process-global upload health snapshot for the connection card. */
+    fun health(): Health = synchronized(LOCK) {
+        ensureCountLocked()
+        Health(queuedApprox, lastSuccessAt, lastAttemptAt, lastError, failures, nextAttemptAt)
+    }
 
     // --- internals (all callers hold LOCK) ---
+
+    /** Seed [queuedApprox] from disk once; thereafter enqueue/drop keep it exact. */
+    private fun ensureCountLocked() { if (queuedApprox < 0) queuedApprox = queuedCountLocked() }
 
     private fun queuedCountLocked(): Int =
         if (queueFile.exists()) queueFile.readLines().count { it.isNotBlank() } else 0
@@ -129,8 +153,9 @@ class Uploader(context: Context, private val settings: Settings) {
     /** Remove the first [n] non-blank lines; returns true if the queue is now empty. */
     private fun dropHeadLocked(n: Int): Boolean {
         val remaining = queueFile.readLines().filter { it.isNotBlank() }.drop(n)
-        if (remaining.isEmpty()) { queueFile.delete(); tmpFile.delete(); return true }
+        if (remaining.isEmpty()) { queueFile.delete(); tmpFile.delete(); queuedApprox = 0; return true }
         atomicWriteLocked(remaining)
+        queuedApprox = remaining.size
         return false
     }
 
@@ -143,6 +168,8 @@ class Uploader(context: Context, private val settings: Settings) {
         if (lines.size <= 1) return
         val keep = lines.subList(lines.size / 4, lines.size)
         atomicWriteLocked(keep)
+        queuedApprox = keep.size
+        EventLog.warn("Upload queue full — dropped ${lines.size - keep.size} oldest fixes")
     }
 
     /** Write [lines] to a temp file and atomically rename over the queue, so an
@@ -172,6 +199,22 @@ class Uploader(context: Context, private val settings: Settings) {
         private val flushing = AtomicBoolean(false)
         @Volatile private var failures = 0
         @Volatile private var nextAttemptAt = 0L
+
+        // Upload health, shared process-wide (service + UI are one process).
+        @Volatile private var lastSuccessAt = 0L
+        @Volatile private var lastAttemptAt = 0L
+        @Volatile private var lastError: String? = null
+        @Volatile private var queuedApprox = -1   // -1 = not yet seeded from disk
+
+        /** A glanceable snapshot of upload state for the dashboard's connection card. */
+        data class Health(
+            val queued: Int,
+            val lastSuccessAt: Long,
+            val lastAttemptAt: Long,
+            val lastError: String?,
+            val failures: Int,
+            val backoffUntil: Long,
+        )
 
         /** One client for the whole process so the watchdog doesn't build one per tick. */
         private val client = OkHttpClient.Builder()

@@ -20,6 +20,7 @@ import java.util.concurrent.TimeUnit
 class AlertWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params) {
 
     override fun doWork(): Result {
+        EventLog.init(applicationContext)
         val s = Settings(applicationContext)
         if (!s.isConfigured || !s.alertsEnabled) return Result.success()
         val client = OkHttpClient()
@@ -31,6 +32,7 @@ class AlertWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params) 
             val arr = JSONArray(resp.body?.string() ?: "[]")
             resp.close()
             if (arr.length() == 0) return Result.success()
+            EventLog.info("Received ${arr.length()} alert(s)")
             ensureChannel()
             for (i in 0 until arr.length()) {
                 val a = arr.getJSONObject(i)

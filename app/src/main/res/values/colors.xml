@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Status colors, picked to read on both light and dark backgrounds. -->
+    <color name="status_green">#43A047</color>
+    <color name="status_amber">#FB8C00</color>
+    <color name="status_red">#E53935</color>
+    <color name="status_blue">#1E88E5</color>
+    <color name="status_grey">#9E9E9E</color>
+</resources>
