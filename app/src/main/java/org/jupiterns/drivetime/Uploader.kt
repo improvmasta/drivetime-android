@@ -91,6 +91,7 @@ class Uploader(context: Context, private val settings: Settings) {
                 batch.forEach { runCatching { body.put(JSONObject(it)) } }  // skip any corrupt line
                 val req = Request.Builder()
                     .url(settings.ingestUrl)
+                    .header("Authorization", settings.authHeader)
                     .post(body.toString().toRequestBody(JSON))
                     .build()
                 val ok = try {

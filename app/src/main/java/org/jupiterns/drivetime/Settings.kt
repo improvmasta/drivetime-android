@@ -1,6 +1,7 @@
 package org.jupiterns.drivetime
 
 import android.content.Context
+import android.util.Base64
 
 /** Server connection settings, backed by SharedPreferences. */
 class Settings(context: Context) {
@@ -10,9 +11,16 @@ class Settings(context: Context) {
         get() = prefs.getString("server_url", "https://drivetime.jupiterns.org") ?: ""
         set(v) = prefs.edit().putString("server_url", v.trimEnd('/')).apply()
 
-    var token: String
-        get() = prefs.getString("token", "") ?: ""
-        set(v) = prefs.edit().putString("token", v.trim()).apply()
+    /** Dashboard login — the app authenticates ingest/alerts with these via HTTP
+     *  Basic (see [authHeader]), so a new build only needs creds you remember, not
+     *  the random ingest token. */
+    var username: String
+        get() = prefs.getString("username", "") ?: ""
+        set(v) = prefs.edit().putString("username", v.trim()).apply()
+
+    var password: String
+        get() = prefs.getString("password", "") ?: ""
+        set(v) = prefs.edit().putString("password", v).apply()
 
     /** Seconds between GPS fixes while *driving and moving* (the dense tier). */
     var intervalSec: Int
@@ -94,10 +102,17 @@ class Settings(context: Context) {
         set(v) = prefs.edit().putBoolean("alerts_enabled", v).apply()
 
     val ingestUrl: String
-        get() = "$serverUrl/api/ingest?key=$token"
+        get() = "$serverUrl/api/ingest"
+
+    /** HTTP Basic header from the dashboard login — stateless per-request auth for
+     *  ingest + alerts (no token to copy, nothing to expire mid-drive). Blank when
+     *  unconfigured. */
+    val authHeader: String
+        get() = if (username.isBlank()) "" else
+            "Basic " + Base64.encodeToString("$username:$password".toByteArray(), Base64.NO_WRAP)
 
     val isConfigured: Boolean
-        get() = serverUrl.isNotBlank() && token.isNotBlank()
+        get() = serverUrl.isNotBlank() && username.isNotBlank() && password.isNotBlank()
 
     companion object {
         const val MODE_AUTO = "auto"

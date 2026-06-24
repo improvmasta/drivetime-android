@@ -26,17 +26,19 @@ class MainActivity : AppCompatActivity() {
         settings = Settings(this)
 
         b.serverUrl.setText(settings.serverUrl)
-        b.token.setText(settings.token)
+        b.username.setText(settings.username)
+        b.password.setText(settings.password)
         b.interval.setText(settings.intervalSec.toString())
 
         b.save.setOnClickListener {
             settings.serverUrl = b.serverUrl.text.toString()
-            settings.token = b.token.text.toString()
+            settings.username = b.username.text.toString()
+            settings.password = b.password.text.toString()
             settings.intervalSec = b.interval.text.toString().toIntOrNull() ?: 3
             refreshStatus()
         }
         b.start.setOnClickListener {
-            if (!settings.isConfigured) { b.status.text = "Set server URL + token first"; return@setOnClickListener }
+            if (!settings.isConfigured) { b.status.text = "Set server URL, username + password first"; return@setOnClickListener }
             ensurePermissions()
             if (!Battery.isExempt(this)) Battery.requestExemption(this)
             Control.apply(this, Control.ACTION_MODE_AUTO)   // start in Auto (light → driving)

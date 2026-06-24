@@ -24,7 +24,7 @@ driven by Samsung Modes & Routines) and drivetime's `NATIVE_APP.md`.
 
 ## Status
 - [x] Foreground `LocationService` (FusedLocationProvider) with an on-disk offline queue
-- [x] Settings (server URL, ingest token, intervals, car-BT, OBD)
+- [x] Settings (server URL, login username/password, intervals, car-BT, OBD)
 - [x] **Tiered tracking + layered drive detection** (car-BT / OBD / speed → Light/Driving)
 - [x] **OBD-II via custom ELM327 layer** — RPM, speed, load, coolant, throttle, MAF,
   voltage + DTCs; merged onto each fix while Driving; also a driving signal
@@ -63,7 +63,8 @@ fix rate adapts to motion (dense moving, idle back-off at lights).
   every fix is appended before any network attempt and removed **only after the
   server acks it** (verify-before-delete). Survives crash/kill/dead-zones; bounded at
   16 MB (drop-oldest); atomic rewrites.
-- **Batched upload:** fixes flush to `POST {serverUrl}/api/ingest?key={token}` on a
+- **Batched upload:** fixes flush to `POST {serverUrl}/api/ingest` (authenticated with
+  HTTP Basic — your dashboard username/password) on a
   cadence — the periodic tick (`uploadIntervalSec` = 45s), when a batch fills
   (`BATCH_FIXES` = 25), or **immediately when connectivity returns** — instead of one
   POST per fix. A single flush drains the whole backlog; failures back off
@@ -116,8 +117,9 @@ gradle wrapper --gradle-version 8.7   # first time (no wrapper jar committed)
 ```
 
 ## Configure on the phone
-Open the app → **Server URL** (`https://drivetime.jupiterns.org`) + **ingest token**
-(the server's `DRIVETIME_TOKEN`) → Save → pick **Car Bluetooth** (and OBD if used) →
+Open the app → **Server URL** (`https://drivetime.jupiterns.org`) + your **dashboard
+username + password** (the same login you use on the site) → Save → pick **Car
+Bluetooth** (and OBD if used) →
 **Start** (enters Auto). The status line shows mode + tier, e.g. `● Auto · DRIVING (car BT)`.
 
 ## Keeping it awake (important on Samsung)

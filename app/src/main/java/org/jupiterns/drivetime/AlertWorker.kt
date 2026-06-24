@@ -25,7 +25,8 @@ class AlertWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params) 
         val client = OkHttpClient()
         return try {
             val resp = client.newCall(
-                Request.Builder().url("${s.serverUrl}/api/alerts?unread_only=true").build()
+                Request.Builder().url("${s.serverUrl}/api/alerts?unread_only=true")
+                    .header("Authorization", s.authHeader).build()
             ).execute()
             val arr = JSONArray(resp.body?.string() ?: "[]")
             resp.close()
@@ -36,7 +37,8 @@ class AlertWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params) 
                 notify(a.optInt("id", i), a.optString("title"), a.optString("body"))
             }
             client.newCall(
-                Request.Builder().url("${s.serverUrl}/api/alerts/read?key=${s.token}")
+                Request.Builder().url("${s.serverUrl}/api/alerts/read")
+                    .header("Authorization", s.authHeader)
                     .post(ByteArray(0).toRequestBody()).build()
             ).execute().close()
             Result.success()

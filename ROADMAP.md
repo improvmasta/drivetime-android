@@ -20,7 +20,7 @@ Master product roadmap lives in `drivetime/ROADMAP.md`; this is the client half.
 
 ## Status — what's built
 - [built] **Phase A** — foreground `LocationService` (FusedLocationProvider) → batched
-  upload with an on-disk **offline queue** (`Uploader`); Settings (server, token, interval).
+  upload with an on-disk **offline queue** (`Uploader`); Settings (server, login, interval).
 - [built] **Phase B** — custom **ELM327** Bluetooth-SPP client; RPM/load/coolant/throttle/
   MAF/fuel/voltage + DTCs merged onto each fix; dongle picker.
 - [built] **Phase C** — **Android Auto** pane (Car App Library): live stats logging / leave-by idle.
@@ -72,7 +72,7 @@ permission revocation. Treat "the app quietly stopped" as the #1 bug class.
 - [later] Optional self-hosted crash/heartbeat ping (no Google) so you know remotely it's alive.
 
 ### 1g. Security & hardening
-- [next] Token in **EncryptedSharedPreferences / Keystore**; never logged.
+- [next] Login **credentials** in **EncryptedSharedPreferences / Keystore**; never logged.
 - [next] **Harden the exported intent surface** — gate state-changing actions behind an optional shared token; keep START/STOP open (low-risk).
 - [later] Optional TLS cert-pinning for the ingest host.
 
