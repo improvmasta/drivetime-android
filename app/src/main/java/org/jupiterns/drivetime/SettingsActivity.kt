@@ -2,13 +2,18 @@ package org.jupiterns.drivetime
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.View
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
@@ -38,7 +43,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var s: Settings
     private lateinit var exportLauncher: ActivityResultLauncher<String>
     private lateinit var importLauncher: ActivityResultLauncher<Array<String>>
-    private lateinit var btPermLauncher: ActivityResultLauncher<String>
+    private lateinit var btPermLauncher: ActivityResultLauncher<Array<String>>
     private var pendingBtPick: (() -> Unit)? = null
 
     private lateinit var serverUrl: EditText
@@ -117,11 +122,11 @@ class SettingsActivity : AppCompatActivity() {
             ActivityResultContracts.OpenDocument()
         ) { uri -> uri?.let { importFrom(it) } }
         btPermLauncher = registerForActivityResult(
-            ActivityResultContracts.RequestPermission()
-        ) { granted ->
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { grants ->
             val resume = pendingBtPick; pendingBtPick = null
-            if (granted) resume?.invoke()
-            else snack("Bluetooth permission is needed to pick a device")
+            if (grants.values.all { it }) resume?.invoke()
+            else snack("Bluetooth permission is needed to find your dongle")
         }
 
         findViewById<Button>(R.id.exportSettings).setOnClickListener {
@@ -230,33 +235,84 @@ class SettingsActivity : AppCompatActivity() {
         snack("Imported $applied settings")
     }
 
-    @SuppressLint("MissingPermission")
     private fun pickBt(title: String, onPick: (mac: String, name: String) -> Unit, onClear: () -> Unit) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-            ContextCompat.checkSelfPermission(this, android.Manifest.permission.BLUETOOTH_CONNECT)
-            != PackageManager.PERMISSION_GRANTED) {
-            // Request it right here — the dashboard only prompts once a device is set,
-            // which can't happen until a device is picked, so the picker must self-grant.
+        if (!hasBtPerms()) {
+            // Request inline — the dashboard only prompts once a device is set, which can't
+            // happen until one is picked, so the picker must self-grant CONNECT + SCAN.
             pendingBtPick = { pickBt(title, onPick, onClear) }
-            btPermLauncher.launch(android.Manifest.permission.BLUETOOTH_CONNECT)
+            btPermLauncher.launch(btPerms())
             return
         }
         val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
-        val bonded = adapter?.bondedDevices?.toList().orEmpty()
-        // Cheap ELM327 clones connect over *insecure* RFCOMM and never bond, so they're
-        // absent from bondedDevices (and from system BT settings entirely). Always offer
-        // manual MAC entry so such a dongle can still be selected — never dead-end on an
-        // empty paired list.
-        val labels = bonded.map { "${it.name}\n${it.address}" } + "Enter MAC address manually"
-        AlertDialog.Builder(this)
-            .setTitle(title)
-            .setItems(labels.toTypedArray()) { _, i ->
-                if (i < bonded.size) { val d = bonded[i]; onPick(d.address, d.name ?: d.address) }
-                else promptForMac(title, onPick)
-            }
-            .setNeutralButton("Clear") { _, _ -> onClear() }
-            .show()
+        if (adapter == null) { snack("No Bluetooth on this device"); return }
+        showScanningPicker(title, adapter, onPick, onClear)
     }
+
+    /**
+     * Live device picker: lists bonded devices *and* actively discovers nearby ones —
+     * how Torque finds a dongle that never appears in system Bluetooth settings — so an
+     * unpaired ELM327 can simply be tapped (we capture its MAC) instead of hunting for
+     * the address. Discovery + the receiver are torn down when the dialog closes.
+     */
+    @SuppressLint("MissingPermission")
+    private fun showScanningPicker(
+        title: String,
+        adapter: BluetoothAdapter,
+        onPick: (mac: String, name: String) -> Unit,
+        onClear: () -> Unit,
+    ) {
+        val seen = HashSet<String>()
+        val picks = ArrayList<Pair<String, String>>()       // (mac, name), parallel to rows
+        val rows = ArrayAdapter<String>(this, android.R.layout.simple_list_item_1)
+
+        fun add(mac: String?, name: String?) {
+            if (mac == null || !seen.add(mac)) return
+            val nm = name?.takeIf { it.isNotBlank() } ?: mac
+            picks.add(mac to nm)
+            rows.add("$nm\n$mac")                            // ArrayAdapter.add auto-refreshes
+        }
+
+        adapter.bondedDevices?.forEach { add(it.address, it.name) }
+
+        var dialog: AlertDialog? = null
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(c: Context?, intent: Intent?) {
+                when (intent?.action) {
+                    BluetoothDevice.ACTION_FOUND ->
+                        intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
+                            ?.let { add(it.address, it.name) }
+                    BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> dialog?.setTitle(title)
+                }
+            }
+        }
+        val filter = IntentFilter(BluetoothDevice.ACTION_FOUND)
+            .apply { addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED) }
+        ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+
+        dialog = AlertDialog.Builder(this)
+            .setTitle("$title (scanning…)")
+            .setAdapter(rows) { _, i -> onPick(picks[i].first, picks[i].second) }
+            .setNeutralButton("Clear") { _, _ -> onClear() }
+            .setNegativeButton("Enter MAC") { _, _ -> promptForMac(title, onPick) }
+            .setOnDismissListener {
+                runCatching { adapter.cancelDiscovery() }
+                runCatching { unregisterReceiver(receiver) }
+            }
+            .create()
+        dialog?.show()
+        runCatching { adapter.cancelDiscovery() }
+        runCatching { adapter.startDiscovery() }
+    }
+
+    private fun hasBtPerms(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.S || (
+            ContextCompat.checkSelfPermission(this, android.Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(this, android.Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED)
+
+    private fun btPerms(): Array<String> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+            arrayOf(android.Manifest.permission.BLUETOOTH_CONNECT, android.Manifest.permission.BLUETOOTH_SCAN)
+        else emptyArray()
 
     /** Manual MAC entry — the path for an unbonded dongle (the insecure-RFCOMM case)
      *  that never appears in the paired list. LocationService connects by MAC via
