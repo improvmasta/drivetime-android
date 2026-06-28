@@ -59,14 +59,28 @@ speed backstop has hysteresis so traffic crawls don't flap. Inside *Driving*, th
 fix rate adapts to motion (dense moving, idle back-off at lights).
 
 ## Car Bluetooth & OBD setup
-- **Car Bluetooth (the #1 driving signal):** pair the phone to the car stereo, then
-  tap **Car Bluetooth** in the app and pick it. Connecting to it = Driving,
-  deterministically.
-- **OBD dongle:** pair the ELM327 in Android Bluetooth settings, tap **OBD dongle**,
-  pick it. The app connects over Bluetooth SPP when it has reason to think you're
-  driving, runs the ELM327 init, polls PIDs (~1.5s; DTCs ~3min) onto each fix, and
-  treats a successful connect as a driving signal. Off/unpaired → GPS keeps logging
-  without engine data.
+Tapping **Car Bluetooth** or **OBD dongle** opens a live picker that **scans for
+nearby devices** (like Torque) and lists them alongside already-paired ones. The
+first tap requests the Bluetooth permission itself — if it's ever missing on
+Android 12+, grant **Nearby devices** in app settings.
+
+- **Car Bluetooth (the #1 driving signal):** pick your car stereo from the scan.
+  Connecting to it = Driving, deterministically.
+- **OBD dongle:** many cheap ELM327 clones **never pair and never appear in system
+  Bluetooth settings** — they connect over *insecure* Bluetooth SPP without bonding
+  (that's how Torque reaches them). So just let the picker scan and **tap the dongle
+  when it appears**; no pairing/PIN needed. (**Enter MAC** is there as a fallback if
+  you know the address.) When it has reason to think you're driving, the app connects
+  (secure SPP → insecure SPP → channel-1 fallback), runs the ELM327 init, and polls
+  PIDs (~1.5s; DTCs ~3min) onto each fix — also treating a successful connect as a
+  driving signal. Off/out-of-range → GPS keeps logging without engine data.
+- **Engine data needs the ECU awake** (ignition on / engine running). With the car
+  off the bus is asleep, so only battery **voltage** reads (ATRV, read by the dongle
+  itself) — RPM/coolant/load/throttle/MAF require a running engine.
+- **Diagnostics:** every OBD connect writes the ELM327 init transcript, the **raw
+  per-PID adapter responses**, and the first decoded sample to the **activity log**,
+  and connection failures are logged too — so a protocol/parse fault is visible
+  instead of guessed.
 
 ## Uploads & local storage
 - **Local store** is a durable on-disk **outbox** (`queue.jsonl`), not a history:
