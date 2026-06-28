@@ -137,7 +137,7 @@
             <LinearLayout style="@style/SettingsSectionBody">
 
                 <TextView style="@style/SectionHeader" android:text="AUTOMATION" />
-                <TextView style="@style/SettingHelp" android:text="Pair the car's head unit so connecting Bluetooth = \"I'm driving\". The #1 reliable driving signal." />
+                <TextView style="@style/SettingHelp" android:text="Pair the car's head unit so connecting Bluetooth = &quot;I'm driving&quot;. The #1 reliable driving signal." />
                 <Button
                     android:id="@+id/carBt"
                     style="?attr/materialButtonOutlinedStyle"
