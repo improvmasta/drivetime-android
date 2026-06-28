@@ -1,7 +1,6 @@
 package org.jupiterns.drivetime
 
 import android.annotation.SuppressLint
-import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.pm.PackageManager
@@ -91,11 +90,11 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<Button>(R.id.batteryExempt).setOnClickListener { Battery.requestExemption(this) }
         findViewById<Button>(R.id.openOemPage).setOnClickListener { OemBatteryLinks.openProtectedAppsPage(this) }
 
-        carBt.setOnClickListener { pickBt("Select car Bluetooth", onPick = {
-            s.carBtMac = it.address; s.carBtName = it.name ?: it.address; refreshDeviceLabels()
+        carBt.setOnClickListener { pickBt("Select car Bluetooth", onPick = { mac, name ->
+            s.carBtMac = mac; s.carBtName = name; refreshDeviceLabels()
         }, onClear = { s.carBtMac = ""; s.carBtName = ""; refreshDeviceLabels() }) }
-        obdDevice.setOnClickListener { pickBt("Select OBD dongle", onPick = {
-            s.obdMac = it.address; s.obdName = it.name ?: it.address; refreshDeviceLabels()
+        obdDevice.setOnClickListener { pickBt("Select OBD dongle", onPick = { mac, name ->
+            s.obdMac = mac; s.obdName = name; refreshDeviceLabels()
         }, onClear = { s.obdMac = ""; s.obdName = ""; refreshDeviceLabels() }) }
 
         alerts.setOnCheckedChangeListener { _, on ->
@@ -222,7 +221,7 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     @SuppressLint("MissingPermission")
-    private fun pickBt(title: String, onPick: (BluetoothDevice) -> Unit, onClear: () -> Unit) {
+    private fun pickBt(title: String, onPick: (mac: String, name: String) -> Unit, onClear: () -> Unit) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
             ContextCompat.checkSelfPermission(this, android.Manifest.permission.BLUETOOTH_CONNECT)
             != PackageManager.PERMISSION_GRANTED) {
@@ -235,7 +234,7 @@ class SettingsActivity : AppCompatActivity() {
         val names = bonded.map { "${it.name}\n${it.address}" }.toTypedArray()
         AlertDialog.Builder(this)
             .setTitle(title)
-            .setItems(names) { _, i -> onPick(bonded[i]) }
+            .setItems(names) { _, i -> val d = bonded[i]; onPick(d.address, d.name ?: d.address) }
             .setNeutralButton("Clear") { _, _ -> onClear() }
             .show()
     }
