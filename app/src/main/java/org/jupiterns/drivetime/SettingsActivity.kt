@@ -38,6 +38,8 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var s: Settings
     private lateinit var exportLauncher: ActivityResultLauncher<String>
     private lateinit var importLauncher: ActivityResultLauncher<Array<String>>
+    private lateinit var btPermLauncher: ActivityResultLauncher<String>
+    private var pendingBtPick: (() -> Unit)? = null
 
     private lateinit var serverUrl: EditText
     private lateinit var username: EditText
@@ -114,6 +116,13 @@ class SettingsActivity : AppCompatActivity() {
         importLauncher = registerForActivityResult(
             ActivityResultContracts.OpenDocument()
         ) { uri -> uri?.let { importFrom(it) } }
+        btPermLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { granted ->
+            val resume = pendingBtPick; pendingBtPick = null
+            if (granted) resume?.invoke()
+            else snack("Bluetooth permission is needed to pick a device")
+        }
 
         findViewById<Button>(R.id.exportSettings).setOnClickListener {
             saveAll()
@@ -226,7 +235,10 @@ class SettingsActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
             ContextCompat.checkSelfPermission(this, android.Manifest.permission.BLUETOOTH_CONNECT)
             != PackageManager.PERMISSION_GRANTED) {
-            snack("Grant Bluetooth permission on the dashboard first")
+            // Request it right here — the dashboard only prompts once a device is set,
+            // which can't happen until a device is picked, so the picker must self-grant.
+            pendingBtPick = { pickBt(title, onPick, onClear) }
+            btPermLauncher.launch(android.Manifest.permission.BLUETOOTH_CONNECT)
             return
         }
         val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
