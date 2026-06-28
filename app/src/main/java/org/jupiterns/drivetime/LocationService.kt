@@ -298,17 +298,29 @@ class LocationService : Service() {
                     detector.obdConnected = true
                     LiveState.obdConnected = true
                     EventLog.info("OBD connected")
+                    runCatching { client.diagnostic().forEach { EventLog.info("OBD $it") } }
                     main.post { reevaluate(); StateBroadcaster.emit(this@LocationService, "obd") }
                     var ticks = 0
+                    var loggedSample = false
                     while (isActive && client.isConnected()) {
                         val s = client.readSample()
+                        // Log the first decoded sample so we can confirm PIDs are parsing
+                        // (not just connecting) without watching live.
+                        if (!loggedSample) {
+                            loggedSample = true
+                            EventLog.info("OBD sample rpm=${s.rpm} kph=${s.obdKph} coolant=${s.coolantC}" +
+                                " load=${s.engineLoad?.let { "%.0f".format(it) }} thr=${s.throttle?.let { "%.0f".format(it) }}" +
+                                " maf=${s.maf?.let { "%.1f".format(it) }} v=${s.voltage}")
+                        }
                         latestObd = if (ticks % 120 == 0) s.copy(dtcs = client.readDtcs()) else s
                         LiveState.rpm = s.rpm; LiveState.coolantC = s.coolantC; LiveState.voltage = s.voltage
                         ticks++
                         delay(1500)
                     }
                 } catch (e: Exception) {
-                    // dongle off/unpaired/out of range — keep logging GPS without engine data
+                    // dongle off/unpaired/out of range — log it so a real fault is visible
+                    // instead of silently logging GPS without engine data.
+                    EventLog.warn("OBD error: ${e.message ?: e.javaClass.simpleName}")
                 } finally {
                     val wasConnected = LiveState.obdConnected
                     if (wasConnected) EventLog.info("OBD disconnected")

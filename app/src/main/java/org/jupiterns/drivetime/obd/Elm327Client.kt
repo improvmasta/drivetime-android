@@ -31,6 +31,7 @@ class Elm327Client {
     private var socket: BluetoothSocket? = null
     private var input: InputStream? = null
     private var output: OutputStream? = null
+    private val initLog = mutableListOf<String>()
 
     fun isConnected() = socket?.isConnected == true
 
@@ -41,8 +42,10 @@ class Elm327Client {
         input = s.inputStream
         output = s.outputStream
         // init: reset, echo off, linefeeds off, spaces off, auto protocol
+        initLog.clear()
         for (cmd in listOf("ATZ", "ATE0", "ATL0", "ATS0", "ATSP0")) {
-            send(cmd); Thread.sleep(120)
+            val r = send(cmd); Thread.sleep(120)
+            initLog.add("$cmd→${clean(r)}")
         }
     }
 
@@ -105,6 +108,25 @@ class Elm327Client {
     /** Mode 03 — stored diagnostic trouble codes (check-engine). */
     fun readDtcs(): List<String> = parseDtcs(send("03"))
 
+    /** One-shot raw probe for the activity log: the init transcript plus the exact
+     *  text the adapter returns for each polled PID. Makes a parse/protocol fault
+     *  visible (e.g. "NO DATA", "SEARCHING...", "UNABLE TO CONNECT") instead of a
+     *  silent null. Two compact lines so the Log stays readable. */
+    fun diagnostic(): List<String> {
+        val init = "init: " + initLog.joinToString("  ")
+        val probe = buildString {
+            append("probe:")
+            for (pid in listOf("0C", "0D", "04", "05", "11", "10")) {
+                append("  01$pid→").append(clean(send("01$pid")))
+            }
+            append("  ATRV→").append(clean(send("ATRV")))
+        }
+        return listOf(init, probe)
+    }
+
+    private fun clean(s: String) =
+        s.replace(Regex("[\\r\\n>]"), " ").replace(Regex("\\s+"), " ").trim()
+
     // --- internals ---
 
     private fun send(cmd: String): String {
@@ -128,25 +150,25 @@ class Elm327Client {
         return sb.toString()
     }
 
-    /** Hex data bytes following the "41<pid>" response header. */
+    /** Hex data bytes following the "41<pid>" response header. Anchors on the marker
+     *  so it works whether the ELM327 returns spaced ("41 0C 1A F0") or packed
+     *  ("410C1AF0") bytes. The init sends ATS0 (spaces off), and the old space-tokenised
+     *  parse then dropped every byte — leaving only the separately-read voltage. The
+     *  marker search also skips leading "SEARCHING..."/echo noise. */
     private fun pidBytes(pid: String): List<Int> {
-        val resp = send("01$pid")
-        val toks = resp.uppercase()
-            .replace(Regex("[^0-9A-F ]"), " ")
-            .split(Regex("\\s+")).filter { it.length == 2 }
-        val joined = toks.joinToString("")
-        val idx = joined.indexOf("41$pid")
+        val hex = send("01$pid").uppercase().replace(Regex("[^0-9A-F]"), "")
+        val marker = "41$pid"
+        val idx = hex.indexOf(marker)
         if (idx < 0) return emptyList()
-        return joined.substring(idx + 4).chunked(2).mapNotNull { it.toIntOrNull(16) }
+        return hex.substring(idx + marker.length).chunked(2)
+            .filter { it.length == 2 }.mapNotNull { it.toIntOrNull(16) }
     }
 
     private fun parseDtcs(resp: String): List<String> {
-        val toks = resp.uppercase().replace(Regex("[^0-9A-F ]"), " ")
-            .split(Regex("\\s+")).filter { it.length == 2 }
-        val joined = toks.joinToString("")
-        val idx = joined.indexOf("43")
+        val hex = resp.uppercase().replace(Regex("[^0-9A-F]"), "")
+        val idx = hex.indexOf("43")
         if (idx < 0) return emptyList()
-        val data = joined.substring(idx + 2).chunked(2).mapNotNull { it.toIntOrNull(16) }
+        val data = hex.substring(idx + 2).chunked(2).filter { it.length == 2 }.mapNotNull { it.toIntOrNull(16) }
         val out = mutableListOf<String>()
         var i = 0
         while (i + 1 < data.size) {
