@@ -24,9 +24,11 @@ class UploaderQueueTest {
 
     @Before fun setup() {
         val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
-        // Clear any existing queue from a previous test run.
+        // Clear any existing queue from a previous test run. The cached count is
+        // process-global (companion), so reset it too or it leaks across tests.
         File(ctx.filesDir, "queue.jsonl").delete()
         File(ctx.filesDir, "queue.tmp").delete()
+        Uploader.resetQueueCacheForTest()
         settings = Settings(ctx)
         uploader = Uploader(ctx, settings)
         queueFile = File(ctx.filesDir, "queue.jsonl")
@@ -56,6 +58,9 @@ class UploaderQueueTest {
         repeat(10) {
             uploader.enqueue(40.0, -75.0, 1700000000L + it, null, null, null)
         }
+        // The cached count is process-global; drop it so the fresh instance is forced
+        // to re-seed from the on-disk file rather than read the warm cache.
+        Uploader.resetQueueCacheForTest()
         val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
         val fresh = Uploader(ctx, Settings(ctx))
         assertEquals(10, fresh.queuedCount())

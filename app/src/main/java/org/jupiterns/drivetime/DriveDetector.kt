@@ -27,27 +27,28 @@ class DriveDetector(private val settings: Settings) {
     @Volatile var carConnected = false
     @Volatile var obdConnected = false
 
-    // Speed-backstop state (hysteresis).
+    // Speed-backstop state (hysteresis). NO_TS = "window not started" — a distinct
+    // sentinel rather than 0L, so a sample stamped at t=0 still accumulates the window.
     @Volatile private var speedDriving = false
-    private var fastSince = 0L
-    private var slowSince = 0L
+    private var fastSince = NO_TS
+    private var slowSince = NO_TS
 
     /** Feed a GPS speed sample (m/s) to drive the speed backstop. */
     fun onSpeed(mps: Float, now: Long) {
-        if (!settings.driveBySpeed) { speedDriving = false; fastSince = 0L; slowSince = 0L; return }
+        if (!settings.driveBySpeed) { speedDriving = false; fastSince = NO_TS; slowSince = NO_TS; return }
         when {
-            mps >= ENTER_FAST_MPS -> { speedDriving = true; fastSince = 0L; slowSince = 0L }  // unambiguous
+            mps >= ENTER_FAST_MPS -> { speedDriving = true; fastSince = NO_TS; slowSince = NO_TS }  // unambiguous
             mps >= ENTER_MPS -> {                 // moderate speed: confirm it's sustained
-                slowSince = 0L
-                if (fastSince == 0L) fastSince = now
+                slowSince = NO_TS
+                if (fastSince == NO_TS) fastSince = now
                 if (now - fastSince >= ENTER_MS) speedDriving = true
             }
             mps < EXIT_MPS -> {                   // near-stopped: exit only after a sustained stop
-                fastSince = 0L
-                if (slowSince == 0L) slowSince = now
+                fastSince = NO_TS
+                if (slowSince == NO_TS) slowSince = now
                 if (now - slowSince >= EXIT_MS) speedDriving = false
             }
-            else -> { fastSince = 0L; slowSince = 0L }  // between thresholds: hold current state
+            else -> { fastSince = NO_TS; slowSince = NO_TS }  // between thresholds: hold current state
         }
     }
 
@@ -76,5 +77,6 @@ class DriveDetector(private val settings: Settings) {
         private const val EXIT_MPS = 1.3f         // ~3 mph: near-stopped
         private const val ENTER_MS = 20_000L      // sustained-moderate-speed window to enter
         private const val EXIT_MS = 180_000L      // sustained stop (3 min) before speed-exit
+        private const val NO_TS = Long.MIN_VALUE  // "timer not started" sentinel (0L is a valid now)
     }
 }

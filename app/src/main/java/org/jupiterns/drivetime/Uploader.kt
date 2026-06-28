@@ -206,6 +206,11 @@ class Uploader(context: Context, private val settings: Settings) {
         @Volatile private var lastError: String? = null
         @Volatile private var queuedApprox = -1   // -1 = not yet seeded from disk
 
+        /** Test-only: forget the process-global cached count so the next access
+         *  re-seeds from disk. The cache is static (shared across instances), so a
+         *  test must reset it to isolate runs / exercise the seed-from-disk path. */
+        internal fun resetQueueCacheForTest() { synchronized(LOCK) { queuedApprox = -1 } }
+
         /** A glanceable snapshot of upload state for the dashboard's connection card. */
         data class Health(
             val queued: Int,
