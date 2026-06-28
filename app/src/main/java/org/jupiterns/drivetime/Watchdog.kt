@@ -30,13 +30,26 @@ class Watchdog(ctx: Context, params: WorkerParameters) : Worker(ctx, params) {
 
     override fun doWork(): Result {
         val s = Settings(applicationContext)
-        if (s.loggingEnabled && s.isConfigured && !LocationService.isRunning) {
+        val ready = Permissions.snapshot(applicationContext, s).isReady
+        if (s.loggingEnabled && s.isConfigured && ready && !LocationService.isRunning) {
+            // We were *meant* to be logging and the service is dead → record a
+            // suspected OEM kill so the dashboard can name the specific setting to
+            // fix. We only count this if the gap exceeds the expected sample cadence
+            // by a wide margin — a real cold start (no prior fix) doesn't count.
+            val gap = System.currentTimeMillis() - s.lastFixAt
+            val expectedMaxGap = (s.lightIntervalSec.coerceAtLeast(30) * 1000L) * 6
+            if (s.lastFixAt > 0 && gap > KILL_THRESHOLD_MS && gap > expectedMaxGap) {
+                s.lastKillDetectedAt = System.currentTimeMillis()
+                EventLog.warn("Logger was killed for ~${gap / 60_000}min — likely OEM battery manager")
+            }
             try {
                 val svc = Intent(applicationContext, LocationService::class.java)
+                s.lastCommandSource = "watchdog"
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
                     applicationContext.startForegroundService(svc)
                 else
                     applicationContext.startService(svc)
+                EventLog.warn("Watchdog restarted the logging service")
             } catch (e: Exception) {
                 // Background FGS-start was refused (throttled / no exemption yet) —
                 // try again next cycle rather than giving up.
@@ -50,6 +63,11 @@ class Watchdog(ctx: Context, params: WorkerParameters) : Worker(ctx, params) {
 
     companion object {
         private const val WORK = "drivetime-watchdog"
+
+        /** Below this gap, a missing-service window is "OK, you swiped or rebooted";
+         *  above it, treat it as a silent kill that warrants the OEM warning. 20 min
+         *  comfortably exceeds the 15-min watchdog cadence + first-fix latency. */
+        private const val KILL_THRESHOLD_MS = 20L * 60_000L
 
         fun schedule(ctx: Context) {
             WorkManager.getInstance(ctx).enqueueUniquePeriodicWork(

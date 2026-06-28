@@ -61,12 +61,21 @@ class LocationService : Service() {
     private var currentTier = DriveDetector.Tier.LIGHT
     private var requestedIntervalMs = -1L         // active LocationRequest interval (avoid churn)
     private var pendingSinceFlush = 0             // fixes enqueued since the last flush trigger
+    private var lastPersistedFixAt = 0L           // throttle Settings writes for the kill detector
 
     private val connectivity by lazy { getSystemService(ConnectivityManager::class.java) }
     /** Flush as soon as a usable network returns, so a dead-zone backlog clears
      *  immediately instead of waiting for the next periodic tick. */
     private val netCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) { flushNow() }
+    }
+
+    /** Charge-connected → immediate flush: charging is the cheapest possible window
+     *  to drain any LIGHT-tier backlog (radio is "free" relative to the battery cost
+     *  we usually avoid). Registered at runtime since ACTION_POWER_CONNECTED is an
+     *  implicit broadcast that won't fire from a manifest receiver. */
+    private val chargeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(ctx: Context, intent: Intent) { flushNow() }
     }
 
     // Within-drive adaptive-sampling state (dense vs idle).
@@ -107,17 +116,28 @@ class LocationService : Service() {
             addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
             addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
         }, ContextCompat.RECEIVER_NOT_EXPORTED)
+        ContextCompat.registerReceiver(this, chargeReceiver, IntentFilter().apply {
+            addAction(Intent.ACTION_POWER_CONNECTED)
+        }, ContextCompat.RECEIVER_NOT_EXPORTED)
         runCatching { connectivity.registerDefaultNetworkCallback(netCallback) }
         startObdLoop()
         startUploadLoop()
     }
 
-    /** Periodic batched flush: send whatever's queued on the upload cadence. The
-     *  backoff guard inside flush() keeps this from hammering during an outage. */
+    /**
+     * Periodic batched flush. Cadence is **tier-aware**: dense (`drivingUploadIntervalSec`,
+     * ~10s default) while DRIVING so the dashboard / live ETA / Auto pane see near-real-
+     * time position, slower (`uploadIntervalSec`, ~45s default) while LIGHT to spare the
+     * radio. We also flush on connectivity-regained, charge-connected, and BATCH_FIXES;
+     * the backoff guard inside flush() keeps this from hammering during an outage.
+     */
     private fun startUploadLoop() {
         scope.launch {
             while (isActive) {
-                delay(settings.uploadIntervalSec * 1000L)
+                val sec = if (currentTier == DriveDetector.Tier.DRIVING)
+                    settings.drivingUploadIntervalSec.coerceAtLeast(1)
+                else settings.uploadIntervalSec.coerceAtLeast(5)
+                delay(sec * 1000L)
                 flushNow()
             }
         }
@@ -161,10 +181,13 @@ class LocationService : Service() {
     private fun applyTier(tier: DriveDetector.Tier) {
         val changed = tier != currentTier
         currentTier = tier
-        if (changed) when (tier) {
-            DriveDetector.Tier.DRIVING -> EventLog.info("Driving detected (${detector.reason()})")
-            DriveDetector.Tier.LIGHT -> EventLog.info("Light background tracking")
-            else -> {}
+        if (changed) {
+            when (tier) {
+                DriveDetector.Tier.DRIVING -> EventLog.info("Driving detected (${detector.reason()})")
+                DriveDetector.Tier.LIGHT -> EventLog.info("Light background tracking")
+                else -> {}
+            }
+            StateBroadcaster.emit(this, "tier")
         }
         when (tier) {
             DriveDetector.Tier.DRIVING -> {
@@ -208,7 +231,14 @@ class LocationService : Service() {
         )
         LiveState.logging = true
         LiveState.speedMph = if (loc.hasSpeed()) Math.round(loc.speed * 2.2369362f) else null
-        LiveState.updatedAt = System.currentTimeMillis()
+        val now = System.currentTimeMillis()
+        LiveState.updatedAt = now
+        // Persist lastFixAt at most every PERSIST_FIX_MS so the watchdog's kill
+        // detector has a recent timestamp without one SharedPreferences write per fix.
+        if (now - lastPersistedFixAt >= PERSIST_FIX_MS) {
+            settings.lastFixAt = now
+            lastPersistedFixAt = now
+        }
         // Batched upload: buffer to the durable queue; flush on the periodic tick,
         // when a full batch has accumulated, or when connectivity returns.
         if (++pendingSinceFlush >= BATCH_FIXES) flushNow()
@@ -268,7 +298,7 @@ class LocationService : Service() {
                     detector.obdConnected = true
                     LiveState.obdConnected = true
                     EventLog.info("OBD connected")
-                    main.post { reevaluate() }
+                    main.post { reevaluate(); StateBroadcaster.emit(this@LocationService, "obd") }
                     var ticks = 0
                     while (isActive && client.isConnected()) {
                         val s = client.readSample()
@@ -280,12 +310,16 @@ class LocationService : Service() {
                 } catch (e: Exception) {
                     // dongle off/unpaired/out of range — keep logging GPS without engine data
                 } finally {
-                    if (LiveState.obdConnected) EventLog.info("OBD disconnected")
+                    val wasConnected = LiveState.obdConnected
+                    if (wasConnected) EventLog.info("OBD disconnected")
                     obd?.close(); obd = null
                     latestObd = null
                     detector.obdConnected = false
                     LiveState.obdConnected = false
-                    main.post { reevaluate() }
+                    main.post {
+                        reevaluate()
+                        if (wasConnected) StateBroadcaster.emit(this@LocationService, "obd")
+                    }
                 }
                 // Reconnect fast while driving, slowly otherwise.
                 delay(if (currentTier == DriveDetector.Tier.DRIVING) OBD_RETRY_DRIVE_MS else OBD_IDLE_MS)
@@ -302,7 +336,9 @@ class LocationService : Service() {
         LiveState.clear()
         if (settings.loggingEnabled) EventLog.warn("Logging stopped by system — will auto-resume")
         else EventLog.info("Logging stopped")
+        StateBroadcaster.emit(this, "service")
         runCatching { unregisterReceiver(btReceiver) }
+        runCatching { unregisterReceiver(chargeReceiver) }
         runCatching { connectivity.unregisterNetworkCallback(netCallback) }
         fused.removeLocationUpdates(callback)
         obd?.close(); obd = null
@@ -366,5 +402,9 @@ class LocationService : Service() {
         // Upload batching: flush early once this many fixes have queued since the last
         // flush, so dense driving doesn't hold more than ~a minute between periodic ticks.
         private const val BATCH_FIXES = 25
+
+        // Throttle for persisting "last fix" to Settings (cheap but not free; we only
+        // need this fresh to the order of a minute for the OEM kill detector).
+        private const val PERSIST_FIX_MS = 30_000L
     }
 }

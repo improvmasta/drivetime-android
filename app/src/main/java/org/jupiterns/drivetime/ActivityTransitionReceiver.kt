@@ -15,8 +15,8 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
         for (e in result.transitionEvents) {
             if (e.activityType != DetectedActivity.IN_VEHICLE) continue
             when (e.transitionType) {
-                ActivityTransition.ACTIVITY_TRANSITION_ENTER -> Control.apply(context, Control.ACTION_START)
-                ActivityTransition.ACTIVITY_TRANSITION_EXIT -> Control.apply(context, Control.ACTION_STOP)
+                ActivityTransition.ACTIVITY_TRANSITION_ENTER -> Control.apply(context, Control.ACTION_START, "activity-recognition")
+                ActivityTransition.ACTIVITY_TRANSITION_EXIT -> Control.apply(context, Control.ACTION_STOP, "activity-recognition")
             }
         }
     }

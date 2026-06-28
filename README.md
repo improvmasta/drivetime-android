@@ -24,16 +24,26 @@ driven by Samsung Modes & Routines) and drivetime's `NATIVE_APP.md`.
 
 ## Status
 - [x] Foreground `LocationService` (FusedLocationProvider) with an on-disk offline queue
-- [x] Settings (server URL, login username/password, intervals, car-BT, OBD)
+- [x] **Live status dashboard** — tracking switch, glanceable state, colour-coded
+  connection card, OBD vitals, actionable warning banner, activity log
+- [x] **Sectioned Settings screen** with per-row help + JSON import/export
 - [x] **Tiered tracking + layered drive detection** (car-BT / OBD / speed → Light/Driving)
+- [x] **Tier-aware upload cadence** — ~10s while DRIVING (near-real-time), 45s in LIGHT,
+  immediate flush on app-foreground / connectivity-regained / charge-connected
 - [x] **OBD-II via custom ELM327 layer** — RPM, speed, load, coolant, throttle, MAF,
   voltage + DTCs; merged onto each fix while Driving; also a driving signal
 - [x] **Android Auto** screen — live stats when logging; today's **leave-by** card when idle
 - [x] **Alerts** — 15-min WorkManager poll of `/api/alerts` → notifications
 - [x] **Robustness** — boot/update restart, self-healing watchdog, verify-before-delete
-  queue with backoff + size cap (see [`ROADMAP.md`](ROADMAP.md) Pillar 1)
-- [x] **Control API + App Shortcuts** — modes drivable by Samsung Modes & Routines
-- [ ] Background-location permission-flow polish; signed release builds
+  queue with backoff + size cap, OEM-kill detector with manufacturer-specific
+  deep links (Samsung, Xiaomi, Huawei, OnePlus, Oppo/Realme, Vivo, Asus)
+- [x] **Permissions gate** — single source of truth (`Permissions.snapshot`) driving
+  the warning banner; two-step fine → background-location flow on first Start
+- [x] **Control API + App Shortcuts + STATE_CHANGED broadcast** — extended `SET`
+  (every cadence + auto-trip + alerts), `QUERY`, optional shared-token gate; see
+  **[`AUTOMATION.md`](AUTOMATION.md)**
+- [x] **CI** — Robolectric unit tests + Android Lint run on every push before the APK
+- [ ] Signed release builds
 
 ## Tracking tiers & drive detection
 | Tier | When | Fix rate | Power |
@@ -82,16 +92,16 @@ the detector decide; the others force it:
 | Driving | `…action.MODE_DRIVING` | force dense logging |
 | Eco | `…action.MODE_ECO` | force Light logging |
 | Off | `…action.STOP` | stop logging |
-| (generic) | `…action.SET` extras `key=mode value=<auto\|driving\|eco\|off>` | routine-friendly |
+| Generic | `…action.SET` extras `key=… value=…` | full routine API (cadences, BT, alerts…) |
+| Query | `…action.QUERY` | emit a `STATE_CHANGED` broadcast back |
 
-(`…` = `org.jupiterns.drivetime`.) Two entry points: **ControlActivity** (launch —
-most reliable for *starting* from the background) and **ControlReceiver** (broadcast).
+(`…` = `org.jupiterns.drivetime`.) Full key reference, recipes for Samsung Modes &
+Routines / Tasker / HA, and the `STATE_CHANGED` extras schema are in
+**[`AUTOMATION.md`](AUTOMATION.md)** (also shown verbatim in the in-app Settings → Automation).
 
-- **App Shortcuts** (`res/xml/shortcuts.xml`): Driving / Auto / Eco / Off appear on
-  the launcher-icon long-press and under **Samsung Modes & Routines → app actions** —
-  no extra automation app needed. e.g. Samsung *Driving* mode → **Driving**, *arrive
-  home* → **Eco**/**Off**.
-- **Tasker / MacroDroid / Home Assistant:** launch the activity or broadcast the action:
+Two entry points: **ControlActivity** (launch — most reliable for *starting* from
+the background) and **ControlReceiver** (broadcast).
+
 ```bash
 am start     -n org.jupiterns.drivetime/.ControlActivity -a org.jupiterns.drivetime.action.MODE_DRIVING
 am broadcast -n org.jupiterns.drivetime/.ControlReceiver  -a org.jupiterns.drivetime.action.STOP
@@ -100,6 +110,11 @@ am broadcast -n org.jupiterns.drivetime/.ControlReceiver  -a org.jupiterns.drive
 
 > Background *start* on Android 12+ prefers ControlActivity (an Activity context
 > dodges the foreground-service-start limit). STOP/force-Eco always work.
+
+## Settings backup
+Settings → Backup → **Export** / **Import** writes every editable knob as JSON whose
+keys match the routine `SET` names — the same file restores onto a new phone *or*
+serves as a one-shot routine preset.
 
 ## Android Auto
 A glanceable `PaneTemplate`: live **speed, RPM, coolant, battery** + a **Start/Stop**

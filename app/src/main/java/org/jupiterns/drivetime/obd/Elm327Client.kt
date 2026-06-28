@@ -3,6 +3,7 @@ package org.jupiterns.drivetime.obd
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothSocket
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.UUID
@@ -35,8 +36,7 @@ class Elm327Client {
 
     @SuppressLint("MissingPermission")
     fun connect(device: BluetoothDevice) {
-        val s = device.createRfcommSocketToServiceRecord(SPP_UUID)
-        s.connect()
+        val s = openSocket(device)
         socket = s
         input = s.inputStream
         output = s.outputStream
@@ -45,6 +45,38 @@ class Elm327Client {
             send(cmd); Thread.sleep(120)
         }
     }
+
+    /**
+     * Open an RFCOMM stream to the dongle, working around the cheap-ELM327 quirk where
+     * the secure SPP socket is silently refused. Try, in order: secure SPP → insecure
+     * SPP → reflection on channel 1 (for clones that publish no SPP service record).
+     * The first socket that connects wins; failed attempts are closed.
+     */
+    @SuppressLint("MissingPermission")
+    private fun openSocket(device: BluetoothDevice): BluetoothSocket {
+        val strategies = listOf<() -> BluetoothSocket>(
+            { device.createRfcommSocketToServiceRecord(SPP_UUID) },
+            { device.createInsecureRfcommSocketToServiceRecord(SPP_UUID) },
+            {
+                val m = device.javaClass.getMethod("createRfcommSocket", Int::class.javaPrimitiveType)
+                m.invoke(device, 1) as BluetoothSocket
+            },
+        )
+        var last: Exception? = null
+        for (open in strategies) {
+            val sock = runCatching { open() }.getOrElse { last = it.toException(); null } ?: continue
+            try {
+                sock.connect()
+                return sock
+            } catch (e: Exception) {
+                last = e
+                runCatching { sock.close() }
+            }
+        }
+        throw last ?: IOException("OBD: no RFCOMM socket strategy connected")
+    }
+
+    private fun Throwable.toException() = this as? Exception ?: IOException(message, this)
 
     fun close() {
         runCatching { socket?.close() }

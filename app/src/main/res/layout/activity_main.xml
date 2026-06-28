@@ -241,99 +241,28 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <Button
-            android:id="@+id/viewLog"
-            style="?attr/materialButtonOutlinedStyle"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:text="View activity log" />
-
-        <!-- Setup -->
-        <com.google.android.material.card.MaterialCardView
-            android:id="@+id/setupCard"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            app:cardCornerRadius="16dp"
-            app:cardElevation="2dp">
-
-            <LinearLayout
-                android:layout_width="match_parent"
+            android:orientation="horizontal"
+            android:layout_marginTop="12dp">
+            <Button
+                android:id="@+id/viewLog"
+                style="?attr/materialButtonOutlinedStyle"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:padding="16dp">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="SETUP"
-                    android:textSize="12sp"
-                    android:textStyle="bold"
-                    android:alpha="0.6"
-                    android:paddingBottom="6dp" />
-
-                <EditText
-                    android:id="@+id/serverUrl"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:hint="Server URL"
-                    android:inputType="textUri" />
-
-                <EditText
-                    android:id="@+id/username"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:hint="Username (your dashboard login)"
-                    android:inputType="text"
-                    android:autofillHints="username" />
-
-                <EditText
-                    android:id="@+id/password"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:hint="Password"
-                    android:inputType="textPassword"
-                    android:autofillHints="password" />
-
-                <EditText
-                    android:id="@+id/interval"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:hint="Driving fix interval (seconds)"
-                    android:inputType="number" />
-
-                <Button
-                    android:id="@+id/carBt"
-                    style="?attr/materialButtonOutlinedStyle"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:text="Car Bluetooth: none" />
-
-                <Button
-                    android:id="@+id/obdDevice"
-                    style="?attr/materialButtonOutlinedStyle"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:text="OBD dongle: none" />
-
-                <CheckBox
-                    android:id="@+id/alerts"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:text="Commute &amp; fault-code alerts" />
-
-                <Button
-                    android:id="@+id/save"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:text="Save settings" />
-            </LinearLayout>
-        </com.google.android.material.card.MaterialCardView>
+                android:layout_weight="1"
+                android:layout_marginEnd="4dp"
+                android:text="Activity log" />
+            <Button
+                android:id="@+id/openSettings"
+                style="?attr/materialButtonOutlinedStyle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp"
+                android:text="Settings" />
+        </LinearLayout>
 
     </LinearLayout>
 </ScrollView>

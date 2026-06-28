@@ -39,12 +39,20 @@ class Settings(context: Context) {
         get() = prefs.getInt("light_interval_sec", 60)
         set(v) = prefs.edit().putInt("light_interval_sec", v).apply()
 
-    /** Seconds between *batched* upload flushes. Fixes are buffered to the on-disk
-     *  queue and sent in bursts on this cadence (radio-friendly) instead of one POST
-     *  per fix; a regained connection or a full batch flushes early. */
+    /** Seconds between *batched* upload flushes while in **LIGHT** tier. Fixes are
+     *  buffered to the on-disk queue and sent in bursts on this cadence (radio-friendly)
+     *  instead of one POST per fix; a regained connection or a full batch flushes early. */
     var uploadIntervalSec: Int
         get() = prefs.getInt("upload_interval_sec", 45)
         set(v) = prefs.edit().putInt("upload_interval_sec", v).apply()
+
+    /** Seconds between flushes while **DRIVING** — short, so the dashboard / live ETA
+     *  / Android Auto pane see near-real-time position instead of the battery-friendly
+     *  LIGHT cadence. Foreground UI and charge-connected events also trigger an
+     *  immediate flush regardless of this. */
+    var drivingUploadIntervalSec: Int
+        get() = prefs.getInt("driving_upload_interval_sec", 10)
+        set(v) = prefs.edit().putInt("driving_upload_interval_sec", v).apply()
 
     /**
      * Tracking mode = the *desired* behaviour, set by the user or a routine:
@@ -100,6 +108,43 @@ class Settings(context: Context) {
     var alertsEnabled: Boolean
         get() = prefs.getBoolean("alerts_enabled", false)
         set(v) = prefs.edit().putBoolean("alerts_enabled", v).apply()
+
+    /** Optional shared secret gating *parameter-setting* control intents (SET, QUERY).
+     *  Blank → open (the default; this is a private app on the user's own phone). When
+     *  set, a routine must include `token=<this>` in its intent extras or the action is
+     *  silently ignored. START/STOP/TOGGLE remain open per the roadmap — they're
+     *  low-risk and routines should be able to stop the app even if the token rotates. */
+    var controlToken: String
+        get() = prefs.getString("control_token", "") ?: ""
+        set(v) = prefs.edit().putString("control_token", v.trim()).apply()
+
+    /** Last thing that changed tracking state — "user", "shortcut", "routine",
+     *  "watchdog", "boot", "auto", … — surfaced in the STATE_CHANGED broadcast so a
+     *  routine can react to *who* just did the thing (e.g. ignore its own echo). */
+    var lastCommandSource: String
+        get() = prefs.getString("last_command_source", "") ?: ""
+        set(v) = prefs.edit().putString("last_command_source", v).apply()
+
+    /** Wall-clock (ms) of the most recent enqueued fix — written periodically by the
+     *  logger and read by [Watchdog] / the OEM kill detector to spot "we were meant
+     *  to be logging but no fixes for a long time", which is the silent-death case
+     *  the warning banner exists to name. */
+    var lastFixAt: Long
+        get() = prefs.getLong("last_fix_at", 0L)
+        set(v) = prefs.edit().putLong("last_fix_at", v).apply()
+
+    /** Wall-clock (ms) of the most recent suspected OEM-kill — set by the watchdog
+     *  when it restarts the service after a suspicious gap, so the dashboard can name
+     *  the manufacturer-specific setting. Zero = no incident recorded. */
+    var lastKillDetectedAt: Long
+        get() = prefs.getLong("last_kill_detected_at", 0L)
+        set(v) = prefs.edit().putLong("last_kill_detected_at", v).apply()
+
+    /** When the user last dismissed (or "fixed") the OEM-kill warning. We only show
+     *  the warning while [lastKillDetectedAt] > [killAcknowledgedAt]. */
+    var killAcknowledgedAt: Long
+        get() = prefs.getLong("kill_acknowledged_at", 0L)
+        set(v) = prefs.edit().putLong("kill_acknowledged_at", v).apply()
 
     val ingestUrl: String
         get() = "$serverUrl/api/ingest"

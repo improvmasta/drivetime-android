@@ -46,6 +46,11 @@
             android:exported="false"
             android:label="Activity log" />
 
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:label="Settings" />
+
         <service
             android:name=".LocationService"
             android:exported="false"
@@ -66,6 +71,7 @@
                 <action android:name="org.jupiterns.drivetime.action.MODE_DRIVING" />
                 <action android:name="org.jupiterns.drivetime.action.MODE_ECO" />
                 <action android:name="org.jupiterns.drivetime.action.SET" />
+                <action android:name="org.jupiterns.drivetime.action.QUERY" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
@@ -81,6 +87,7 @@
                 <action android:name="org.jupiterns.drivetime.action.MODE_DRIVING" />
                 <action android:name="org.jupiterns.drivetime.action.MODE_ECO" />
                 <action android:name="org.jupiterns.drivetime.action.SET" />
+                <action android:name="org.jupiterns.drivetime.action.QUERY" />
             </intent-filter>
         </receiver>
 

@@ -30,7 +30,7 @@ Master product roadmap lives in `drivetime/ROADMAP.md`; this is the client half.
 - [built] **Adaptive sampling** within Driving — dense while moving, `idleIntervalSec` at red lights; tier exit is now the detector's job (drops to Light), not a stationary trip-end.
 - [built] **Dawarich mirror** — server forwards a >50m-filtered copy (drivetime side); app is the single GPS source.
 - [built] Keep-awake guidance (battery-exemption prompt + Samsung sleeping-apps steps).
-- [ ] **Background-location permission flow polish** — the one open Phase-A item.
+- [built] **Background-location two-step flow** — fine-location first, then a rationale screen routing to "Allow all the time" via a separate launcher (Q+).
 
 ---
 
@@ -46,19 +46,19 @@ permission revocation. Treat "the app quietly stopped" as the #1 bug class.
 - [later] Detect process death gaps (no fix for N min while logging) → silent self-restart, then a user warning if it recurs.
 
 ### 1b. OEM battery-killer mitigation *(the usual silent-death cause)*
-- [next] **Per-OEM deep links** — Samsung/Xiaomi/OnePlus/Huawei "auto-start / protected / sleeping apps" pages, detected by manufacturer with step-by-step guidance.
-- [next] **Killed-since-last-run detector** — compare expected vs actual fix cadence; if the app was killed, surface a fix-it card naming the exact OEM setting.
-- [built] Battery-optimization exemption prompt — extend with a recurring health check that re-warns if the exemption is revoked.
+- [built] **Per-OEM deep links** — Samsung / Xiaomi / Huawei / OnePlus / Oppo / Vivo / Asus auto-start / protected / sleeping-apps pages, detected from `Build.MANUFACTURER` with step-by-step advice strings (`OemBatteryLinks.kt`).
+- [built] **Killed-since-last-run detector** — the watchdog compares expected vs actual fix cadence; a gap > 20 min when logging was meant to be on records `lastKillDetectedAt`, and the dashboard surfaces the OEM-specific "fix this setting" card until acknowledged.
+- [built] Battery-optimization exemption prompt — Settings screen shows current state + a one-tap exemption request + the OEM page deep link.
 
 ### 1c. Permissions resilience
-- [next] **Background-location two-step flow** with a rationale screen ("Allow all the time" upgrade).
-- [next] Runtime **permission-revocation handling** — never crash; degrade, notify, and offer re-grant. Covers location, activity-recognition, notifications (13+), Bluetooth (12+).
-- [next] A single **permission/health gate** the home screen reads, so the user always knows if tracking can actually run.
+- [built] **Background-location two-step flow** — `MainActivity` requests fine first, then a rationale dialog routes to the system "Allow all the time" prompt; `pendingStartAfterGrant` resumes the user's Start once both halves are granted.
+- [built] Runtime **permission-revocation handling** — the dashboard polls [Permissions] every tick and degrades to a specific actionable warning ("Location services off", "BT permission needed for your dongle"), no crash and a one-tap re-grant.
+- [built] A single **permission/health gate** (`Permissions.snapshot`) — one source of truth shared by the warning banner, the start path, and `Watchdog` (won't try a doomed FGS-start when `isReady` is false).
 
 ### 1d. Data integrity & offline queue
 - [built] On-disk queue survives kill/crash; writes are now **atomic** (temp-file + rename on trim), **size-capped** (16 MB, drop-oldest), and **ordered**.
 - [built] **Verify-before-delete** — only the exact lines acked by the server are dropped (fixes appended mid-POST are preserved); single-flight + process-wide lock so service/watchdog can't double-drain; **exponential backoff + jitter** on failure.
-- [built] **Batched flush triggers** — periodic (`uploadIntervalSec` ≈45s), batch-full (`BATCH_FIXES`), and **connectivity-regained** (`NetworkCallback`), instead of one POST per fix; `flush()` drains the whole backlog per call. → [next] **tier-aware cadence** — near-real-time (~10s) while `DRIVING` for live position / live ETA / Android Auto, slower while `LIGHT`; plus app-foreground / charging triggers.
+- [built] **Batched flush triggers** — periodic, batch-full (`BATCH_FIXES`), connectivity-regained (`NetworkCallback`), **tier-aware cadence** (~10s `drivingUploadIntervalSec` while DRIVING for near-real-time position; `uploadIntervalSec` ≈45s while LIGHT), **app-foreground** (Main.onResume), and **charge-connected** (`ACTION_POWER_CONNECTED` runtime receiver).
 - [built] Idempotent uploads (server `INSERT OR IGNORE`) — keep dedup keys stable (epoch + lat/lon).
 
 ### 1e. Connectivity & sensors
@@ -77,7 +77,7 @@ permission revocation. Treat "the app quietly stopped" as the #1 bug class.
 - [later] Optional TLS cert-pinning for the ingest host.
 
 ### 1h. CI as the safety net *(no device on the dev host)*
-- [next] Add **lint + unit tests** for the queue, settings application, and intent parsing; keep CI building a **signed APK**.
+- [built] **Lint + unit tests** — JVM JUnit + Robolectric tests for `ControlParse`, `Control.SET_KEYS`, `DriveDetector` thresholds, `Uploader` queue durability, `Settings` defaults, and `AutomationHelp` ↔ docs sync. CI runs `testDebugUnitTest` + `lintDebug` before the APK build.
 - [next] A **pre-release checklist** (permissions, FGS, boot, queue, OEM battery) since validation is sideload-only.
 
 ---
@@ -93,8 +93,8 @@ Routine can invoke**, and to **report state back** so a Routine can react.
 
 **Inbound — what a Routine can do to the app:**
 - [built] `START` / `STOP` / `TOGGLE` logging (`ControlReceiver`, `org.jupiterns.drivetime.action.*`).
-- [built→next] `SET key=mode value=<auto|driving|eco|off>` is live (sets the tracking mode; plus discrete `MODE_AUTO/MODE_DRIVING/MODE_ECO` actions for shortcuts). → extend `SET` to the rest (`idleIntervalSec`, `lightIntervalSec`, gps priority…). One verb — the Routine composes the "mode."
-- [next] `QUERY` → emit current state.
+- [built] `SET key=…  value=…` covers **every** advertised key — `mode`, the four interval cadences (`interval_sec`, `idle_interval_sec`, `light_interval_sec`, `upload_interval_sec`, `driving_upload_interval_sec`), `drive_by_speed`, `stationary_stop_min`, `auto_trip`, `alerts_enabled` (see `Control.SET_KEYS`). One verb — the Routine composes the "mode."
+- [built] `QUERY` → emits a [StateBroadcaster] STATE_CHANGED back so the routine can read state without polling.
 
 **How Routines actually invoke it** (so it works with Samsung's real capabilities):
 - [built] **App Shortcuts** — static Start/Stop/Toggle shortcuts (`res/xml/shortcuts.xml`, published via the launcher activity's `android.app.shortcuts` meta-data) each launch the no-UI `ControlActivity`. This is the Samsung *Open app → shortcut* hook that needs **no extra apps**. → [next] dynamic/pinnable shortcuts for parameterized presets ("High-accuracy", "Battery-saver") once `SET` lands.
@@ -102,12 +102,12 @@ Routine can invoke**, and to **report state back** so a Routine can react.
 - [next] **Quick Settings tiles** — manual one-tap from the shade; also flippable by some automation.
 
 **Outbound — so a Routine/Mode can react to the app:**
-- [next] `…event.STATE_CHANGED` broadcast (logging, lastFixEpoch, queueDepth, obdConnected, lastCommandSource) → drives Samsung Routine triggers, HA automations, leave-by notifications.
+- [built] `org.jupiterns.drivetime.event.STATE_CHANGED` broadcast (`logging`, `tracking_mode`, `tier`, `reason`, `queue_depth`, `obd_connected`, `last_fix_at`, `last_success_at`, `last_command_source`, `source`, `ts`) — emitted on tier flips, OBD link changes, service lifecycle, and every Control action.
 
 **Guardrails:**
-- [next] Every state-changing entry point sets the **same flat settings** you can edit in-app (Pillar 5) — the API never introduces a parallel config the UI can't show.
-- [next] **Security**: gate state-changers behind an optional shared token; keep START/STOP open (low-risk). See Pillar 1g.
-- [next] Ship recipes in **`AUTOMATION.md`**: "Samsung *Driving* mode on → Start shortcut," "car-BT connects → SET density=high," "arrive Home → Stop," "HA reacts to `STATE_CHANGED`."
+- [built] Every state-changing entry point sets the **same flat settings** the Settings screen edits — `SettingsExport` JSON keys = `Control.SET_KEYS`, so the API never introduces a parallel config the UI can't show.
+- [built] **Security**: optional shared token (`controlToken` setting) gates `SET` / `QUERY`; `START` / `STOP` / `TOGGLE` / mode actions stay open per ROADMAP. See Pillar 1g.
+- [built] Ship recipes in **`AUTOMATION.md`** — Samsung Modes & Routines, Tasker, Home Assistant, plus the cheat-sheet appears verbatim in Settings → Automation.
 
 ---
 
@@ -137,14 +137,14 @@ a single routine:
 ---
 
 ## Pillar 5 — Settings UX *(the primary surface — everything the API touches lives here)*
-- [next] Sectioned: **Connection · Tracking · OBD · Automation · Notifications · Battery**, with per-setting help + a **Test connection** button (`/api/health`). Every setting a Routine can change via the API is shown and directly editable here.
-- [next] **Automation cheat-sheet** section — lists the available shortcuts / intent actions / `SET` keys, so wiring a Samsung Routine doesn't need the docs.
-- [next] **Import/Export settings as JSON** — backup, and lets a routine/HA push a whole config in one shot.
-- [next] Surface the new `idleIntervalSec` / `stationaryStopMin` (currently defaults-only).
+- [built] **`SettingsActivity`** — sectioned: Connection · Tracking · OBD · Automation · Notifications · Battery · Backup, with per-row help and a Test connection button. Every routine-controllable knob (`Control.SET_KEYS`) is editable.
+- [built] **Automation cheat-sheet** (`AutomationHelp`) — shown verbatim in Settings → Automation; a unit test (`AutomationHelpTest`) keeps it in sync with `Control.SET_KEYS` and `StateBroadcaster.ACTION_STATE_CHANGED`.
+- [built] **Import / Export settings as JSON** (`SettingsExport`) — system file pickers; keys match the routine API so an exported file doubles as a routine preset.
+- [built] All previously defaults-only knobs (`idleIntervalSec`, `lightIntervalSec`, `uploadIntervalSec`, `drivingUploadIntervalSec`, `stationaryStopMin`, `driveBySpeed`, `controlToken`) now surface as editable rows.
 
 ## Pillar 6 — Observability / diagnostics
-- [next] **Status screen**: last fix time + accuracy, queue depth, OBD link, forwarder status, permission/battery health, and **what last changed state** (which routine/shortcut/manual action).
-- [next] In-app **log viewer** + "share diagnostics."
+- [built] **Status dashboard**: last fix time + accuracy, queue depth, OBD link, upload health (last success / retry countdown / auth fail), permission/battery health surfaced as a single actionable warning banner, and **what last changed state** via `Settings.lastCommandSource` carried in the STATE_CHANGED broadcast.
+- [built] In-app **log viewer** (`LogActivity` / `EventLog`) — persisted, shareable history.
 - [later] No-fix watchdog notification while logging.
 
 ## Pillar 7 — In-car / Assistant / HA polish

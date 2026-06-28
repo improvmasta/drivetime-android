@@ -1,10 +1,6 @@
 package org.jupiterns.drivetime
 
 import android.Manifest
-import android.annotation.SuppressLint
-import android.bluetooth.BluetoothDevice
-import android.bluetooth.BluetoothManager
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -13,9 +9,10 @@ import android.os.Handler
 import android.os.Looper
 import android.text.format.DateUtils
 import android.view.View
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.google.android.material.snackbar.Snackbar
 import okhttp3.MediaType.Companion.toMediaType
@@ -40,10 +37,20 @@ class MainActivity : AppCompatActivity() {
 
     private var updatingSwitch = false
     private var warningAction: (() -> Unit)? = null
+    private var pendingStartAfterGrant = false   // user just hit Start; resume it on grant
 
     private val ticker = object : Runnable {
         override fun run() { refresh(); ui.postDelayed(this, 1000) }
     }
+
+    /** Foreground location → triggers the two-step flow. On grant, we either resume
+     *  a pending Start or ask for background location next (Q+). */
+    private lateinit var fgLocationLauncher: ActivityResultLauncher<Array<String>>
+    /** Background location (Q+) — must be requested *separately* after fine; this is
+     *  the second half of the two-step. */
+    private lateinit var bgLocationLauncher: ActivityResultLauncher<Array<String>>
+    /** Notifications / Bluetooth / activity-recognition — small one-shot prompts. */
+    private lateinit var miscPermLauncher: ActivityResultLauncher<Array<String>>
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -52,24 +59,29 @@ class MainActivity : AppCompatActivity() {
         setContentView(b.root)
         settings = Settings(this)
 
-        b.serverUrl.setText(settings.serverUrl)
-        b.username.setText(settings.username)
-        b.password.setText(settings.password)
-        b.interval.setText(settings.intervalSec.toString())
-
-        b.save.setOnClickListener {
-            settings.serverUrl = b.serverUrl.text.toString()
-            settings.username = b.username.text.toString()
-            settings.password = b.password.text.toString()
-            settings.intervalSec = b.interval.text.toString().toIntOrNull() ?: 3
-            toast("Settings saved")
+        fgLocationLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { result ->
+            val fineGranted = result[Manifest.permission.ACCESS_FINE_LOCATION] == true
+            if (fineGranted) maybeRequestBackgroundLocation()
+            else snackBar("Location permission denied — drivetime can't log without it.")
+            if (pendingStartAfterGrant && fineGranted) tryResumeStart()
             refresh()
         }
+        bgLocationLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { _ ->
+            if (pendingStartAfterGrant) tryResumeStart()
+            refresh()
+        }
+        miscPermLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { _ -> refresh() }
 
         b.trackingSwitch.setOnCheckedChangeListener { _, on ->
             if (updatingSwitch) return@setOnCheckedChangeListener
             if (on) startTracking()
-            else { Control.apply(this, Control.ACTION_STOP); toast("Tracking off") }
+            else { Control.apply(this, Control.ACTION_STOP, "user"); toast("Tracking off") }
             refresh()
         }
 
@@ -79,56 +91,93 @@ class MainActivity : AppCompatActivity() {
 
         b.testConn.setOnClickListener { testConnection() }
         b.viewLog.setOnClickListener { startActivity(Intent(this, LogActivity::class.java)) }
+        b.openSettings.setOnClickListener { startActivity(Intent(this, SettingsActivity::class.java)) }
         b.warningAction.setOnClickListener { warningAction?.invoke() }
-
-        b.carBt.setOnClickListener {
-            pickBtDevice("Select car Bluetooth",
-                onPick = { settings.carBtMac = it.address; settings.carBtName = it.name ?: it.address; updateCarBtLabel() },
-                onClear = { settings.carBtMac = ""; settings.carBtName = ""; updateCarBtLabel() })
-        }
-        b.obdDevice.setOnClickListener {
-            pickBtDevice("Select OBD dongle",
-                onPick = { settings.obdMac = it.address; settings.obdName = it.name ?: it.address; updateObdLabel() },
-                onClear = { settings.obdMac = ""; settings.obdName = ""; updateObdLabel() })
-        }
-
-        b.alerts.isChecked = settings.alertsEnabled
-        b.alerts.setOnCheckedChangeListener { _, on ->
-            settings.alertsEnabled = on
-            if (on) AlertWorker.schedule(this) else AlertWorker.cancel(this)
-        }
-
-        updateCarBtLabel()
-        updateObdLabel()
     }
 
-    override fun onResume() { super.onResume(); ui.post(ticker) }
+    override fun onResume() {
+        super.onResume()
+        ui.post(ticker)
+        // Foreground = "the user is looking, ship what we have" — drains any backlog
+        // immediately instead of waiting for the next tier-cadence tick.
+        Thread { runCatching { uploader.flush() } }.start()
+    }
     override fun onPause() { super.onPause(); ui.removeCallbacks(ticker) }
 
     // ---- actions ----
 
     private fun startTracking() {
         if (!settings.isConfigured) {
-            toast("Enter server URL, username + password below, then Save")
+            toast("Enter server URL, username + password in Settings")
             scrollToSetup()
             return
         }
-        ensurePermissions()
-        if (!Battery.isExempt(this)) Battery.requestExemption(this)
-        Control.apply(this, Control.ACTION_MODE_AUTO)
+        // Two-step flow: if fine-location is missing, kick that off and remember we
+        // wanted to start so we can resume after the rationale flow completes.
+        val snap = Permissions.snapshot(this, settings)
+        if (!snap.hasFineLocation) {
+            pendingStartAfterGrant = true
+            fgLocationLauncher.launch(Permissions.requestArgsFor(Permissions.Action.REQUEST_FOREGROUND_LOCATION))
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !snap.hasBackgroundLocation) {
+            pendingStartAfterGrant = true
+            maybeRequestBackgroundLocation()
+            return
+        }
+        if (!snap.hasBatteryExempt) Battery.requestExemption(this)
+        pendingStartAfterGrant = false
+        Control.apply(this, Control.ACTION_MODE_AUTO, "user")
         toast("Tracking on — Auto mode")
     }
 
     private fun forceMode(action: String, label: String) {
         if (!settings.isConfigured) { toast("Finish setup first"); scrollToSetup(); return }
-        ensurePermissions()
-        Control.apply(this, action)
+        if (!Permissions.snapshot(this, settings).hasFineLocation) {
+            fgLocationLauncher.launch(Permissions.requestArgsFor(Permissions.Action.REQUEST_FOREGROUND_LOCATION))
+            return
+        }
+        Control.apply(this, action, "user")
         toast("Mode: $label")
         refresh()
     }
 
+    /** If logging was queued behind a permission prompt and the prompt has cleared,
+     *  complete the start. The fine→background steps each call this on grant. */
+    private fun tryResumeStart() {
+        val snap = Permissions.snapshot(this, settings)
+        if (!snap.hasFineLocation) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !snap.hasBackgroundLocation) return
+        pendingStartAfterGrant = false
+        if (!snap.hasBatteryExempt) Battery.requestExemption(this)
+        Control.apply(this, Control.ACTION_MODE_AUTO, "user")
+        toast("Tracking on — Auto mode")
+    }
+
+    /** Step 2 of the location flow: explain that background access is what lets
+     *  logging continue when the phone is locked, then route to the system prompt. */
+    private fun maybeRequestBackgroundLocation() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            == PackageManager.PERMISSION_GRANTED) return
+        AlertDialog.Builder(this)
+            .setTitle("Keep logging when the phone is locked")
+            .setMessage(
+                "drivetime records GPS the whole time you're driving — even with the screen off. " +
+                "On the next screen, pick \"Allow all the time\".\n\n" +
+                "Without this, fixes stop the moment the phone sleeps."
+            )
+            .setNegativeButton("Not now") { _, _ -> refresh() }
+            .setPositiveButton("Continue") { _, _ ->
+                bgLocationLauncher.launch(
+                    Permissions.requestArgsFor(Permissions.Action.REQUEST_BACKGROUND_LOCATION)
+                )
+            }
+            .show()
+    }
+
     private fun testConnection() {
-        if (!settings.isConfigured) { toast("Enter server + login first"); scrollToSetup(); return }
+        if (!settings.isConfigured) { toast("Open Settings → enter server + login"); scrollToSetup(); return }
         b.testConn.isEnabled = false
         b.connState.text = "… testing"
         b.connState.setTextColor(col(R.color.status_grey))
@@ -204,7 +253,7 @@ class MainActivity : AppCompatActivity() {
                 val retry = if (h.backoffUntil > now) " · retry in ${(h.backoffUntil - now) / 1000}s" else ""
                 b.connDetail.text = "${h.queued} fix(es) waiting$retry"
                 b.connError.visibility = View.VISIBLE
-                b.connError.text = if (auth) "Uploads are being rejected. Fix your username/password above and Save."
+                b.connError.text = if (auth) "Uploads are being rejected. Fix your username/password in Settings."
                 else "Last error: ${h.lastError}"
             }
             h.lastSuccessAt > 0 -> {
@@ -241,44 +290,66 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshWarnings() {
-        val w: Pair<String, () -> Unit>? = when {
-            !settings.isConfigured ->
-                "Finish setup: enter your server URL and login below, then Save." to { scrollToSetup() }
-            !hasLocationPermission() ->
-                "Location permission is required to log drives." to { ensurePermissions() }
-            !Battery.isExempt(this) ->
-                "Allow background battery use so logging isn't killed mid-drive." to { Battery.requestExemption(this) }
-            !hasNotifications() ->
-                "Enable notifications to see the live logging status." to { Battery.openAppSettings(this) }
-            else -> null
-        }
-        if (w == null) {
+        val (message, onFix) = nextWarning() ?: (null to null)
+        if (message == null) {
             b.warningCard.visibility = View.GONE
             warningAction = null
         } else {
             b.warningCard.visibility = View.VISIBLE
-            b.warningText.text = w.first
-            warningAction = w.second
+            b.warningText.text = message
+            warningAction = onFix
+        }
+    }
+
+    /** Picks the single most-important thing the user should act on. Order matters:
+     *  setup blocks everything; a fresh OEM-kill incident is louder than a routine
+     *  permission nag because it represents data loss the user already experienced. */
+    private fun nextWarning(): Pair<String, () -> Unit>? {
+        if (!settings.isConfigured) {
+            return "Finish setup: enter your server URL and login in Settings." to { scrollToSetup() }
+        }
+        val killAt = settings.lastKillDetectedAt
+        if (killAt > settings.killAcknowledgedAt &&
+            System.currentTimeMillis() - killAt < KILL_WARNING_TTL_MS) {
+            val help = OemBatteryLinks.help()
+            return "Your phone killed logging for a while. ${help.advice}" to {
+                settings.killAcknowledgedAt = System.currentTimeMillis()
+                OemBatteryLinks.openProtectedAppsPage(this)
+            }
+        }
+        val issue = Permissions.snapshot(this, settings).firstIssue
+        return issue?.let { it.message to { runWarningAction(it.action) } }
+    }
+
+    private fun runWarningAction(action: Permissions.Action) {
+        when (action) {
+            Permissions.Action.REQUEST_FOREGROUND_LOCATION ->
+                fgLocationLauncher.launch(Permissions.requestArgsFor(action))
+            Permissions.Action.REQUEST_BACKGROUND_LOCATION -> maybeRequestBackgroundLocation()
+            Permissions.Action.REQUEST_NOTIFICATIONS,
+            Permissions.Action.REQUEST_BLUETOOTH,
+            Permissions.Action.REQUEST_ACTIVITY_RECOGNITION ->
+                miscPermLauncher.launch(Permissions.requestArgsFor(action))
+            Permissions.Action.REQUEST_BATTERY_EXEMPT -> Battery.requestExemption(this)
+            Permissions.Action.OPEN_LOCATION_SETTINGS ->
+                startActivity(Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            Permissions.Action.OPEN_APP_SETTINGS -> Battery.openAppSettings(this)
         }
     }
 
     // ---- helpers ----
 
-    private fun updateCarBtLabel() { b.carBt.text = "Car Bluetooth: " + settings.carBtName.ifBlank { "none" } }
-    private fun updateObdLabel() { b.obdDevice.text = "OBD dongle: " + settings.obdName.ifBlank { "none" } }
-
-    private fun hasLocationPermission() =
-        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-
-    private fun hasNotifications(): Boolean =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-
     private fun col(id: Int) = ContextCompat.getColor(this, id)
 
     private fun toast(msg: String) = Snackbar.make(b.root, msg, Snackbar.LENGTH_SHORT).show()
+    private fun snackBar(msg: String) = Snackbar.make(b.root, msg, Snackbar.LENGTH_LONG).show()
 
-    private fun scrollToSetup() { b.scroll.post { b.scroll.smoothScrollTo(0, b.setupCard.top) } }
+    /** "Setup is missing/incomplete" → launch the full Settings screen. Replaces the
+     *  inline-setup scroll target the dashboard used to have. */
+    private fun scrollToSetup() {
+        startActivity(Intent(this, SettingsActivity::class.java))
+    }
 
     /** "12s ago" under a minute, else a coarse relative span. */
     private fun rel(ts: Long): String {
@@ -287,42 +358,12 @@ class MainActivity : AppCompatActivity() {
         else DateUtils.getRelativeTimeSpanString(ts, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS).toString()
     }
 
-    private fun ensurePermissions() {
-        val perms = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
-            perms.add(Manifest.permission.POST_NOTIFICATIONS)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-            (settings.obdMac.isNotBlank() || settings.carBtMac.isNotBlank()))
-            perms.add(Manifest.permission.BLUETOOTH_CONNECT)
-        val missing = perms.filter {
-            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }
-        if (missing.isNotEmpty()) ActivityCompat.requestPermissions(this, missing.toTypedArray(), 1)
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun pickBtDevice(title: String, onPick: (BluetoothDevice) -> Unit, onClear: () -> Unit) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
-            != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.BLUETOOTH_CONNECT), 2)
-            return
-        }
-        val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
-        val bonded = adapter?.bondedDevices?.toList().orEmpty()
-        if (bonded.isEmpty()) {
-            toast("No paired Bluetooth devices — pair the device first")
-            return
-        }
-        val names = bonded.map { "${it.name}\n${it.address}" }.toTypedArray()
-        AlertDialog.Builder(this)
-            .setTitle(title)
-            .setItems(names) { _, i -> onPick(bonded[i]) }
-            .setNeutralButton("Clear") { _, _ -> onClear() }
-            .show()
-    }
-
     companion object {
+        /** How long after a suspected OEM kill we keep nagging the user about it — a
+         *  week is enough to notice and fix, after that there's nothing actionable
+         *  left and the warning becomes noise. */
+        private const val KILL_WARNING_TTL_MS = 7L * 24 * 60 * 60_000L
+
         private val testClient = OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.SECONDS)

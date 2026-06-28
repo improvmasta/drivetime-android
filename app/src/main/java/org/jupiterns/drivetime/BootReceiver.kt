@@ -33,6 +33,7 @@ class BootReceiver : BroadcastReceiver() {
         val s = Settings(context)
         if (s.loggingEnabled && s.isConfigured) {
             Watchdog.schedule(context)   // backstop if the direct start below is refused
+            s.lastCommandSource = "boot"
             try {
                 val svc = Intent(context, LocationService::class.java)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
