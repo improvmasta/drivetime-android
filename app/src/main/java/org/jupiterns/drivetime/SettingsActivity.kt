@@ -1,6 +1,7 @@
 package org.jupiterns.drivetime
 
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.pm.PackageManager
@@ -230,12 +231,36 @@ class SettingsActivity : AppCompatActivity() {
         }
         val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
         val bonded = adapter?.bondedDevices?.toList().orEmpty()
-        if (bonded.isEmpty()) { snack("No paired Bluetooth devices"); return }
-        val names = bonded.map { "${it.name}\n${it.address}" }.toTypedArray()
+        // Cheap ELM327 clones connect over *insecure* RFCOMM and never bond, so they're
+        // absent from bondedDevices (and from system BT settings entirely). Always offer
+        // manual MAC entry so such a dongle can still be selected — never dead-end on an
+        // empty paired list.
+        val labels = bonded.map { "${it.name}\n${it.address}" } + "Enter MAC address manually"
         AlertDialog.Builder(this)
             .setTitle(title)
-            .setItems(names) { _, i -> val d = bonded[i]; onPick(d.address, d.name ?: d.address) }
+            .setItems(labels.toTypedArray()) { _, i ->
+                if (i < bonded.size) { val d = bonded[i]; onPick(d.address, d.name ?: d.address) }
+                else promptForMac(title, onPick)
+            }
             .setNeutralButton("Clear") { _, _ -> onClear() }
+            .show()
+    }
+
+    /** Manual MAC entry — the path for an unbonded dongle (the insecure-RFCOMM case)
+     *  that never appears in the paired list. LocationService connects by MAC via
+     *  getRemoteDevice() + the insecure-socket fallback, so no bonding is needed. */
+    private fun promptForMac(title: String, onPick: (mac: String, name: String) -> Unit) {
+        val input = EditText(this).apply { hint = "AA:BB:CC:DD:EE:FF"; setSingleLine() }
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage("Enter the adapter's Bluetooth MAC (from Torque, the dongle's label, or a BT scanner app).")
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                val mac = input.text.toString().trim().uppercase()
+                if (BluetoothAdapter.checkBluetoothAddress(mac)) onPick(mac, mac)
+                else snack("Invalid MAC — expected AA:BB:CC:DD:EE:FF")
+            }
+            .setNegativeButton("Cancel", null)
             .show()
     }
 
