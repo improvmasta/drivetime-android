@@ -60,6 +60,7 @@ class Uploader(context: Context, private val settings: Settings) {
             obd.fuelLevel?.let { o.put("fuel_level", it) }
             obd.voltage?.let { o.put("voltage", it) }
             obd.ctrlVoltage?.let { o.put("ctrl_voltage", it) }
+            if (obd.pids.isNotEmpty()) o.put("pids", JSONObject(obd.pids))   // full PID bag
             if (obd.dtcs.isNotEmpty()) o.put("dtc", JSONArray(obd.dtcs))
         }
         synchronized(LOCK) {

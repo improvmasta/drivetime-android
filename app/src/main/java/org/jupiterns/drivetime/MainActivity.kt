@@ -289,11 +289,9 @@ class MainActivity : AppCompatActivity() {
         if (LiveState.obdConnected) {
             b.obdState.text = "● OBD connected"
             b.obdState.setTextColor(col(R.color.status_green))
-            val bits = mutableListOf<String>()
-            LiveState.rpm?.let { bits.add("$it rpm") }
-            LiveState.coolantC?.let { bits.add("$it°C") }
-            LiveState.voltage?.let { bits.add(String.format("%.1fV", it)) }
-            b.obdDetail.text = bits.joinToString(" · ").ifEmpty { "reading…" }
+            // Show every PID we're pulling, not just a curated few (prune later).
+            val all = org.jupiterns.drivetime.obd.Elm327Client.describe(LiveState.pids)
+            b.obdDetail.text = all.joinToString("  ·  ").ifEmpty { "reading…" }
         } else {
             b.obdState.text = "○ OBD not connected"
             b.obdState.setTextColor(col(R.color.status_grey))

@@ -29,6 +29,7 @@ class Elm327Client {
         val fuelLevel: Double? = null,    // fuel tank level %, PID 2F (slow-cadence)
         val voltage: Double? = null,      // dongle-pin voltage, ATRV
         val ctrlVoltage: Double? = null,  // control-module voltage, PID 42 (slow-cadence)
+        val pids: Map<String, Double> = emptyMap(),  // EVERY supported PID we read, raw — "show all"
         val dtcs: List<String> = emptyList(),
     )
 
@@ -41,11 +42,10 @@ class Elm327Client {
      *  bitmasks. Empty = discovery failed → [supports] treats everything as supported. */
     private val supported = linkedSetOf<String>()
     private var vin: String? = null
-    // slow-mover cadence: fuel level & control-module voltage barely change, so we poll
-    // them every SLOW_EVERY samples and reuse the cached reading between.
+    // slow-mover cadence: temps/voltages/levels barely change, so we poll the PIDs
+    // flagged slow every SLOW_EVERY samples and reuse the cached reading between.
     private var slowTick = 0
-    private var lastFuelLevel: Double? = null
-    private var lastCtrlV: Double? = null
+    private val slowCache = mutableMapOf<String, Double>()
 
     fun isConnected() = socket?.isConnected == true
     fun supportedPids(): Set<String> = supported
@@ -82,10 +82,20 @@ class Elm327Client {
     private fun discoverCapabilities() {
         supported.clear()
         for ((pid, base) in listOf("00" to 0, "20" to 0x20, "40" to 0x40, "60" to 0x60)) {
-            val bytes = pidBytes(pid)
-            if (bytes.size < 4) break
+            val hex = send("01$pid").uppercase().replace(Regex("[^0-9A-F]"), "")
+            val marker = "41$pid"
+            // Several ECUs (engine, transmission, …) can each answer one support query
+            // with their OWN mask. OR every response's 4-byte mask together — taking just
+            // the first reply risks parsing the wrong ECU and missing real PIDs.
             var bits = 0L
-            for (b in bytes.take(4)) bits = (bits shl 8) or b.toLong()   // b is already 0..255
+            var any = false
+            var at = hex.indexOf(marker)
+            while (at >= 0) {
+                hex.substring(at + marker.length).take(8).takeIf { it.length == 8 }
+                    ?.toLongOrNull(16)?.let { bits = bits or it; any = true }
+                at = hex.indexOf(marker, at + marker.length)
+            }
+            if (!any) break   // range unsupported (no ECU answered) → no higher PIDs
             for (i in 0 until 32) {
                 if ((bits ushr (31 - i)) and 1L == 1L) supported.add("%02X".format(base + i + 1))
             }
@@ -176,34 +186,37 @@ class Elm327Client {
     }
 
     /** Read the current PIDs (gated by [supported]) + battery voltage. Fast-moving PIDs
-     *  are read every call; slow movers (fuel level PID 2F, control-module voltage PID 42)
-     *  only every [SLOW_EVERY] calls and are cached between. Missing PIDs come back null. */
+     *  are read every call; slow movers (temps, levels, voltages) only every [SLOW_EVERY]
+     *  calls and are cached between. The common typed fields are pulled back out of the
+     *  map; the whole map rides along for "show everything" display + storage. */
     fun readSample(): ObdSample {
-        val rpmB = if (supports("0C")) pidBytes("0C") else emptyList()
-        val spdB = if (supports("0D")) pidBytes("0D") else emptyList()
-        val loadB = if (supports("04")) pidBytes("04") else emptyList()
-        val tempB = if (supports("05")) pidBytes("05") else emptyList()
-        val thrB = if (supports("11")) pidBytes("11") else emptyList()
-        val mafB = if (supports("10")) pidBytes("10") else emptyList()
-        val fuelB = if (supports("5E")) pidBytes("5E") else emptyList()
-        if (slowTick % SLOW_EVERY == 0) {
-            if (supports("2F"))
-                pidBytes("2F").getOrNull(0)?.let { lastFuelLevel = it * 100.0 / 255.0 }
-            if (supports("42"))
-                pidBytes("42").let { if (it.size >= 2) lastCtrlV = (it[0] * 256 + it[1]) / 1000.0 }
+        val vals = LinkedHashMap<String, Double>()
+        val refreshSlow = slowTick % SLOW_EVERY == 0
+        for (d in PID_TABLE) {
+            if (!supports(d.pid)) continue
+            if (d.slow) {
+                if (refreshSlow) d.decode(pidBytes(d.pid))?.let { slowCache[d.pid] = it }
+                slowCache[d.pid]?.let { vals[d.pid] = it }
+            } else {
+                d.decode(pidBytes(d.pid))?.let { vals[d.pid] = it }
+            }
         }
         slowTick++
+        // Battery voltage is the dongle's own ATRV reading (works key-off), not a PID.
+        val rv = Regex("([0-9]+\\.[0-9]+)").find(send("ATRV"))?.value?.toDoubleOrNull()
+        if (rv != null) vals["RV"] = rv
         return ObdSample(
-            rpm = if (rpmB.size >= 2) (rpmB[0] * 256 + rpmB[1]) / 4 else null,
-            obdKph = spdB.getOrNull(0),
-            engineLoad = loadB.getOrNull(0)?.let { it * 100.0 / 255.0 },
-            coolantC = tempB.getOrNull(0)?.let { it - 40 },
-            throttle = thrB.getOrNull(0)?.let { it * 100.0 / 255.0 },
-            maf = if (mafB.size >= 2) (mafB[0] * 256 + mafB[1]) / 100.0 else null,
-            fuelLph = if (fuelB.size >= 2) (fuelB[0] * 256 + fuelB[1]) / 20.0 else null,
-            fuelLevel = lastFuelLevel,
-            voltage = Regex("([0-9]+\\.[0-9]+)").find(send("ATRV"))?.value?.toDoubleOrNull(),
-            ctrlVoltage = lastCtrlV,
+            rpm = vals["0C"]?.toInt(),
+            obdKph = vals["0D"]?.toInt(),
+            engineLoad = vals["04"],
+            coolantC = vals["05"]?.toInt(),
+            throttle = vals["11"],
+            maf = vals["10"],
+            fuelLph = vals["5E"],
+            fuelLevel = vals["2F"],
+            voltage = rv,
+            ctrlVoltage = vals["42"],
+            pids = vals,
         )
     }
 
@@ -286,12 +299,74 @@ class Elm327Client {
         return out
     }
 
+    /** One mode-01 PID we know how to decode: [decode] turns the data bytes (A=[0],
+     *  B=[1], …) into a scalar; [slow]=true polls it on the coarse cadence. */
+    private class PidDef(
+        val pid: String, val label: String, val unit: String, val slow: Boolean,
+        val decode: (List<Int>) -> Double?,
+    )
+
     companion object {
         private val SPP_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
 
-        /** Poll the slow-moving PIDs (fuel level, control-module voltage) every Nth
-         *  sample. At the ~1.5 s OBD loop, 20 ≈ every 30 s — plenty for a tank gauge. */
+        /** Poll PIDs flagged `slow` every Nth sample. At the ~1.5 s OBD loop, 20 ≈ every
+         *  30 s — plenty for temps, tank level, voltages. */
         private const val SLOW_EVERY = 20
+
+        // 1-byte helper (A) and 2-byte helper (A*256+B), null if too few bytes.
+        private fun a(b: List<Int>) = b.getOrNull(0)?.toDouble()
+        private fun ab(b: List<Int>) = if (b.size >= 2) (b[0] * 256 + b[1]).toDouble() else null
+
+        /**
+         * The scalar mode-01 PIDs we decode. Intentionally broad — we read everything the
+         * car supports and show it all, then prune later. Bitfield/struct PIDs (monitor
+         * status, O2-sensor arrays, support masks) are deliberately omitted.
+         */
+        private val PID_TABLE = listOf(
+            PidDef("04", "Engine load", "%", false) { a(it)?.times(100.0 / 255) },
+            PidDef("05", "Coolant", "°C", true) { a(it)?.minus(40) },
+            PidDef("06", "Short fuel trim B1", "%", true) { a(it)?.let { v -> (v - 128) * 100 / 128 } },
+            PidDef("07", "Long fuel trim B1", "%", true) { a(it)?.let { v -> (v - 128) * 100 / 128 } },
+            PidDef("0B", "Intake MAP", "kPa", false) { a(it) },
+            PidDef("0C", "RPM", "rpm", false) { ab(it)?.div(4) },
+            PidDef("0D", "Speed", "km/h", false) { a(it) },
+            PidDef("0E", "Timing advance", "°", false) { a(it)?.div(2)?.minus(64) },
+            PidDef("0F", "Intake air temp", "°C", true) { a(it)?.minus(40) },
+            PidDef("10", "MAF", "g/s", false) { ab(it)?.div(100) },
+            PidDef("11", "Throttle", "%", false) { a(it)?.times(100.0 / 255) },
+            PidDef("1F", "Run time", "s", true) { ab(it) },
+            PidDef("21", "Dist w/ MIL on", "km", true) { ab(it) },
+            PidDef("2F", "Fuel level", "%", true) { a(it)?.times(100.0 / 255) },
+            PidDef("30", "Warm-ups since clr", "", true) { a(it) },
+            PidDef("31", "Dist since clr", "km", true) { ab(it) },
+            PidDef("33", "Barometric", "kPa", true) { a(it) },
+            PidDef("42", "Module voltage", "V", true) { ab(it)?.div(1000) },
+            PidDef("43", "Absolute load", "%", false) { ab(it)?.times(100.0 / 255) },
+            PidDef("44", "Equiv ratio λ", "", false) { ab(it)?.div(32768) },
+            PidDef("45", "Rel throttle", "%", false) { a(it)?.times(100.0 / 255) },
+            PidDef("46", "Ambient temp", "°C", true) { a(it)?.minus(40) },
+            PidDef("47", "Abs throttle B", "%", false) { a(it)?.times(100.0 / 255) },
+            PidDef("49", "Accel pedal D", "%", false) { a(it)?.times(100.0 / 255) },
+            PidDef("4A", "Accel pedal E", "%", false) { a(it)?.times(100.0 / 255) },
+            PidDef("4C", "Cmd throttle", "%", false) { a(it)?.times(100.0 / 255) },
+            PidDef("4D", "Time w/ MIL on", "min", true) { ab(it) },
+            PidDef("4E", "Time since clr", "min", true) { ab(it) },
+            PidDef("59", "Fuel rail P", "kPa", true) { ab(it)?.times(10) },
+            PidDef("5C", "Oil temp", "°C", true) { a(it)?.minus(40) },
+            PidDef("5E", "Fuel rate", "L/h", false) { ab(it)?.div(20) },
+        )
+
+        /** pid → (label, unit), plus the synthetic "RV" battery reading, for display. */
+        private val PID_META: Map<String, Pair<String, String>> =
+            PID_TABLE.associate { it.pid to (it.label to it.unit) } + ("RV" to ("Battery" to "V"))
+
+        /** Format a raw PID map into "Label value unit" strings, in table order, for the
+         *  in-app dashboard / activity log. Unknown keys fall back to the raw pid. */
+        fun describe(pids: Map<String, Double>): List<String> = pids.entries.map { (k, v) ->
+            val (label, unit) = PID_META[k] ?: (k to "")
+            val n = if (v == v.toLong().toDouble()) v.toLong().toString() else "%.1f".format(v)
+            if (unit.isEmpty()) "$label $n" else "$label $n$unit"
+        }
 
         /** MAC → last-known-good openSocket strategy index, so a reconnect skips the
          *  secure-SPP timeout that fails on every connect to a clone dongle. In-process

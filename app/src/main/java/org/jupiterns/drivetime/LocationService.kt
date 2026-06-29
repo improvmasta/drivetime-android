@@ -338,6 +338,7 @@ class LocationService : Service() {
                         }
                         latestObd = if (ticks % 120 == 0) s.copy(dtcs = client.readDtcs()) else s
                         LiveState.rpm = s.rpm; LiveState.coolantC = s.coolantC; LiveState.voltage = s.voltage
+                        LiveState.pids = s.pids
                         ticks++
                         delay(1500)
                     }
