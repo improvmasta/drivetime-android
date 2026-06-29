@@ -8,6 +8,11 @@
 .externalNativeBuild
 .cxx
 app/build/
+# Signing keys are ignored by default — EXCEPT the one committed debug-grade key
+# (app/signing/) that gives every build a stable signature so sideloaded updates
+# install in place and keep app settings. See app/build.gradle.kts.
 /keystore/
 *.keystore
 *.jks
+*.p12
+!app/signing/drivetime-signing.p12

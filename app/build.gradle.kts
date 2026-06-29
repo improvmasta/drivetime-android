@@ -7,12 +7,30 @@ android {
     namespace = "org.jupiterns.drivetime"
     compileSdk = 34
 
+    // A fixed signing key, committed (app/signing/) so every build — CI and local —
+    // shares one signature. Android only installs an update *in place* (keeping app
+    // data/settings) when the new APK is signed with the SAME key as the installed
+    // one; the old setup let CI mint a throwaway debug key per run, so each build was
+    // a different signature → "update not installed" → reinstall → settings wiped.
+    // Debug-grade key, PKCS12 (openssl -legacy); password is intentionally trivial.
+    signingConfigs {
+        create("stable") {
+            storeFile = file("signing/drivetime-signing.p12")
+            storePassword = "drivetime"
+            keyAlias = "drivetime"
+            keyPassword = "drivetime"
+            storeType = "PKCS12"
+        }
+    }
+
     defaultConfig {
         applicationId = "org.jupiterns.drivetime"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        // Monotonic versionCode from the CI run number so every CI build is an upgrade
+        // over the last; local builds fall back to 1. versionName mirrors it.
+        versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
+        versionName = "0.1." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
     }
 
     buildFeatures {
@@ -25,8 +43,14 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Sign the debug build (CI ships assembleDebug) with the stable key so
+            // sideloaded updates install over the top instead of as a new app.
+            signingConfig = signingConfigs.getByName("stable")
+        }
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("stable")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
