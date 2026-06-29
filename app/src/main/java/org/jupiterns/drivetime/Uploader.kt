@@ -56,7 +56,10 @@ class Uploader(context: Context, private val settings: Settings) {
             obd.coolantC?.let { o.put("coolant_c", it) }
             obd.throttle?.let { o.put("throttle", it) }
             obd.maf?.let { o.put("maf", it) }
+            obd.fuelLph?.let { o.put("fuel_lph", it) }
+            obd.fuelLevel?.let { o.put("fuel_level", it) }
             obd.voltage?.let { o.put("voltage", it) }
+            obd.ctrlVoltage?.let { o.put("ctrl_voltage", it) }
             if (obd.dtcs.isNotEmpty()) o.put("dtc", JSONArray(obd.dtcs))
         }
         synchronized(LOCK) {

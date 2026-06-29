@@ -25,7 +25,10 @@ class Elm327Client {
         val coolantC: Int? = null,
         val throttle: Double? = null,
         val maf: Double? = null,
-        val voltage: Double? = null,
+        val fuelLph: Double? = null,      // direct engine fuel rate, PID 5E
+        val fuelLevel: Double? = null,    // fuel tank level %, PID 2F (slow-cadence)
+        val voltage: Double? = null,      // dongle-pin voltage, ATRV
+        val ctrlVoltage: Double? = null,  // control-module voltage, PID 42 (slow-cadence)
         val dtcs: List<String> = emptyList(),
     )
 
@@ -34,7 +37,19 @@ class Elm327Client {
     private var output: OutputStream? = null
     private val initLog = mutableListOf<String>()
 
+    /** mode-01 PIDs this car answers (2-hex, e.g. "5E"), from the 0100/20/40/60 support
+     *  bitmasks. Empty = discovery failed → [supports] treats everything as supported. */
+    private val supported = linkedSetOf<String>()
+    private var vin: String? = null
+    // slow-mover cadence: fuel level & control-module voltage barely change, so we poll
+    // them every SLOW_EVERY samples and reuse the cached reading between.
+    private var slowTick = 0
+    private var lastFuelLevel: Double? = null
+    private var lastCtrlV: Double? = null
+
     fun isConnected() = socket?.isConnected == true
+    fun supportedPids(): Set<String> = supported
+    fun vin(): String? = vin
 
     @SuppressLint("MissingPermission")
     fun connect(device: BluetoothDevice) {
@@ -53,7 +68,54 @@ class Elm327Client {
         // protocol 6, fall back to auto (ATSP0) which searches once. A connected car answers
         // 0100 with a "4100" header; "NO DATA"/"UNABLE TO CONNECT"/"SEARCHING" don't.
         if (!tryProtocol("6")) tryProtocol("0")
+        discoverCapabilities()
+        vin = runCatching { readVin() }.getOrNull()
     }
+
+    /**
+     * Read the four mode-01 support bitmasks (0100/0120/0140/0160) and record which PIDs
+     * this car actually answers, so [readSample] skips the rest instead of paying a ~2 s
+     * "NO DATA" timeout per unsupported PID. Each mask is 4 bytes = 32 bits, MSB-first,
+     * bit i (from the high bit) = PID base+i+1. A range whose marker is absent (returns
+     * <4 bytes) means "no more PIDs" — stop probing.
+     */
+    private fun discoverCapabilities() {
+        supported.clear()
+        for ((pid, base) in listOf("00" to 0, "20" to 0x20, "40" to 0x40, "60" to 0x60)) {
+            val bytes = pidBytes(pid)
+            if (bytes.size < 4) break
+            var bits = 0L
+            for (b in bytes.take(4)) bits = (bits shl 8) or b.toLong()   // b is already 0..255
+            for (i in 0 until 32) {
+                if ((bits ushr (31 - i)) and 1L == 1L) supported.add("%02X".format(base + i + 1))
+            }
+        }
+    }
+
+    /**
+     * Mode 09 PID 02 — VIN. The reply is multi-frame (ISO-TP): the ELM327 emits numbered
+     * lines ("0:4902...", "1:..."), which we de-frame, then decode the 17 ASCII bytes after
+     * the "490201" header. Best-effort: null if absent or not a clean 17-char VIN.
+     */
+    private fun readVin(): String? {
+        val raw = send("0902")
+        val hex = raw.split('\r', '\n').joinToString("") { line ->
+            val t = line.trim()
+            // drop a leading single-hex-digit frame counter like "0:" / "1:"
+            val body = if (t.length > 2 && t[1] == ':') t.substring(2) else t
+            body.uppercase().replace(Regex("[^0-9A-F]"), "")
+        }
+        val idx = hex.indexOf("4902")
+        if (idx < 0) return null
+        var rest = hex.substring(idx + 4)
+        if (rest.startsWith("01")) rest = rest.substring(2)   // optional message-count byte
+        val vin = rest.chunked(2).mapNotNull { it.toIntOrNull(16) }
+            .filter { it in 0x20..0x7E }.map { it.toChar() }
+            .joinToString("").filter { it.isLetterOrDigit() }
+        return vin.takeIf { it.length == 17 }
+    }
+
+    private fun supports(pid: String) = supported.isEmpty() || pid in supported
 
     /** Set protocol [p], then probe with 0100; true when the adapter returns a valid
      *  response header (4100), i.e. the protocol talks to this car. */
@@ -113,14 +175,24 @@ class Elm327Client {
         socket = null; input = null; output = null
     }
 
-    /** Read the current core PIDs + battery voltage. Missing PIDs come back null. */
+    /** Read the current PIDs (gated by [supported]) + battery voltage. Fast-moving PIDs
+     *  are read every call; slow movers (fuel level PID 2F, control-module voltage PID 42)
+     *  only every [SLOW_EVERY] calls and are cached between. Missing PIDs come back null. */
     fun readSample(): ObdSample {
-        val rpmB = pidBytes("0C")
-        val spdB = pidBytes("0D")
-        val loadB = pidBytes("04")
-        val tempB = pidBytes("05")
-        val thrB = pidBytes("11")
-        val mafB = pidBytes("10")
+        val rpmB = if (supports("0C")) pidBytes("0C") else emptyList()
+        val spdB = if (supports("0D")) pidBytes("0D") else emptyList()
+        val loadB = if (supports("04")) pidBytes("04") else emptyList()
+        val tempB = if (supports("05")) pidBytes("05") else emptyList()
+        val thrB = if (supports("11")) pidBytes("11") else emptyList()
+        val mafB = if (supports("10")) pidBytes("10") else emptyList()
+        val fuelB = if (supports("5E")) pidBytes("5E") else emptyList()
+        if (slowTick % SLOW_EVERY == 0) {
+            if (supports("2F"))
+                pidBytes("2F").getOrNull(0)?.let { lastFuelLevel = it * 100.0 / 255.0 }
+            if (supports("42"))
+                pidBytes("42").let { if (it.size >= 2) lastCtrlV = (it[0] * 256 + it[1]) / 1000.0 }
+        }
+        slowTick++
         return ObdSample(
             rpm = if (rpmB.size >= 2) (rpmB[0] * 256 + rpmB[1]) / 4 else null,
             obdKph = spdB.getOrNull(0),
@@ -128,7 +200,10 @@ class Elm327Client {
             coolantC = tempB.getOrNull(0)?.let { it - 40 },
             throttle = thrB.getOrNull(0)?.let { it * 100.0 / 255.0 },
             maf = if (mafB.size >= 2) (mafB[0] * 256 + mafB[1]) / 100.0 else null,
+            fuelLph = if (fuelB.size >= 2) (fuelB[0] * 256 + fuelB[1]) / 20.0 else null,
+            fuelLevel = lastFuelLevel,
             voltage = Regex("([0-9]+\\.[0-9]+)").find(send("ATRV"))?.value?.toDoubleOrNull(),
+            ctrlVoltage = lastCtrlV,
         )
     }
 
@@ -141,6 +216,9 @@ class Elm327Client {
      *  silent null. Two compact lines so the Log stays readable. */
     fun diagnostic(): List<String> {
         val init = "init: " + initLog.joinToString("  ")
+        val caps = "supports: " +
+            (if (supported.isEmpty()) "(discovery failed)" else supported.sorted().joinToString(" ")) +
+            "  vin: " + (vin ?: "n/a")
         val probe = buildString {
             append("probe:")
             for (pid in listOf("0C", "0D", "04", "05", "11", "10")) {
@@ -148,7 +226,7 @@ class Elm327Client {
             }
             append("  ATRV→").append(clean(send("ATRV")))
         }
-        return listOf(init, probe)
+        return listOf(init, caps, probe)
     }
 
     private fun clean(s: String) =
@@ -210,6 +288,10 @@ class Elm327Client {
 
     companion object {
         private val SPP_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+
+        /** Poll the slow-moving PIDs (fuel level, control-module voltage) every Nth
+         *  sample. At the ~1.5 s OBD loop, 20 ≈ every 30 s — plenty for a tank gauge. */
+        private const val SLOW_EVERY = 20
 
         /** MAC → last-known-good openSocket strategy index, so a reconnect skips the
          *  secure-SPP timeout that fails on every connect to a clone dongle. In-process

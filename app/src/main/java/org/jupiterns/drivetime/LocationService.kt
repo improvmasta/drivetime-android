@@ -333,7 +333,8 @@ class LocationService : Service() {
                             loggedSample = true
                             EventLog.info("OBD sample rpm=${s.rpm} kph=${s.obdKph} coolant=${s.coolantC}" +
                                 " load=${s.engineLoad?.let { "%.0f".format(it) }} thr=${s.throttle?.let { "%.0f".format(it) }}" +
-                                " maf=${s.maf?.let { "%.1f".format(it) }} v=${s.voltage}")
+                                " maf=${s.maf?.let { "%.1f".format(it) }} fuel=${s.fuelLph?.let { "%.1f".format(it) }}L/h" +
+                                " tank=${s.fuelLevel?.let { "%.0f".format(it) }}% v=${s.voltage} ctrlV=${s.ctrlVoltage}")
                         }
                         latestObd = if (ticks % 120 == 0) s.copy(dtcs = client.readDtcs()) else s
                         LiveState.rpm = s.rpm; LiveState.coolantC = s.coolantC; LiveState.voltage = s.voltage
