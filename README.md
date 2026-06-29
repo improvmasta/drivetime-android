@@ -152,8 +152,12 @@ toggle when logging, today's **leave-by** card when idle; shares data in-process
 unlock **Developer settings** → enable **Unknown sources**.
 
 ## Build & install
-CI builds `drivetime-debug-apk` on each push (Actions → artifact). Sideload it; debug
-APKs install as-is (uninstall a prior build first if signatures differ).
+CI builds `drivetime-debug-apk` on each push (Actions → artifact); it's also served at
+`https://drivetime.jupiterns.org/dl/drivetime.apk`. Sideload it — **updates install in
+place and keep your settings**, because every build is signed with one committed key
+(`app/signing/drivetime-signing.p12`, wired up in `app/build.gradle.kts`) and `versionCode`
+tracks the CI run number. *(One-time exception: the first install that moved onto this
+stable key needed an uninstall+reinstall; everything after updates over the top.)*
 
 ```bash
 gradle wrapper --gradle-version 8.7   # first time (no wrapper jar committed)
