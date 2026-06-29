@@ -1,5 +1,6 @@
 package org.jupiterns.drivetime
 
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -434,7 +435,9 @@ class LocationService : Service() {
 
     /** One instant high-accuracy fix's Doppler speed (m/s), or null if unavailable. Blocking
      *  await on the IO coroutine; a permission/timeout/failure degrades to null (the dense
-     *  probe + speed backstop still cover the start). */
+     *  probe + speed backstop still cover the start). The service only probes while running,
+     *  which requires location permission; a revoked permission throws → caught → null. */
+    @SuppressLint("MissingPermission")
     private fun currentDoppler(tokenSrc: CancellationTokenSource): Float? = try {
         val task = fused.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, tokenSrc.token)
         val loc = Tasks.await(task, 8, TimeUnit.SECONDS)
