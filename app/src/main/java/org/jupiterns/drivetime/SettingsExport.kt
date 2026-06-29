@@ -33,6 +33,11 @@ object SettingsExport {
         o.put("drive_by_speed", s.driveBySpeed)
         o.put("auto_trip", s.autoTrip)
         o.put("alerts_enabled", s.alertsEnabled)
+        o.put("motion_onset", s.motionOnset)
+        o.put("onset_probe_interval_sec", s.onsetProbeIntervalSec)
+        o.put("onset_probe_window_sec", s.onsetProbeWindowSec)
+        o.put("onset_speed_mps", s.onsetSpeedMps)
+        o.put("onset_accel_rms", s.onsetAccelRms)
         o.put("car_bt_mac", s.carBtMac)
         o.put("car_bt_name", s.carBtName)
         o.put("obd_mac", s.obdMac)
@@ -60,6 +65,11 @@ object SettingsExport {
         if (o.has("driving_upload_interval_sec")) { s.drivingUploadIntervalSec = o.optInt("driving_upload_interval_sec", s.drivingUploadIntervalSec); applied++ }
         if (o.has("stationary_stop_min")) { s.stationaryStopMin = o.optInt("stationary_stop_min", s.stationaryStopMin); applied++ }
         if (o.has("drive_by_speed")) { s.driveBySpeed = o.optBoolean("drive_by_speed", s.driveBySpeed); applied++ }
+        if (o.has("motion_onset")) { s.motionOnset = o.optBoolean("motion_onset", s.motionOnset); applied++ }
+        if (o.has("onset_probe_interval_sec")) { s.onsetProbeIntervalSec = o.optInt("onset_probe_interval_sec", s.onsetProbeIntervalSec); applied++ }
+        if (o.has("onset_probe_window_sec")) { s.onsetProbeWindowSec = o.optInt("onset_probe_window_sec", s.onsetProbeWindowSec); applied++ }
+        if (o.has("onset_speed_mps")) { s.onsetSpeedMps = o.optInt("onset_speed_mps", s.onsetSpeedMps); applied++ }
+        if (o.has("onset_accel_rms")) { s.onsetAccelRms = o.optInt("onset_accel_rms", s.onsetAccelRms); applied++ }
         if (o.has("auto_trip")) {
             val v = o.optBoolean("auto_trip", s.autoTrip)
             s.autoTrip = v

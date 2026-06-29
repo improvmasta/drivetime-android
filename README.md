@@ -14,9 +14,13 @@ driven by Samsung Modes & Routines) and drivetime's `NATIVE_APP.md`.
   (sparse, low-power — a continuous everyday timeline) ramps to dense **Driving**
   logging (high-accuracy GPS + OBD) when you're actually in the car.
 - **Layered drive detection** ([`DriveDetector`](app/src/main/java/org/jupiterns/drivetime/DriveDetector.kt)),
-  a priority cascade — **car Bluetooth → OBD-connect → sustained speed** — *not*
-  activity-recognition guessing, so a car crawling in traffic is never mislabeled a
-  bike. A routine/shortcut can force a tier or turn logging off.
+  a priority cascade — **car Bluetooth → OBD-connect → motion-onset → sustained speed**
+  — *not* activity-recognition guessing, so a car crawling in traffic is never mislabeled
+  a bike. A routine/shortcut can force a tier or turn logging off.
+- **Second-accurate starts in any car.** A hardware **significant-motion** trigger
+  (near-zero battery, no pairing) wakes an instant GPS Doppler check the moment you move,
+  so dense logging begins within seconds — not just in your own paired car. The 60 s Light
+  heartbeat stays as the backstop.
 - **Durable, batched upload.** Every fix is written to an on-disk queue first, then
   POSTed in batches; a crash, kill, or dead-zone loses nothing.
 - **Robust.** Resumes after reboot/app-update; a watchdog relaunches the service if
@@ -53,10 +57,21 @@ driven by Samsung Modes & Routines) and drivetime's `NATIVE_APP.md`.
 | **Driving · stopped** | in the car at a red light | `idleIntervalSec` = 20s | high accuracy + OBD |
 
 `DriveDetector` resolves the tier from a cascade (first hit wins): **forced mode →
-car Bluetooth connected → OBD connected → sustained/high GPS speed**. Connection
-signals hold *Driving* even at a dead stop, so a stop never drops the tier. The
-speed backstop has hysteresis so traffic crawls don't flap. Inside *Driving*, the
+car Bluetooth connected → OBD connected → motion-onset → sustained/high GPS speed**.
+Connection signals hold *Driving* even at a dead stop, so a stop never drops the tier.
+The speed backstop has hysteresis so traffic crawls don't flap. Inside *Driving*, the
 fix rate adapts to motion (dense moving, idle back-off at lights).
+
+**Motion-onset (device-agnostic fast start).** In Light, a one-shot hardware
+significant-motion trigger is armed (near-zero battery, no permission, no pairing). When
+it fires, the app raises GPS to a brief probationary dense rate and takes one instant
+`getCurrentLocation` Doppler fix plus a short accelerometer read; `confirmOnset` promotes
+to *Driving* when the speed is clearly vehicular (smooth-vs-bouncy accel breaks the
+ambiguous low-speed tie). Because the probationary dense fixes also feed the speed
+backstop, the *start* is captured within seconds even before the tier flips — the key to
+second-accurate boundaries in **any** car, not just a paired one. Tunable via the
+`motion_onset` / `onset_*` settings (and routine SET keys); disable `motion_onset` to fall
+back to the 60 s heartbeat + speed backstop alone.
 
 ## Car Bluetooth & OBD setup
 Tapping **Car Bluetooth** or **OBD dongle** opens a live picker that **scans for

@@ -35,6 +35,11 @@ object AutomationHelp {
           stationary_stop_min             0+    auto-trip backstop
           auto_trip                       true|false
           alerts_enabled                  true|false
+          motion_onset                    true|false  significant-motion fast start
+          onset_probe_interval_sec        1+    probationary GPS cadence
+          onset_probe_window_sec          1+    probation duration
+          onset_speed_mps                 1+    Doppler = vehicular threshold
+          onset_accel_rms                 0+    accel on-foot threshold (×100 m/s²)
 
         Optional token (extra token=<value>) — if set in Settings,
         SET / QUERY must include it. START/STOP/TOGGLE/mode-actions ignore it.

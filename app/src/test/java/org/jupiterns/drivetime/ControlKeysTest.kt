@@ -17,6 +17,8 @@ class ControlKeysTest {
             "upload_interval_sec", "driving_upload_interval_sec",
             "drive_by_speed", "stationary_stop_min",
             "auto_trip", "alerts_enabled",
+            "motion_onset", "onset_probe_interval_sec", "onset_probe_window_sec",
+            "onset_speed_mps", "onset_accel_rms",
         )
         for (k in expected) {
             assertTrue("SET_KEYS missing '$k'", k in Control.SET_KEYS)

@@ -10,6 +10,12 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.hardware.TriggerEvent
+import android.hardware.TriggerEventListener
 import android.location.Location
 import android.net.ConnectivityManager
 import android.net.Network
@@ -22,7 +28,10 @@ import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
+import com.google.android.gms.tasks.Tasks
 import androidx.core.content.ContextCompat
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -57,6 +66,17 @@ class LocationService : Service() {
     private var obd: Elm327Client? = null
     @Volatile private var latestObd: Elm327Client.ObdSample? = null
     @Volatile private var movingHint = false      // recent non-trivial motion (gates OBD probe)
+
+    // Motion-onset (device-agnostic fast start). A one-shot significant-motion trigger,
+    // armed only in the LIGHT tier, wakes an instant Doppler check so a drive starts dense
+    // logging within seconds in ANY car. The probationary dense GPS it briefly raises also
+    // feeds the existing speed backstop, so the start is captured even if confirmOnset is shy.
+    private val sensors by lazy { getSystemService(SensorManager::class.java) }
+    private var sigMotionListener: TriggerEventListener? = null
+    @Volatile private var accelListener: SensorEventListener? = null
+    @Volatile private var onsetProbing = false
+    @Volatile private var onsetProbationUntil = 0L
+    @Volatile private var onsetTokenSource: CancellationTokenSource? = null
 
     private var currentTier = DriveDetector.Tier.LIGHT
     private var requestedIntervalMs = -1L         // active LocationRequest interval (avoid churn)
@@ -192,10 +212,12 @@ class LocationService : Service() {
         when (tier) {
             DriveDetector.Tier.DRIVING -> {
                 idleMode = false; slowCount = 0; lastMoveLoc = null
+                disarmMotionOnset()   // already dense; no point waking on motion
                 requestUpdates(settings.intervalSec * 1000L, Priority.PRIORITY_HIGH_ACCURACY)
             }
             DriveDetector.Tier.LIGHT -> {
                 requestUpdates(settings.lightIntervalSec * 1000L, Priority.PRIORITY_BALANCED_POWER_ACCURACY)
+                armMotionOnset()      // catch the next start within seconds, in any car
             }
             DriveDetector.Tier.OFF -> { /* handled by reevaluate/stop */ }
         }
@@ -342,6 +364,110 @@ class LocationService : Service() {
     private fun shouldProbeObd(): Boolean =
         detector.carConnected || movingHint || currentTier == DriveDetector.Tier.DRIVING
 
+    // ---- Motion-onset (device-agnostic fast start) ----
+
+    /** Arm the one-shot significant-motion trigger (idempotent, LIGHT-tier only). It's
+     *  hardware-backed and ~free while parked; on a device without it the app simply
+     *  leans on the 60 s LIGHT heartbeat + speed backstop as before. */
+    private fun armMotionOnset() {
+        if (!settings.motionOnset || sigMotionListener != null) return
+        val sm = sensors ?: return
+        val sensor = sm.getDefaultSensor(Sensor.TYPE_SIGNIFICANT_MOTION) ?: return
+        val l = object : TriggerEventListener() {
+            override fun onTrigger(event: TriggerEvent?) {
+                sigMotionListener = null   // one-shot: the OS has disarmed it
+                onMotionTrigger()
+            }
+        }
+        if (sm.requestTriggerSensor(l, sensor)) sigMotionListener = l
+    }
+
+    private fun disarmMotionOnset() {
+        val l = sigMotionListener ?: return
+        sigMotionListener = null
+        val sm = sensors ?: return
+        val sensor = sm.getDefaultSensor(Sensor.TYPE_SIGNIFICANT_MOTION) ?: return
+        runCatching { sm.cancelTriggerSensor(l, sensor) }
+    }
+
+    /** A significant-motion wake fired. Raise GPS to a probationary dense rate, take one
+     *  instant Doppler fix + a short accelerometer read, and let [DriveDetector.confirmOnset]
+     *  decide. Confirmed → flip to DRIVING now; otherwise hold dense GPS until the probation
+     *  window expires (so the speed backstop can still promote a shy start) then fall back to
+     *  LIGHT and re-arm. Runs on the main thread (sensor callback); the work is a coroutine. */
+    private fun onMotionTrigger() {
+        if (onsetProbing || currentTier != DriveDetector.Tier.LIGHT) {
+            if (currentTier == DriveDetector.Tier.LIGHT) armMotionOnset()  // don't lose the trigger
+            return
+        }
+        onsetProbing = true
+        onsetProbationUntil = System.currentTimeMillis() + settings.onsetProbeWindowSec * 1000L
+        LiveState.onsetState = "probing"
+        EventLog.info("Motion onset → probing")
+        requestUpdates(settings.onsetProbeIntervalSec * 1000L, Priority.PRIORITY_HIGH_ACCURACY)
+        val tokenSrc = CancellationTokenSource()
+        onsetTokenSource = tokenSrc
+        scope.launch {
+            val doppler = currentDoppler(tokenSrc)
+            val accel = sampleAccelRms()
+            val confirmed = detector.confirmOnset(doppler, accel, System.currentTimeMillis())
+            if (confirmed) {
+                LiveState.onsetState = "confirmed"
+                val mph = doppler?.let { Math.round(it * 2.2369362f) } ?: -1
+                EventLog.info("Driving detected (motion, $mph mph)")
+                main.post { reevaluate(); StateBroadcaster.emit(this@LocationService, "motion") }
+            } else {
+                val remain = onsetProbationUntil - System.currentTimeMillis()
+                if (remain > 0) delay(remain)
+            }
+            onsetProbing = false
+            onsetTokenSource = null
+            main.post {
+                if (currentTier == DriveDetector.Tier.LIGHT) {
+                    LiveState.onsetState = "idle"
+                    requestUpdates(settings.lightIntervalSec * 1000L, Priority.PRIORITY_BALANCED_POWER_ACCURACY)
+                    armMotionOnset()
+                }
+            }
+        }
+    }
+
+    /** One instant high-accuracy fix's Doppler speed (m/s), or null if unavailable. Blocking
+     *  await on the IO coroutine; a permission/timeout/failure degrades to null (the dense
+     *  probe + speed backstop still cover the start). */
+    private fun currentDoppler(tokenSrc: CancellationTokenSource): Float? = try {
+        val task = fused.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, tokenSrc.token)
+        val loc = Tasks.await(task, 8, TimeUnit.SECONDS)
+        if (loc != null && loc.hasSpeed()) loc.speed else null
+    } catch (e: Exception) {
+        null
+    }
+
+    /** RMS of gravity-removed accelerometer magnitude over a short window (m/s²) — a smooth
+     *  vehicle reads low, an on-foot bounce reads high. Null if no accelerometer. */
+    private suspend fun sampleAccelRms(): Float? {
+        val sm = sensors ?: return null
+        val accel = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) ?: return null
+        val samples = java.util.Collections.synchronizedList(mutableListOf<Float>())
+        val l = object : SensorEventListener {
+            override fun onSensorChanged(e: SensorEvent) {
+                val x = e.values[0]; val y = e.values[1]; val z = e.values[2]
+                val mag = Math.sqrt((x * x + y * y + z * z).toDouble()).toFloat()
+                samples.add(mag - 9.81f)
+            }
+            override fun onAccuracyChanged(s: Sensor?, a: Int) {}
+        }
+        accelListener = l
+        sm.registerListener(l, accel, SensorManager.SENSOR_DELAY_GAME)
+        delay(ACCEL_SAMPLE_MS)
+        sm.unregisterListener(l)
+        accelListener = null
+        val arr = synchronized(samples) { samples.toList() }
+        if (arr.isEmpty()) return null
+        val meanSq = arr.fold(0.0) { acc, v -> acc + v.toDouble() * v } / arr.size
+        return Math.sqrt(meanSq).toFloat()
+    }
+
     override fun onDestroy() {
         isRunning = false
         LiveState.logging = false
@@ -352,6 +478,9 @@ class LocationService : Service() {
         runCatching { unregisterReceiver(btReceiver) }
         runCatching { unregisterReceiver(chargeReceiver) }
         runCatching { connectivity.unregisterNetworkCallback(netCallback) }
+        disarmMotionOnset()
+        runCatching { onsetTokenSource?.cancel() }
+        accelListener?.let { runCatching { sensors?.unregisterListener(it) } }
         fused.removeLocationUpdates(callback)
         obd?.close(); obd = null
         // Final flush off the cancelled scope so a last batch isn't dropped.
@@ -406,6 +535,9 @@ class LocationService : Service() {
         private const val MOVING_MPS = 1.4f    // ~3 mph: at/above this counts as moving
         private const val MOVE_RESET_M = 40f   // displacement that counts as movement
         private const val STOP_CONFIRM = 3     // consecutive slow fixes before idle back-off
+
+        // Motion-onset accelerometer sampling window after a significant-motion wake.
+        private const val ACCEL_SAMPLE_MS = 3_000L
 
         // OBD probe cadence.
         private const val OBD_IDLE_MS = 120_000L      // recheck/probe interval when not driving

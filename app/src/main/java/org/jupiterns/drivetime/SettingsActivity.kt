@@ -56,6 +56,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var drivingUploadIntervalSec: EditText
     private lateinit var stationaryStopMin: EditText
     private lateinit var driveBySpeed: CheckBox
+    private lateinit var motionOnset: CheckBox
     private lateinit var carBt: Button
     private lateinit var obdDevice: Button
     private lateinit var autoTrip: CheckBox
@@ -81,6 +82,7 @@ class SettingsActivity : AppCompatActivity() {
         drivingUploadIntervalSec = findViewById(R.id.drivingUploadIntervalSec)
         stationaryStopMin = findViewById(R.id.stationaryStopMin)
         driveBySpeed = findViewById(R.id.driveBySpeed)
+        motionOnset = findViewById(R.id.motionOnset)
         carBt = findViewById(R.id.carBt)
         obdDevice = findViewById(R.id.obdDevice)
         autoTrip = findViewById(R.id.autoTrip)
@@ -93,7 +95,7 @@ class SettingsActivity : AppCompatActivity() {
         loadFromSettings()
         findViewById<TextView>(R.id.cheatSheet).text = AutomationHelp.cheatSheet()
 
-        findViewById<Button>(R.id.save).setOnClickListener { saveAll(); finish() }
+        findViewById<Button>(R.id.save).setOnClickListener { saveAll(notify = true); finish() }
         findViewById<Button>(R.id.testConn).setOnClickListener { testConnection() }
         findViewById<Button>(R.id.batteryExempt).setOnClickListener { Battery.requestExemption(this) }
         findViewById<Button>(R.id.openOemPage).setOnClickListener { OemBatteryLinks.openProtectedAppsPage(this) }
@@ -129,6 +131,16 @@ class SettingsActivity : AppCompatActivity() {
             else snack("Bluetooth permission is needed to find your dongle")
         }
 
+        // Advanced-timing expander: keep the cadence knobs tucked away by default so the
+        // Tracking section leads with "how driving is detected", not a wall of numbers.
+        val advancedToggle = findViewById<TextView>(R.id.advancedToggle)
+        val advancedTiming = findViewById<View>(R.id.advancedTiming)
+        advancedToggle.setOnClickListener {
+            val show = advancedTiming.visibility != View.VISIBLE
+            advancedTiming.visibility = if (show) View.VISIBLE else View.GONE
+            advancedToggle.text = if (show) "▾  Advanced timing" else "▸  Advanced timing"
+        }
+
         findViewById<Button>(R.id.exportSettings).setOnClickListener {
             saveAll()
             exportLauncher.launch("drivetime-settings.json")
@@ -139,6 +151,10 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     override fun onResume() { super.onResume(); refreshBattery() }
+    // Auto-save on leave so edits are never silently lost by pressing Back. The explicit
+    // Save button is now just "save & close" with a confirmation. (Device pickers and the
+    // alerts/auto-trip toggles already persist instantly on tap.)
+    override fun onPause() { super.onPause(); saveAll() }
 
     private fun loadFromSettings() {
         serverUrl.setText(s.serverUrl)
@@ -151,6 +167,7 @@ class SettingsActivity : AppCompatActivity() {
         drivingUploadIntervalSec.setText(s.drivingUploadIntervalSec.toString())
         stationaryStopMin.setText(s.stationaryStopMin.toString())
         driveBySpeed.isChecked = s.driveBySpeed
+        motionOnset.isChecked = s.motionOnset
         autoTrip.isChecked = s.autoTrip
         controlToken.setText(s.controlToken)
         alerts.isChecked = s.alertsEnabled
@@ -172,7 +189,7 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<Button>(R.id.openOemPage).text = help.label
     }
 
-    private fun saveAll() {
+    private fun saveAll(notify: Boolean = false) {
         s.serverUrl = serverUrl.text.toString()
         s.username = username.text.toString()
         s.password = password.text.toString()
@@ -183,10 +200,11 @@ class SettingsActivity : AppCompatActivity() {
         s.drivingUploadIntervalSec = drivingUploadIntervalSec.text.toString().toIntOrNull() ?: s.drivingUploadIntervalSec
         s.stationaryStopMin = stationaryStopMin.text.toString().toIntOrNull() ?: s.stationaryStopMin
         s.driveBySpeed = driveBySpeed.isChecked
+        s.motionOnset = motionOnset.isChecked
         s.autoTrip = autoTrip.isChecked
         s.controlToken = controlToken.text.toString()
         s.alertsEnabled = alerts.isChecked
-        snack("Settings saved")
+        if (notify) snack("Settings saved")
     }
 
     private fun testConnection() {
@@ -264,24 +282,39 @@ class SettingsActivity : AppCompatActivity() {
         val seen = HashSet<String>()
         val picks = ArrayList<Pair<String, String>>()       // (mac, name), parallel to rows
         val rows = ArrayAdapter<String>(this, android.R.layout.simple_list_item_1)
+        var nearbyCount = 0
+        var dialog: AlertDialog? = null
 
-        fun add(mac: String?, name: String?) {
+        // Title doubles as the status line: scanning → result/empty guidance, so the user
+        // is never left staring at a static list wondering if it's still working.
+        fun setStatus(scanning: Boolean) {
+            dialog?.setTitle(when {
+                scanning -> "$title — scanning…"
+                picks.isEmpty() -> "$title — none found. Rescan, or Enter MAC."
+                nearbyCount == 0 -> "$title — tap a paired device, or Rescan / Enter MAC"
+                else -> "$title — tap your device"
+            })
+        }
+
+        fun add(mac: String?, name: String?, nearby: Boolean) {
             if (mac == null || !seen.add(mac)) return
             val nm = name?.takeIf { it.isNotBlank() } ?: mac
             picks.add(mac to nm)
-            rows.add("$nm\n$mac")                            // ArrayAdapter.add auto-refreshes
+            rows.add("$nm\n$mac · ${if (nearby) "nearby" else "paired"}")   // auto-refreshes
+            if (nearby) nearbyCount++
         }
 
-        adapter.bondedDevices?.forEach { add(it.address, it.name) }
+        adapter.bondedDevices?.forEach { add(it.address, it.name, nearby = false) }
 
-        var dialog: AlertDialog? = null
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(c: Context?, intent: Intent?) {
                 when (intent?.action) {
-                    BluetoothDevice.ACTION_FOUND ->
+                    BluetoothDevice.ACTION_FOUND -> {
                         intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
-                            ?.let { add(it.address, it.name) }
-                    BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> dialog?.setTitle(title)
+                            ?.let { add(it.address, it.name, nearby = true) }
+                        setStatus(scanning = true)
+                    }
+                    BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> setStatus(scanning = false)
                 }
             }
         }
@@ -289,9 +322,16 @@ class SettingsActivity : AppCompatActivity() {
             .apply { addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED) }
         ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
 
-        dialog = AlertDialog.Builder(this)
-            .setTitle("$title (scanning…)")
+        fun startScan() {
+            runCatching { adapter.cancelDiscovery() }
+            runCatching { adapter.startDiscovery() }
+            setStatus(scanning = true)
+        }
+
+        val d = AlertDialog.Builder(this)
+            .setTitle("$title — scanning…")
             .setAdapter(rows) { _, i -> onPick(picks[i].first, picks[i].second) }
+            .setPositiveButton("Rescan", null)              // overridden below so it doesn't dismiss
             .setNeutralButton("Clear") { _, _ -> onClear() }
             .setNegativeButton("Enter MAC") { _, _ -> promptForMac(title, onPick) }
             .setOnDismissListener {
@@ -299,9 +339,11 @@ class SettingsActivity : AppCompatActivity() {
                 runCatching { unregisterReceiver(receiver) }
             }
             .create()
-        dialog?.show()
-        runCatching { adapter.cancelDiscovery() }
-        runCatching { adapter.startDiscovery() }
+        dialog = d
+        d.show()
+        // Rescan re-runs discovery in place instead of closing the picker.
+        d.getButton(AlertDialog.BUTTON_POSITIVE)?.setOnClickListener { startScan() }
+        startScan()
     }
 
     private fun hasBtPerms(): Boolean =

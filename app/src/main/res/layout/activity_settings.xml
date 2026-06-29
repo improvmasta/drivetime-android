@@ -77,37 +77,67 @@
             <LinearLayout style="@style/SettingsSectionBody">
 
                 <TextView style="@style/SectionHeader" android:text="TRACKING" />
+                <TextView style="@style/SettingHelp" android:text="How drivetime decides you're driving. Works in any car — no pairing required." />
 
-                <TextView style="@style/SettingLabel" android:text="Driving fix interval (sec)" />
-                <TextView style="@style/SettingHelp" android:text="Seconds between GPS fixes while driving and moving." />
-                <EditText android:id="@+id/intervalSec" style="@style/IntInput" />
-
-                <TextView style="@style/SettingLabel" android:text="Idle fix interval (sec)" />
-                <TextView style="@style/SettingHelp" android:text="Sec between fixes while sitting at a red light, so a stop doesn't flood." />
-                <EditText android:id="@+id/idleIntervalSec" style="@style/IntInput" />
-
-                <TextView style="@style/SettingLabel" android:text="Light tier interval (sec)" />
-                <TextView style="@style/SettingHelp" android:text="Background pulse when you're not driving — keeps the timeline continuous, sips battery." />
-                <EditText android:id="@+id/lightIntervalSec" style="@style/IntInput" />
-
-                <TextView style="@style/SettingLabel" android:text="Light upload cadence (sec)" />
-                <TextView style="@style/SettingHelp" android:text="How often LIGHT-tier fixes are batched up and posted to the server." />
-                <EditText android:id="@+id/uploadIntervalSec" style="@style/IntInput" />
-
-                <TextView style="@style/SettingLabel" android:text="Driving upload cadence (sec)" />
-                <TextView style="@style/SettingHelp" android:text="How often DRIVING-tier fixes are flushed — short for near-real-time position on the dashboard / Auto pane." />
-                <EditText android:id="@+id/drivingUploadIntervalSec" style="@style/IntInput" />
-
-                <TextView style="@style/SettingLabel" android:text="Stationary trip-end (min)" />
-                <TextView style="@style/SettingHelp" android:text="Auto-trip backstop: end a trip after this many minutes stationary. 0 disables." />
-                <EditText android:id="@+id/stationaryStopMin" style="@style/IntInput" />
+                <CheckBox
+                    android:id="@+id/motionOnset"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="Fast start: detect motion to begin logging in any car (recommended)" />
 
                 <CheckBox
                     android:id="@+id/driveBySpeed"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
+                    android:layout_marginTop="6dp"
                     android:text="Use sustained GPS speed as a fallback drive trigger" />
+
+                <!-- Advanced timing: the cadence knobs most people never touch, collapsed by default -->
+                <TextView
+                    android:id="@+id/advancedToggle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="6dp"
+                    android:text="▸  Advanced timing"
+                    android:textStyle="bold"
+                    android:textColor="?attr/colorPrimary"
+                    android:clickable="true"
+                    android:focusable="true" />
+
+                <LinearLayout
+                    android:id="@+id/advancedTiming"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+
+                    <TextView style="@style/SettingLabel" android:text="Driving fix interval (sec)" />
+                    <TextView style="@style/SettingHelp" android:text="Seconds between GPS fixes while driving and moving." />
+                    <EditText android:id="@+id/intervalSec" style="@style/IntInput" />
+
+                    <TextView style="@style/SettingLabel" android:text="Idle fix interval (sec)" />
+                    <TextView style="@style/SettingHelp" android:text="Sec between fixes while sitting at a red light, so a stop doesn't flood." />
+                    <EditText android:id="@+id/idleIntervalSec" style="@style/IntInput" />
+
+                    <TextView style="@style/SettingLabel" android:text="Light tier interval (sec)" />
+                    <TextView style="@style/SettingHelp" android:text="Background pulse when you're not driving — keeps the timeline continuous, sips battery. The motion fast-start sits on top of this." />
+                    <EditText android:id="@+id/lightIntervalSec" style="@style/IntInput" />
+
+                    <TextView style="@style/SettingLabel" android:text="Light upload cadence (sec)" />
+                    <TextView style="@style/SettingHelp" android:text="How often LIGHT-tier fixes are batched up and posted to the server." />
+                    <EditText android:id="@+id/uploadIntervalSec" style="@style/IntInput" />
+
+                    <TextView style="@style/SettingLabel" android:text="Driving upload cadence (sec)" />
+                    <TextView style="@style/SettingHelp" android:text="How often DRIVING-tier fixes are flushed — short for near-real-time position on the dashboard / Auto pane." />
+                    <EditText android:id="@+id/drivingUploadIntervalSec" style="@style/IntInput" />
+
+                    <TextView style="@style/SettingLabel" android:text="Stationary trip-end (min)" />
+                    <TextView style="@style/SettingHelp" android:text="Auto-trip backstop: end a trip after this many minutes stationary. 0 disables." />
+                    <EditText android:id="@+id/stationaryStopMin" style="@style/IntInput" />
+                </LinearLayout>
 
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>

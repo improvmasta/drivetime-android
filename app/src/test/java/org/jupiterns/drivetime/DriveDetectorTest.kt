@@ -2,6 +2,8 @@ package org.jupiterns.drivetime
 
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -14,11 +16,12 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class DriveDetectorTest {
 
-    private fun settings(mode: String = Settings.MODE_AUTO, bySpeed: Boolean = true): Settings {
+    private fun settings(mode: String = Settings.MODE_AUTO, bySpeed: Boolean = true, onset: Boolean = true): Settings {
         val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
         return Settings(ctx).apply {
             trackingMode = mode
             driveBySpeed = bySpeed
+            motionOnset = onset
         }
     }
 
@@ -86,6 +89,68 @@ class DriveDetectorTest {
         val d = DriveDetector(settings(bySpeed = false))
         d.onSpeed(20f, 0L)
         d.onSpeed(20f, 60_000L)
+        assertEquals(DriveDetector.Tier.LIGHT, d.tier())
+    }
+
+    // ---- motion-onset path (device-agnostic fast start) ----
+
+    @Test fun motionDriving_promotesToDriving() {
+        val d = DriveDetector(settings())
+        assertEquals(DriveDetector.Tier.LIGHT, d.tier())
+        d.motionDriving = true
+        assertEquals(DriveDetector.Tier.DRIVING, d.tier())
+        assertEquals("motion", d.reason())
+    }
+
+    @Test fun motionDriving_outranksSpeedInReason() {
+        val d = DriveDetector(settings())
+        d.motionDriving = true
+        d.onSpeed(10f, 0L)                 // speed backstop also fires
+        assertEquals("motion", d.reason())  // cascade order: motion before speed
+    }
+
+    @Test fun forcedLight_overridesMotion() {
+        val d = DriveDetector(settings(mode = Settings.MODE_LIGHT))
+        d.motionDriving = true
+        assertEquals(DriveDetector.Tier.LIGHT, d.tier())
+    }
+
+    @Test fun confirmOnset_highDopplerIsVehicular() {
+        val d = DriveDetector(settings())
+        assertTrue(d.confirmOnset(5f, 0f, 0L))   // >= onsetSpeedMps (4)
+        assertEquals(DriveDetector.Tier.DRIVING, d.tier())
+        assertEquals("motion", d.reason())
+    }
+
+    @Test fun confirmOnset_belowWalkingFloorRejects() {
+        val d = DriveDetector(settings())
+        assertFalse(d.confirmOnset(1.0f, 0f, 0L))   // < ONSET_MIN_MPS (1.5): not moving yet
+        assertEquals(DriveDetector.Tier.LIGHT, d.tier())
+    }
+
+    @Test fun confirmOnset_ambiguousBand_smoothIsVehicle_bouncyIsNot() {
+        // 2.5 m/s is in the [1.5, 4) ambiguous band: accel RMS is the tiebreaker.
+        assertTrue("smooth ⇒ vehicle", DriveDetector(settings()).confirmOnset(2.5f, 1.0f, 0L))
+        assertFalse("bouncy ⇒ on foot", DriveDetector(settings()).confirmOnset(2.5f, 5.0f, 0L))
+    }
+
+    @Test fun confirmOnset_nullDopplerRejects() {
+        assertFalse(DriveDetector(settings()).confirmOnset(null, 0f, 0L))
+    }
+
+    @Test fun confirmOnset_disabledByMasterSwitch() {
+        val d = DriveDetector(settings(onset = false))
+        assertFalse(d.confirmOnset(20f, 0f, 0L))
+        assertEquals(DriveDetector.Tier.LIGHT, d.tier())
+    }
+
+    @Test fun motion_clearsAfterSustainedStop() {
+        val d = DriveDetector(settings())
+        assertTrue(d.confirmOnset(5f, 0f, 0L))
+        assertEquals(DriveDetector.Tier.DRIVING, d.tier())
+        d.onSpeed(0.5f, 0L)
+        assertEquals(DriveDetector.Tier.DRIVING, d.tier())   // hysteresis holds through a brief stop
+        d.onSpeed(0.5f, 200_000L)                            // past EXIT_MS (3 min)
         assertEquals(DriveDetector.Tier.LIGHT, d.tier())
     }
 }

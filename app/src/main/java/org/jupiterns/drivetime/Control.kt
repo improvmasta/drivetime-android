@@ -55,6 +55,8 @@ object Control {
         "upload_interval_sec", "driving_upload_interval_sec",
         "drive_by_speed", "stationary_stop_min",
         "auto_trip", "alerts_enabled",
+        "motion_onset", "onset_probe_interval_sec", "onset_probe_window_sec",
+        "onset_speed_mps", "onset_accel_rms",
     )
 
     /** Convenience for callers that only have an action string (Android Auto pane,
@@ -136,6 +138,11 @@ object Control {
                 settings.alertsEnabled = it
                 if (it) AlertWorker.schedule(context) else AlertWorker.cancel(context)
             }
+            "motion_onset" -> setBool(value) { settings.motionOnset = it }
+            "onset_probe_interval_sec" -> setPosInt(value) { settings.onsetProbeIntervalSec = it }
+            "onset_probe_window_sec" -> setPosInt(value) { settings.onsetProbeWindowSec = it }
+            "onset_speed_mps" -> setPosInt(value) { settings.onsetSpeedMps = it }
+            "onset_accel_rms" -> setPosInt(value, allowZero = true) { settings.onsetAccelRms = it }
             else -> false
         }
         if (applied) {

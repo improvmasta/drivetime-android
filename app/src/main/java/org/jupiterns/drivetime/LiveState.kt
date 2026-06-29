@@ -7,7 +7,8 @@ package org.jupiterns.drivetime
 object LiveState {
     @Volatile var logging = false
     @Volatile var tier: String? = null        // "DRIVING" | "LIGHT" — current sampling tier
-    @Volatile var driveReason: String? = null  // why: "car BT" | "OBD" | "speed" | "forced" | "auto"
+    @Volatile var driveReason: String? = null  // why: "car BT" | "OBD" | "motion" | "speed" | "forced" | "auto"
+    @Volatile var onsetState: String? = null   // motion-onset probe: "probing" | "confirmed" | "idle" | null
     @Volatile var speedMph: Int? = null
     @Volatile var obdConnected = false
     @Volatile var rpm: Int? = null
@@ -16,7 +17,7 @@ object LiveState {
     @Volatile var updatedAt = 0L
 
     fun clear() {
-        tier = null; driveReason = null
+        tier = null; driveReason = null; onsetState = null
         speedMph = null; obdConnected = false; rpm = null; coolantC = null; voltage = null
     }
 }

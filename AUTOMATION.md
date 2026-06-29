@@ -71,6 +71,11 @@ a key. Keys + value formats:
 | `stationary_stop_min`            | 0+                                         | Auto-trip backstop minutes             |
 | `auto_trip`                      | bool                                       | Activity-recognition auto-trip         |
 | `alerts_enabled`                 | bool                                       | Server alert polling                   |
+| `motion_onset`                   | bool                                       | Significant-motion fast-start path     |
+| `onset_probe_interval_sec`       | positive int                               | Probationary GPS cadence after a wake  |
+| `onset_probe_window_sec`         | positive int                               | Probation duration before LIGHT        |
+| `onset_speed_mps`                | positive int                               | Doppler m/s = vehicular threshold      |
+| `onset_accel_rms`                | 0+                                         | Accel on-foot threshold (×100 m/s²)    |
 
 Unknown keys log a warning to **Activity log** and are silently ignored — your
 routine can safely send a SET it's not sure the app version supports without

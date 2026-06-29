@@ -36,6 +36,14 @@ class SettingsTest {
         assertTrue("speed backstop on by default", s.driveBySpeed)
     }
 
+    @Test fun motionOnset_defaultsOnWithSaneProbeKnobs() {
+        assertTrue("motion-onset fast start on by default", s.motionOnset)
+        assertEquals("probationary GPS cadence default", 3, s.onsetProbeIntervalSec)
+        assertEquals("probation window default", 25, s.onsetProbeWindowSec)
+        assertEquals("vehicular Doppler threshold default", 4, s.onsetSpeedMps)
+        assertEquals("accel on-foot threshold default", 250, s.onsetAccelRms)
+    }
+
     @Test fun isConfigured_requiresServerAndCredentials() {
         assertFalse(s.isConfigured)
         s.serverUrl = "https://example.com"

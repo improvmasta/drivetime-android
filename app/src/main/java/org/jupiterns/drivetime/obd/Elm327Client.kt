@@ -7,6 +7,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Thin custom ELM327 layer over a Bluetooth SPP stream (no third-party lib).
@@ -41,12 +42,27 @@ class Elm327Client {
         socket = s
         input = s.inputStream
         output = s.outputStream
-        // init: reset, echo off, linefeeds off, spaces off, auto protocol
+        // init: reset, echo off, linefeeds off, spaces off
         initLog.clear()
-        for (cmd in listOf("ATZ", "ATE0", "ATL0", "ATS0", "ATSP0")) {
+        for (cmd in listOf("ATZ", "ATE0", "ATL0", "ATS0")) {
             val r = send(cmd); Thread.sleep(120)
             initLog.add("$cmd→${clean(r)}")
         }
+        // Protocol: pin ISO 15765-4 CAN 11-bit/500k (ATSP6 — ~95% of post-2008 cars) so the
+        // first OBD query skips the multi-second "SEARCHING..." auto-probe. If that car isn't
+        // protocol 6, fall back to auto (ATSP0) which searches once. A connected car answers
+        // 0100 with a "4100" header; "NO DATA"/"UNABLE TO CONNECT"/"SEARCHING" don't.
+        if (!tryProtocol("6")) tryProtocol("0")
+    }
+
+    /** Set protocol [p], then probe with 0100; true when the adapter returns a valid
+     *  response header (4100), i.e. the protocol talks to this car. */
+    private fun tryProtocol(p: String): Boolean {
+        val sp = send("ATSP$p"); Thread.sleep(80)
+        val probe = send("0100")
+        val ok = probe.uppercase().replace(Regex("[^0-9A-F]"), "").contains("4100")
+        initLog.add("ATSP$p→${clean(sp)}  0100→${clean(probe)}${if (ok) " ok" else " miss"}")
+        return ok
     }
 
     /**
@@ -54,6 +70,10 @@ class Elm327Client {
      * the secure SPP socket is silently refused. Try, in order: secure SPP → insecure
      * SPP → reflection on channel 1 (for clones that publish no SPP service record).
      * The first socket that connects wins; failed attempts are closed.
+     *
+     * The winning strategy is cached per-MAC (in-process) and tried first next time, so a
+     * reconnect doesn't pay the multi-second secure-SPP connect *timeout* that fails on every
+     * connect to a clone dongle — the single biggest cold-connect cost.
      */
     @SuppressLint("MissingPermission")
     private fun openSocket(device: BluetoothDevice): BluetoothSocket {
@@ -65,17 +85,24 @@ class Elm327Client {
                 m.invoke(device, 1) as BluetoothSocket
             },
         )
+        val mac = device.address
+        // Try the last-known-good strategy first; preserve original order for the rest.
+        val order = strategyCache[mac]?.let { c ->
+            (0 until strategies.size).sortedByDescending { it == c }
+        } ?: strategies.indices.toList()
         var last: Exception? = null
-        for (open in strategies) {
-            val sock = runCatching { open() }.getOrElse { last = it.toException(); null } ?: continue
+        for (idx in order) {
+            val sock = runCatching { strategies[idx]() }.getOrElse { last = it.toException(); null } ?: continue
             try {
                 sock.connect()
+                strategyCache[mac] = idx
                 return sock
             } catch (e: Exception) {
                 last = e
                 runCatching { sock.close() }
             }
         }
+        strategyCache.remove(mac)   // none worked — don't pin a stale hint
         throw last ?: IOException("OBD: no RFCOMM socket strategy connected")
     }
 
@@ -183,5 +210,11 @@ class Elm327Client {
 
     companion object {
         private val SPP_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+
+        /** MAC → last-known-good openSocket strategy index, so a reconnect skips the
+         *  secure-SPP timeout that fails on every connect to a clone dongle. In-process
+         *  (resets on process death); good enough since reconnects within a drive are the
+         *  hot path. */
+        private val strategyCache = ConcurrentHashMap<String, Int>()
     }
 }

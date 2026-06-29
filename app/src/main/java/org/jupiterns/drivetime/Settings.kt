@@ -71,6 +71,37 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("drive_by_speed", true)
         set(v) = prefs.edit().putBoolean("drive_by_speed", v).apply()
 
+    /** Master switch for the **motion-onset** fast path: a hardware significant-motion
+     *  trigger (near-zero battery, no pairing) wakes an instant GPS Doppler check so a
+     *  drive starts dense logging within seconds in ANY car — not just one paired over
+     *  Bluetooth. The 60 s LIGHT heartbeat stays as the backstop. */
+    var motionOnset: Boolean
+        get() = prefs.getBoolean("motion_onset", true)
+        set(v) = prefs.edit().putBoolean("motion_onset", v).apply()
+
+    /** Probationary GPS cadence (seconds) after a significant-motion trigger, so the
+     *  speed backstop has dense fixes to confirm a real start. */
+    var onsetProbeIntervalSec: Int
+        get() = prefs.getInt("onset_probe_interval_sec", 3)
+        set(v) = prefs.edit().putInt("onset_probe_interval_sec", v).apply()
+
+    /** How long (seconds) the probationary dense GPS runs before falling back to LIGHT
+     *  if no drive was confirmed. */
+    var onsetProbeWindowSec: Int
+        get() = prefs.getInt("onset_probe_window_sec", 25)
+        set(v) = prefs.edit().putInt("onset_probe_window_sec", v).apply()
+
+    /** Doppler speed (m/s) at/above which a motion-onset wake is unambiguously vehicular. */
+    var onsetSpeedMps: Int
+        get() = prefs.getInt("onset_speed_mps", 4)
+        set(v) = prefs.edit().putInt("onset_speed_mps", v).apply()
+
+    /** Accelerometer-energy RMS threshold (×100 m/s²) separating a smooth vehicle from an
+     *  on-foot bounce in the ambiguous low-speed band; below it ⇒ vehicle. */
+    var onsetAccelRms: Int
+        get() = prefs.getInt("onset_accel_rms", 250)
+        set(v) = prefs.edit().putInt("onset_accel_rms", v).apply()
+
     /** Car Bluetooth device (stereo / head unit). Its connection is the #1 "I'm
      *  driving" signal — deterministic, no activity-recognition guessing. */
     var carBtMac: String

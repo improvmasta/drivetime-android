@@ -111,6 +111,33 @@ object Permissions {
         )
     }
 
+    /** One row of the permissions checklist: what it is, whether it's granted now, and
+     *  the [Action] that fixes it when it isn't. */
+    data class Check(val label: String, val granted: Boolean, val action: Action)
+
+    /** The full set of access items that apply to *this* configuration, granted or not —
+     *  so the UI can show everything at once (and a Re-check) instead of revealing issues
+     *  one at a time. Bluetooth/activity-recognition only appear when actually needed. */
+    fun checklist(context: Context, settings: Settings): List<Check> {
+        val s = snapshot(context, settings)
+        val out = mutableListOf<Check>()
+        out += Check("Location access", s.hasFineLocation, Action.REQUEST_FOREGROUND_LOCATION)
+        out += Check("Location services on", s.hasLocationServicesOn, Action.OPEN_LOCATION_SETTINGS)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+            out += Check("Background location (\"All the time\")", s.hasBackgroundLocation,
+                Action.REQUEST_BACKGROUND_LOCATION)
+        out += Check("Battery unrestricted", s.hasBatteryExempt, Action.REQUEST_BATTERY_EXEMPT)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+            out += Check("Notifications", s.hasNotifications, Action.REQUEST_NOTIFICATIONS)
+        val btNeeded = settings.obdMac.isNotBlank() || settings.carBtMac.isNotBlank()
+        if (btNeeded && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+            out += Check("Bluetooth (car / OBD)", s.hasBluetooth, Action.REQUEST_BLUETOOTH)
+        if (settings.autoTrip)
+            out += Check("Activity recognition (auto-trip)", s.hasActivityRecognition,
+                Action.REQUEST_ACTIVITY_RECOGNITION)
+        return out
+    }
+
     /** Build the minimal permission array to request for the given Action; the
      *  caller passes this to `requestPermissions`. Empty array means "this action
      *  doesn't go through requestPermissions" (e.g. battery exemption, settings). */

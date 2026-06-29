@@ -8,7 +8,11 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.format.DateUtils
+import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
+import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
@@ -66,17 +70,17 @@ class MainActivity : AppCompatActivity() {
             if (fineGranted) maybeRequestBackgroundLocation()
             else snackBar("Location permission denied — drivetime can't log without it.")
             if (pendingStartAfterGrant && fineGranted) tryResumeStart()
-            refresh()
+            refresh(); renderPermissions()
         }
         bgLocationLauncher = registerForActivityResult(
             ActivityResultContracts.RequestMultiplePermissions()
         ) { _ ->
             if (pendingStartAfterGrant) tryResumeStart()
-            refresh()
+            refresh(); renderPermissions()
         }
         miscPermLauncher = registerForActivityResult(
             ActivityResultContracts.RequestMultiplePermissions()
-        ) { _ -> refresh() }
+        ) { _ -> refresh(); renderPermissions() }
 
         b.trackingSwitch.setOnCheckedChangeListener { _, on ->
             if (updatingSwitch) return@setOnCheckedChangeListener
@@ -93,11 +97,14 @@ class MainActivity : AppCompatActivity() {
         b.viewLog.setOnClickListener { startActivity(Intent(this, LogActivity::class.java)) }
         b.openSettings.setOnClickListener { startActivity(Intent(this, SettingsActivity::class.java)) }
         b.warningAction.setOnClickListener { warningAction?.invoke() }
+        b.permsRecheck.setOnClickListener { renderPermissions(); toast("Re-checked") }
+        renderPermissions()
     }
 
     override fun onResume() {
         super.onResume()
         ui.post(ticker)
+        renderPermissions()   // returning from a system permission screen → reflect the new state
         // Foreground = "the user is looking, ship what we have" — drains any backlog
         // immediately instead of waiting for the next tier-cadence tick.
         Thread { runCatching { uploader.flush() } }.start()
@@ -228,15 +235,20 @@ class MainActivity : AppCompatActivity() {
             else "Finish setup below first"
             return
         }
-        val (label, color) = when (LiveState.tier) {
-            "DRIVING" -> "● Driving" to R.color.status_green
-            "LIGHT" -> "● Light tracking" to R.color.status_blue
+        // A significant-motion wake is mid-probe (deciding "did the car just start?") —
+        // surface it so the device-agnostic fast start is visible, not a black box.
+        val probing = LiveState.onsetState == "probing"
+        val (label, color) = when {
+            LiveState.tier == "DRIVING" -> "● Driving" to R.color.status_green
+            LiveState.tier == "LIGHT" && probing -> "◌ Checking motion…" to R.color.status_amber
+            LiveState.tier == "LIGHT" -> "● Light tracking" to R.color.status_blue
             else -> "● Starting…" to R.color.status_amber
         }
         b.statusState.text = label
         b.statusState.setTextColor(col(color))
         val bits = mutableListOf<String>()
-        LiveState.driveReason?.let { bits.add(it) }
+        if (probing && LiveState.tier == "LIGHT") bits.add("motion onset")
+        LiveState.driveReason?.let { bits.add(it) }   // "motion" once a start is confirmed
         LiveState.speedMph?.let { bits.add("$it mph") }
         if (LiveState.updatedAt > 0) bits.add("fix ${rel(LiveState.updatedAt)}")
         b.statusDetail.text = bits.joinToString(" · ").ifEmpty { "waiting for first fix…" }
@@ -338,7 +350,51 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** The full access checklist — every applicable item with a ✓/✗ and, for the missing
+     *  ones, a tappable "Grant ›" that runs the same request flow the warning banner uses.
+     *  Rebuilt on resume, on a permission result, and on the Re-check button (not per tick,
+     *  to avoid flicker). */
+    private fun renderPermissions() {
+        val list = b.permsList
+        list.removeAllViews()
+        val missing = Permissions.checklist(this, settings).filter { !it.granted }
+        if (missing.isEmpty()) {
+            list.addView(TextView(this).apply {
+                text = "✓  All access granted"
+                setTextColor(col(R.color.status_green))
+                textSize = 14f
+                minimumHeight = dp(40)
+                gravity = Gravity.CENTER_VERTICAL
+            })
+            return
+        }
+        // Show every outstanding item at once (not one-at-a-time); each is tappable to fix.
+        for (c in missing) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                minimumHeight = dp(44)
+                isClickable = true
+                setOnClickListener { runWarningAction(c.action) }
+            }
+            row.addView(TextView(this).apply {
+                text = "✗  ${c.label}"
+                setTextColor(col(R.color.status_amber))
+                textSize = 14f
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            row.addView(TextView(this).apply {
+                text = "Grant ›"
+                setTextColor(col(R.color.status_blue))
+                textSize = 14f
+            })
+            list.addView(row)
+        }
+    }
+
     // ---- helpers ----
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     private fun col(id: Int) = ContextCompat.getColor(this, id)
 
