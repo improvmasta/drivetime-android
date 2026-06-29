@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- "dt" monogram in brand cyan (#4cc2ff). Drawn as round-cap strokes within
+     the 72x72 adaptive safe zone (content stays inside radius ~33 of center). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- d: bowl -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#4CC2FF"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M26,63 a13,13 0 1,0 26,0 a13,13 0 1,0 -26,0" />
+    <!-- d: stem -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#4CC2FF"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:pathData="M52,32 L52,76" />
+    <!-- t: stem -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#4CC2FF"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:pathData="M70,40 L70,74" />
+    <!-- t: crossbar -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#4CC2FF"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:pathData="M61,49 L80,49" />
+</vector>
