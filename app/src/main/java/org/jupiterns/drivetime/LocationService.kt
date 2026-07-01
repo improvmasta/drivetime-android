@@ -309,14 +309,21 @@ class LocationService : Service() {
      */
     private fun startObdLoop() {
         scope.launch {
+            // Consecutive "opened a socket but the adapter never answered" failures. A cheap
+            // dongle that sat powered on an already-running car (remote start) gets into this
+            // wedged state; after a few fast retries we force a cold reset (see below).
+            var wedgedStreak = 0
             while (isActive) {
                 val mac = settings.obdMac
                 if (mac.isBlank() || !shouldProbeObd()) { delay(OBD_IDLE_MS); continue }
+                var connected = false
                 try {
                     val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
                     if (adapter == null) { delay(OBD_IDLE_MS); continue }
                     val client = Elm327Client()
                     client.connect(adapter.getRemoteDevice(mac))
+                    connected = true
+                    wedgedStreak = 0
                     obd = client
                     detector.obdConnected = true
                     LiveState.obdConnected = true
@@ -346,6 +353,9 @@ class LocationService : Service() {
                     // dongle off/unpaired/out of range — log it so a real fault is visible
                     // instead of silently logging GPS without engine data.
                     EventLog.warn("OBD error: ${e.message ?: e.javaClass.simpleName}")
+                    // A failure *before* we ever connected (mute/wedged adapter) counts toward
+                    // the streak; a mid-drive drop after a good connect does not.
+                    if (!connected) wedgedStreak++
                 } finally {
                     val wasConnected = LiveState.obdConnected
                     if (wasConnected) EventLog.info("OBD disconnected")
@@ -358,8 +368,21 @@ class LocationService : Service() {
                         if (wasConnected) StateBroadcaster.emit(this@LocationService, "obd")
                     }
                 }
-                // Reconnect fast while driving, slowly otherwise.
-                delay(if (currentTier == DriveDetector.Tier.DRIVING) OBD_RETRY_DRIVE_MS else OBD_IDLE_MS)
+                // Recovery cadence. While driving we retry fast; but if the adapter keeps
+                // accepting a socket without ever answering, escalate: forget the cached
+                // socket strategy and give the dongle a quiet, fully-disconnected window so
+                // its firmware watchdog can self-reset — the closest we get to a power-cycle
+                // without touching the plug. Not driving → slow idle probe as before.
+                when {
+                    currentTier != DriveDetector.Tier.DRIVING -> delay(OBD_IDLE_MS)
+                    wedgedStreak >= OBD_WEDGE_LIMIT -> {
+                        Elm327Client.clearStrategy(mac)
+                        EventLog.warn("OBD unresponsive ×$wedgedStreak — cold reset, pausing ${OBD_COLD_PAUSE_MS / 1000}s")
+                        wedgedStreak = 0
+                        delay(OBD_COLD_PAUSE_MS)
+                    }
+                    else -> delay(OBD_RETRY_DRIVE_MS)
+                }
             }
         }
     }
@@ -547,6 +570,11 @@ class LocationService : Service() {
         // OBD probe cadence.
         private const val OBD_IDLE_MS = 120_000L      // recheck/probe interval when not driving
         private const val OBD_RETRY_DRIVE_MS = 5_000L // fast reconnect while driving
+        // After this many back-to-back "socket opened but no answer" connects while driving,
+        // force a cold reset: drop the cached socket strategy and stay fully disconnected for
+        // OBD_COLD_PAUSE_MS so a wedged clone's watchdog can reset itself.
+        private const val OBD_WEDGE_LIMIT = 3
+        private const val OBD_COLD_PAUSE_MS = 20_000L
 
         // Upload batching: flush early once this many fixes have queued since the last
         // flush, so dense driving doesn't hold more than ~a minute between periodic ticks.

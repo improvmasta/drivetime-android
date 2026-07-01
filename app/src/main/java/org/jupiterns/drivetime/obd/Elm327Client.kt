@@ -33,6 +33,12 @@ class Elm327Client {
         val dtcs: List<String> = emptyList(),
     )
 
+    /** The adapter accepted a Bluetooth socket but never answered the reset/wake handshake —
+     *  asleep or wedged (typically a clone that sat powered on an already-running car, e.g.
+     *  after a remote start). Thrown so the OBD loop can fail fast and escalate to a cold
+     *  reset instead of treating it as an ordinary transient error. */
+    class ObdUnresponsiveException(message: String) : IOException(message)
+
     private var socket: BluetoothSocket? = null
     private var input: InputStream? = null
     private var output: OutputStream? = null
@@ -57,9 +63,16 @@ class Elm327Client {
         socket = s
         input = s.inputStream
         output = s.outputStream
-        // init: reset, echo off, linefeeds off, spaces off
         initLog.clear()
-        for (cmd in listOf("ATZ", "ATE0", "ATL0", "ATS0")) {
+        // Fast handshake + wake before the real init. A healthy ELM327 answers ATZ in ~1s.
+        // When the car was started well before we reach the dongle (e.g. a remote start), a
+        // cheap clone often sits powered-but-idle until it locks up — it still accepts the
+        // Bluetooth socket but won't answer commands. [handshake] nudges it (reset/warm-start)
+        // on a SHORT timeout and bails immediately if it stays mute, so the loop can retry or
+        // cold-reset instead of grinding through ~20s of per-command timeouts every attempt.
+        if (!handshake()) throw ObdUnresponsiveException("no ELM327 response — dongle asleep or wedged")
+        // echo off, linefeeds off, spaces off
+        for (cmd in listOf("ATE0", "ATL0", "ATS0")) {
             val r = send(cmd); Thread.sleep(120)
             initLog.add("$cmd→${clean(r)}")
         }
@@ -70,6 +83,24 @@ class Elm327Client {
         if (!tryProtocol("6")) tryProtocol("0")
         discoverCapabilities()
         vin = runCatching { readVin() }.getOrNull()
+    }
+
+    /**
+     * Quick reset/wake handshake on a short timeout. Sends ATZ (full reset), a warm-start
+     * nudge, then ATZ again, returning true as soon as the adapter identifies itself
+     * ("ELM…"). A dongle that never answers here is asleep or wedged (the classic
+     * remote-start "powered but idle" lockup) — we fail fast rather than hang, so the caller
+     * retries far more often and can force a cold reset. A healthy adapter answers the first
+     * ATZ and returns immediately, so this adds no cost to a normal connect.
+     */
+    private fun handshake(): Boolean {
+        for ((i, cmd) in listOf("ATZ", "ATWS", "ATZ").withIndex()) {
+            val r = send(cmd, HANDSHAKE_TIMEOUT_MS)
+            initLog.add("$cmd→${clean(r)}")
+            if (r.uppercase().contains("ELM")) return true
+            if (i < 2) Thread.sleep(200)
+        }
+        return false
     }
 
     /**
@@ -247,17 +278,17 @@ class Elm327Client {
 
     // --- internals ---
 
-    private fun send(cmd: String): String {
+    private fun send(cmd: String, timeoutMs: Long = READ_TIMEOUT_MS): String {
         val out = output ?: return ""
         out.write((cmd + "\r").toByteArray()); out.flush()
-        return readUntilPrompt()
+        return readUntilPrompt(timeoutMs)
     }
 
-    private fun readUntilPrompt(): String {
+    private fun readUntilPrompt(timeoutMs: Long = READ_TIMEOUT_MS): String {
         val inp = input ?: return ""
         val sb = StringBuilder()
         val buf = ByteArray(128)
-        val deadline = System.currentTimeMillis() + 2000
+        val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             if (inp.available() > 0) {
                 val n = inp.read(buf)
@@ -308,6 +339,12 @@ class Elm327Client {
 
     companion object {
         private val SPP_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+
+        /** Normal per-command read timeout — a slow or absent answer times out here. */
+        private const val READ_TIMEOUT_MS = 2000L
+        /** Short timeout for the reset/wake handshake, so a mute dongle is caught in ~1.5s
+         *  (not the full command timeout) and the loop can retry / cold-reset quickly. */
+        private const val HANDSHAKE_TIMEOUT_MS = 1500L
 
         /** Poll PIDs flagged `slow` every Nth sample. At the ~1.5 s OBD loop, 20 ≈ every
          *  30 s — plenty for temps, tank level, voltages. */
@@ -373,5 +410,10 @@ class Elm327Client {
          *  (resets on process death); good enough since reconnects within a drive are the
          *  hot path. */
         private val strategyCache = ConcurrentHashMap<String, Int>()
+
+        /** Forget the cached socket strategy for [mac] so the next connect re-probes
+         *  secure → insecure → reflection from scratch. Called after repeated wedged
+         *  connects, in case the pinned strategy is the one now half-failing. */
+        fun clearStrategy(mac: String) { strategyCache.remove(mac) }
     }
 }
