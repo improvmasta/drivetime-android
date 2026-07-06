@@ -33,18 +33,27 @@
             android:name="androidx.car.app.minCarApiLevel"
             android:value="1" />
 
+        <!-- Launcher = the hybrid shell that hosts the SPA (the app *is* the web app). -->
         <activity
-            android:name=".MainActivity"
+            android:name=".WebViewActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Publishes Start/Stop/Toggle App Shortcuts for Samsung Modes & Routines -->
+            <!-- Publishes Start/Stop/Toggle App Shortcuts for Samsung Modes & Routines
+                 (they launch ControlActivity; the meta-data just has to live on the
+                 launcher activity). -->
             <meta-data
                 android:name="android.app.shortcuts"
                 android:resource="@xml/shortcuts" />
         </activity>
+
+        <!-- The native logger dashboard, reached in one tap from the shell's status pill. -->
+        <activity
+            android:name=".LoggerActivity"
+            android:exported="false"
+            android:label="Logger" />
 
         <activity
             android:name=".LogActivity"

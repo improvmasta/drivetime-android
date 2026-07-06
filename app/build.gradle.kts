@@ -74,6 +74,8 @@ dependencies {
     implementation("com.google.android.gms:play-services-location:21.3.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    // WebView hybrid shell: ServiceWorkerController + algorithmic-darkening feature checks.
+    implementation("androidx.webkit:webkit:1.11.0")
     implementation("androidx.car.app:app:1.4.0")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
 

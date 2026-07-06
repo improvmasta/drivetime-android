@@ -32,7 +32,7 @@ import java.util.concurrent.TimeUnit
  * warnings, and a setup section. Refreshes once a second while visible from
  * [LiveState] + [Uploader.health], so what you see matches what the logger is doing.
  */
-class MainActivity : AppCompatActivity() {
+class LoggerActivity : AppCompatActivity() {
 
     private lateinit var b: ActivityMainBinding
     private lateinit var settings: Settings
