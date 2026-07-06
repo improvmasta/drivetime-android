@@ -12,6 +12,9 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- Robustness: resume logging after reboot / app update -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- In-app self-update: download a newer signed APK from the server and hand it to
+         the system package installer (sideload loop, no Play Store). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Phase B: OBD over Bluetooth -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
@@ -109,6 +112,18 @@
         <receiver
             android:name=".ActivityTransitionReceiver"
             android:exported="false" />
+
+        <!-- Shares the downloaded update APK with the system installer via a content:// URI
+             (a file:// URI is illegal to hand across processes on API 24+). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <!-- Robustness: resume logging after reboot / app update -->
         <receiver

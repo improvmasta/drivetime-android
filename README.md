@@ -38,6 +38,8 @@ driven by Samsung Modes & Routines) and drivetime's `NATIVE_APP.md`.
   voltage + DTCs; merged onto each fix while Driving; also a driving signal
 - [x] **Android Auto** screen — live stats when logging; today's **leave-by** card when idle
 - [x] **Alerts** — 15-min WorkManager poll of `/api/alerts` → notifications
+- [x] **In-app updates** — checks `/dl/version.json` on foreground; a newer signed build
+  downloads + installs in place (keeps settings), no browser/sideload hunt
 - [x] **Robustness** — boot/update restart, self-healing watchdog, verify-before-delete
   queue with backoff + size cap, OEM-kill detector with manufacturer-specific
   deep links (Samsung, Xiaomi, Huawei, OnePlus, Oppo/Realme, Vivo, Asus)
@@ -153,11 +155,28 @@ unlock **Developer settings** → enable **Unknown sources**.
 
 ## Build & install
 CI builds `drivetime-debug-apk` on each push (Actions → artifact); it's also served at
-`https://drivetime.jupiterns.org/dl/drivetime.apk`. Sideload it — **updates install in
+`https://drivetime.jupiterns.org/dl/drivetime.apk`. Sideload it once — **updates install in
 place and keep your settings**, because every build is signed with one committed key
 (`app/signing/drivetime-signing.p12`, wired up in `app/build.gradle.kts`) and `versionCode`
 tracks the CI run number. *(One-time exception: the first install that moved onto this
 stable key needed an uninstall+reinstall; everything after updates over the top.)*
+
+**In-app updates (after that first sideload).** The app now updates itself
+([`Updater.kt`](app/src/main/java/org/jupiterns/drivetime/Updater.kt)): on foreground it
+reads `GET /dl/version.json` and, if its `versionCode` beats this build's
+`BuildConfig.VERSION_CODE`, offers a one-tap **Update** that downloads the APK and hands it
+to the system installer. Settings → **UPDATES** has a manual "Check for updates now" and an
+auto-check toggle. First install of a build that *has* the updater is still a manual
+sideload (bootstrap); every build after that is in-app.
+
+To publish a build so the app can see it, run the drivetime host helper — it grabs the
+latest green CI build and writes both `/dl` files (versionCode = the CI run number, so no
+manual bookkeeping):
+
+```bash
+cd /home/lindsay/drivetime && ./publish-apk.sh          # latest CI build
+./publish-apk.sh path/to/app-debug.apk 42 "note"        # or a local APK, explicit code
+```
 
 ```bash
 gradle wrapper --gradle-version 8.7   # first time (no wrapper jar committed)

@@ -147,6 +147,8 @@ class WebViewActivity : AppCompatActivity() {
             // stay authed without reloading the page.
             silentLoginAsync()
         }
+        // Offer a newer build if one's been published (throttled; silent when up to date).
+        if (settings.updatesEnabled) Updater.checkFromUi(this, interactive = false)
     }
 
     override fun onPause() { super.onPause(); ui.removeCallbacks(ticker) }

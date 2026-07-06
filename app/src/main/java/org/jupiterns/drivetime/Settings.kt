@@ -177,6 +177,18 @@ class Settings(context: Context) {
         get() = prefs.getLong("kill_acknowledged_at", 0L)
         set(v) = prefs.edit().putLong("kill_acknowledged_at", v).apply()
 
+    /** Auto-check the server for a newer APK when the app comes to the foreground
+     *  (throttled). Off = only the manual "Check for updates" button checks. */
+    var updatesEnabled: Boolean
+        get() = prefs.getBoolean("updates_enabled", true)
+        set(v) = prefs.edit().putBoolean("updates_enabled", v).apply()
+
+    /** Wall-clock (ms) of the last in-app update check, so the foreground auto-check
+     *  throttles instead of hitting the server every resume. */
+    var lastUpdateCheckAt: Long
+        get() = prefs.getLong("last_update_check_at", 0L)
+        set(v) = prefs.edit().putLong("last_update_check_at", v).apply()
+
     val ingestUrl: String
         get() = "$serverUrl/api/ingest"
 

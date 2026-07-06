@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider roots. `updates/` under getExternalFilesDir(null) holds the downloaded
+     APK the in-app updater hands to the system package installer. -->
+<paths>
+    <external-files-path name="updates" path="updates/" />
+</paths>

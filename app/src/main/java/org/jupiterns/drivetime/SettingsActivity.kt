@@ -141,6 +141,18 @@ class SettingsActivity : AppCompatActivity() {
             advancedToggle.text = if (show) "▾  Advanced timing" else "▸  Advanced timing"
         }
 
+        findViewById<TextView>(R.id.versionLabel).text =
+            "Installed version ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})"
+        findViewById<CheckBox>(R.id.updatesEnabled).apply {
+            isChecked = s.updatesEnabled
+            setOnCheckedChangeListener { _, on -> s.updatesEnabled = on }
+        }
+        findViewById<Button>(R.id.checkUpdates).setOnClickListener {
+            saveAll()   // honour a just-typed server URL before checking
+            snack("Checking for updates…")
+            Updater.checkFromUi(this, interactive = true)
+        }
+
         findViewById<Button>(R.id.exportSettings).setOnClickListener {
             saveAll()
             exportLauncher.launch("drivetime-settings.json")

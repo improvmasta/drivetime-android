@@ -35,6 +35,9 @@ android {
 
     buildFeatures {
         viewBinding = true
+        // The in-app updater compares the server's advertised versionCode against this
+        // build's own (BuildConfig.VERSION_CODE), so BuildConfig must be generated.
+        buildConfig = true
     }
 
     testOptions {

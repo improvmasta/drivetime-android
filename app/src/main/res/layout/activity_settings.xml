@@ -259,6 +259,35 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
+        <!-- In-app updates -->
+        <com.google.android.material.card.MaterialCardView
+            style="@style/SettingsSection"
+            android:layout_marginTop="12dp">
+            <LinearLayout style="@style/SettingsSectionBody">
+
+                <TextView style="@style/SectionHeader" android:text="UPDATES" />
+                <TextView style="@style/SettingHelp" android:text="The app installs newer builds itself — no browser download or file hunting. Every build is signed with the same key, so an update lands in place and keeps your settings." />
+                <TextView
+                    android:id="@+id/versionLabel"
+                    style="@style/SettingHelp"
+                    android:layout_marginTop="4dp"
+                    android:text="Installed version" />
+                <CheckBox
+                    android:id="@+id/updatesEnabled"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Check for updates automatically" />
+                <Button
+                    android:id="@+id/checkUpdates"
+                    style="?attr/materialButtonOutlinedStyle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="Check for updates now" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
         <!-- Import/export -->
         <com.google.android.material.card.MaterialCardView
             style="@style/SettingsSection"
