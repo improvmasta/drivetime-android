@@ -36,10 +36,13 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:paddingHorizontal="8dp"
-            android:paddingVertical="4dp"
+            android:paddingVertical="6dp"
+            android:drawablePadding="5dp"
+            android:gravity="center_vertical"
             android:textSize="12sp"
             android:textStyle="bold"
-            android:text="●" />
+            app:drawableStartCompat="@drawable/ic_tracking"
+            android:text="" />
     </com.google.android.material.card.MaterialCardView>
 
     <!-- Setup-needed / offline cover. Hidden while the dashboard is up. -->

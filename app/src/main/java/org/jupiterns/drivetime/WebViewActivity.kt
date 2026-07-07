@@ -860,21 +860,23 @@ class WebViewActivity : AppCompatActivity() {
     // ---- status pill ----
 
     private fun refreshPill() {
-        // Deliberately minimal so it reads as part of the SPA header, not a floating card:
-        //   • tracking off        → a dim grey dot
-        //   • tracking, not driving → a green dot (all it needs to say: "on, healthy")
-        //   • driving              → a green dot + "Driving"
+        // A GPS/location glyph tinted by state, so it reads as part of the SPA header:
+        //   • tracking off         → grey location icon, no label
+        //   • tracking, not driving → green location icon (all it needs: "on, locating")
+        //   • driving              → green location icon + "Driving"
         val on = settings.trackingMode != Settings.MODE_OFF
         val driving = LiveState.tier == "DRIVING"
-        val (label, colorRes) = when {
-            !on -> "●" to R.color.status_grey
-            driving -> "● Driving" to R.color.status_green
-            else -> "●" to R.color.status_green
-        }
+        val color = ContextCompat.getColor(this, if (on) R.color.status_green else R.color.status_grey)
         val queued = runCatching { uploader.health().queued }.getOrDefault(0)
         // Only surface a backlog when it's meaningful — a passing "1 queued" in Light is noise.
-        b.pill.text = if (driving && queued > 0) "$label · $queued" else label
-        b.pill.setTextColor(ContextCompat.getColor(this, colorRes))
+        b.pill.text = when {
+            driving && queued > 0 -> "Driving · $queued"
+            driving -> "Driving"
+            else -> ""
+        }
+        b.pill.setTextColor(color)
+        androidx.core.widget.TextViewCompat.setCompoundDrawableTintList(
+            b.pill, android.content.res.ColorStateList.valueOf(color))
     }
 
     // ---- misc ----
