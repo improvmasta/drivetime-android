@@ -2,11 +2,15 @@ package org.jupiterns.drivetime
 
 import android.annotation.SuppressLint
 import android.app.DownloadManager
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.provider.MediaStore
+import android.widget.Toast
 import android.os.Handler
 import android.os.Looper
 import android.view.View
@@ -238,6 +242,45 @@ class WebViewActivity : AppCompatActivity() {
          *  `/api/ingest`. Blank when unconfigured. */
         @JavascriptInterface
         fun authHeader(): String = if (settings.isConfigured) settings.authHeader else ""
+
+        /** Save a text file (e.g. the mileage CSV export) to the device's public Downloads.
+         *  The SPA calls this because a WebView can't download a `blob:` URL through the
+         *  DownloadManager. MediaStore on Q+, a direct Downloads write on older builds; a
+         *  toast confirms so the export is visibly *done*. Runs on a binder thread. */
+        @JavascriptInterface
+        fun saveFile(name: String, mime: String, content: String) {
+            val safe = if (name.isBlank()) "drivetime.csv" else name.substringAfterLast('/')
+            val ok = runCatching {
+                val bytes = content.toByteArray(Charsets.UTF_8)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val values = ContentValues().apply {
+                        put(MediaStore.Downloads.DISPLAY_NAME, safe)
+                        put(MediaStore.Downloads.MIME_TYPE, if (mime.isBlank()) "text/plain" else mime)
+                        put(MediaStore.Downloads.IS_PENDING, 1)
+                    }
+                    val resolver = contentResolver
+                    val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                        ?: return@runCatching false
+                    resolver.openOutputStream(uri)?.use { it.write(bytes) } ?: return@runCatching false
+                    values.clear()
+                    values.put(MediaStore.Downloads.IS_PENDING, 0)
+                    resolver.update(uri, values, null, null)
+                    true
+                } else {
+                    @Suppress("DEPRECATION")
+                    val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                    dir.mkdirs()
+                    java.io.File(dir, safe).outputStream().use { it.write(bytes) }
+                    true
+                }
+            }.getOrDefault(false)
+            ui.post {
+                Toast.makeText(this@WebViewActivity,
+                    if (ok) "Saved $safe to Downloads" else "Couldn't save $safe",
+                    Toast.LENGTH_LONG).show()
+            }
+            EventLog.info(if (ok) "Saved export: $safe" else "Export save failed: $safe")
+        }
 
         /** The logger's live snapshot (LiveState) as JSON, for the SPA's active-drive bar:
          *  whether we're driving now, the current speed, and the OBD basics. Cheap, volatile,
