@@ -200,7 +200,7 @@ class WebViewActivity : AppCompatActivity() {
 
         // The pill now drops the user into the SPA's own Settings route rather than a separate
         // native screen — the tracker settings live there as tabs.
-        b.pillCard.setOnClickListener {
+        b.pill.setOnClickListener {
             b.webview.evaluateJavascript("location.hash = '#/settings'", null)
         }
 
