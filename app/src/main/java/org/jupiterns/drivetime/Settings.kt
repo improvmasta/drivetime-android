@@ -18,9 +18,16 @@ class Settings(context: Context) {
     val hasServer: Boolean
         get() = serverUrl.isNotBlank()
 
-    /** Dashboard login — the app authenticates ingest/alerts with these via HTTP
-     *  Basic (see [authHeader]), so a new build only needs creds you remember, not
-     *  the random ingest token. */
+    /** The **device token** — the single server credential (AUTH.md). Paired once (scan the
+     *  QR on the server's dashboard, or paste the code); sent as `Bearer <token>` on every
+     *  API call. Replaces the old username/password login *and* the separate ingest token. */
+    var deviceToken: String
+        get() = prefs.getString("device_token", "") ?: ""
+        set(v) = prefs.edit().putString("device_token", v.trim()).apply()
+
+    /** Legacy dashboard login (username/password → HTTP Basic). Kept only so an app that
+     *  paired before the device-token model keeps syncing until it re-pairs (AUTH.md →
+     *  Migration). New pairings set [deviceToken] and leave these blank. */
     var username: String
         get() = prefs.getString("username", "") ?: ""
         set(v) = prefs.edit().putString("username", v.trim()).apply()
@@ -199,15 +206,23 @@ class Settings(context: Context) {
     val ingestUrl: String
         get() = "$serverUrl/api/ingest"
 
-    /** HTTP Basic header from the dashboard login — stateless per-request auth for
-     *  ingest + alerts (no token to copy, nothing to expire mid-drive). Blank when
-     *  unconfigured. */
+    /** The `Authorization` header for every server call (AUTH.md). Prefers the device
+     *  token (`Bearer <token>`); falls back to the legacy Basic login so an app that
+     *  paired before the token model keeps working until it re-pairs. Blank when neither
+     *  is set (standalone). */
     val authHeader: String
-        get() = if (username.isBlank()) "" else
-            "Basic " + Base64.encodeToString("$username:$password".toByteArray(), Base64.NO_WRAP)
+        get() = when {
+            deviceToken.isNotBlank() -> "Bearer $deviceToken"
+            username.isNotBlank() -> "Basic " +
+                Base64.encodeToString("$username:$password".toByteArray(), Base64.NO_WRAP)
+            else -> ""
+        }
 
+    /** A *usable* server is configured: a URL plus a credential (device token, or the
+     *  legacy username+password). Empty ⇒ standalone/local mode. */
     val isConfigured: Boolean
-        get() = serverUrl.isNotBlank() && username.isNotBlank() && password.isNotBlank()
+        get() = serverUrl.isNotBlank() &&
+            (deviceToken.isNotBlank() || (username.isNotBlank() && password.isNotBlank()))
 
     companion object {
         const val MODE_AUTO = "auto"

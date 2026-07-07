@@ -22,6 +22,7 @@ object SettingsExport {
         val o = JSONObject()
         o.put("schema", 1)
         o.put("server_url", s.serverUrl)
+        o.put("device_token", s.deviceToken)
         o.put("username", s.username)
         o.put("password", s.password)
         o.put("interval_sec", s.intervalSec)
@@ -56,6 +57,7 @@ object SettingsExport {
         val o = runCatching { JSONObject(text) }.getOrNull() ?: return 0
         var applied = 0
         if (o.has("server_url")) { s.serverUrl = o.optString("server_url"); applied++ }
+        if (o.has("device_token")) { s.deviceToken = o.optString("device_token"); applied++ }
         if (o.has("username")) { s.username = o.optString("username"); applied++ }
         if (o.has("password")) { s.password = o.optString("password"); applied++ }
         if (o.has("interval_sec")) { s.intervalSec = o.optInt("interval_sec", s.intervalSec); applied++ }

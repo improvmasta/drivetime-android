@@ -18,7 +18,12 @@
     <!-- Phase B: OBD over Bluetooth -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <!-- QR pairing scanner (AUTH.md). The camera is only used to scan a pairing QR; the
+         ZXing CaptureActivity requests it at runtime. Not required so the app installs on
+         camera-less devices (paste the device token instead). -->
+    <uses-permission android:name="android.permission.CAMERA" />
 
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.type.automotive" android:required="false" />
     <!-- Motion-onset fast start (significant-motion + accelerometer). Optional: the app
          falls back to the GPS speed backstop on devices without these sensors. -->

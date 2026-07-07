@@ -207,6 +207,14 @@ class WebViewActivity : AppCompatActivity() {
         @JavascriptInterface
         fun standalone(): Boolean = !settings.isConfigured
 
+        /** Open the native Tracker screen (permissions, devices, server pairing, updates)
+         *  from the SPA's Settings → "Tracking & devices" row (AUTH.md). Runs on a binder
+         *  thread, so hop to the UI thread to start the Activity. */
+        @JavascriptInterface
+        fun openTracker() {
+            ui.post { startActivity(Intent(this@WebViewActivity, LoggerActivity::class.java)) }
+        }
+
         /** The absolute base URL the SPA prepends to its `/api` calls so they reach the server
          *  cross-origin (the SPA itself is served from the bundled local origin). Blank until
          *  a server + creds are set, which keeps the app in local mode. No trailing slash. */

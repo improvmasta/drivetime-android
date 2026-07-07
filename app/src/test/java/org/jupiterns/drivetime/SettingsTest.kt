@@ -52,18 +52,28 @@ class SettingsTest {
         assertTrue(s.hasServer)
     }
 
-    @Test fun isConfigured_requiresServerAndCredentials() {
+    @Test fun isConfigured_requiresServerAndACredential() {
         assertFalse(s.isConfigured)
         s.serverUrl = "https://example.com"
-        assertFalse(s.isConfigured)
-        s.username = "u"; s.password = "p"
-        assertTrue(s.isConfigured)
+        assertFalse("URL alone is not configured", s.isConfigured)
+        s.deviceToken = "tok"
+        assertTrue("URL + device token is configured", s.isConfigured)
     }
 
-    @Test fun authHeader_isBlankUntilCredentialsAreSet() {
-        assertEquals("", s.authHeader)
+    @Test fun isConfigured_acceptsLegacyLogin() {
+        s.serverUrl = "https://example.com"
+        s.username = "u"; s.password = "p"
+        assertTrue("URL + legacy username/password still configures (migration)", s.isConfigured)
+    }
+
+    @Test fun authHeader_prefersBearerDeviceToken() {
+        assertEquals("blank when standalone", "", s.authHeader)
+        // Legacy login → Basic (kept for migration).
         s.username = "u"; s.password = "p"
         assertTrue(s.authHeader.startsWith("Basic "))
+        // A device token supersedes it → Bearer.
+        s.deviceToken = "abc123"
+        assertEquals("Bearer abc123", s.authHeader)
     }
 
     @Test fun serverUrl_stripsTrailingSlash() {

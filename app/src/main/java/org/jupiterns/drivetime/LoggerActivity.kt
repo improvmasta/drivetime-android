@@ -29,6 +29,8 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.google.android.material.snackbar.Snackbar
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -74,6 +76,8 @@ class LoggerActivity : AppCompatActivity() {
     /** Bluetooth CONNECT/SCAN, self-granted the first time a device picker opens. */
     private lateinit var btPermLauncher: ActivityResultLauncher<Array<String>>
     private var pendingBtPick: (() -> Unit)? = null
+    /** QR pairing scanner (AUTH.md): scans the server dashboard's device-token QR. */
+    private lateinit var scanLauncher: ActivityResultLauncher<ScanOptions>
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -120,6 +124,9 @@ class LoggerActivity : AppCompatActivity() {
             if (grants.values.all { it }) resume?.invoke()
             else toast("Bluetooth permission is needed to find your dongle")
         }
+        scanLauncher = registerForActivityResult(ScanContract()) { result ->
+            result?.contents?.let { applyPairing(it) }
+        }
 
         // --- live status controls ---
         b.trackingSwitch.setOnCheckedChangeListener { _, on ->
@@ -148,6 +155,7 @@ class LoggerActivity : AppCompatActivity() {
         }, onClear = { settings.obdMac = ""; settings.obdName = ""; refreshDeviceLabels() }) }
 
         // --- sync ---
+        b.scanQr.setOnClickListener { startPairScan() }
         b.testConn.setOnClickListener { testConnection() }
 
         // --- updates ---
@@ -273,9 +281,34 @@ class LoggerActivity : AppCompatActivity() {
             .show()
     }
 
+    /** Launch the QR scanner to pair with a server (AUTH.md). */
+    private fun startPairScan() {
+        saveSettingsFields()   // keep any just-typed server URL
+        val opts = ScanOptions()
+            .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+            .setPrompt("Scan the pairing QR from the server's Settings → Pair a device")
+            .setBeepEnabled(false)
+            .setOrientationLocked(false)
+        scanLauncher.launch(opts)
+    }
+
+    /** Apply a scanned or pasted pairing payload: set the server URL (if the payload
+     *  carries one) + the device token, persist, reflect in the fields, then test. */
+    private fun applyPairing(raw: String) {
+        val p = Pairing.parse(raw)
+        if (!p.hasToken) { toast("That QR didn't contain a device token"); return }
+        p.url?.let { settings.serverUrl = it }
+        settings.deviceToken = p.token!!
+        // A device token supersedes any legacy username/password login on this device.
+        settings.username = ""; settings.password = ""
+        loadSettingsFields()
+        toast("Paired — testing connection…")
+        testConnection()
+    }
+
     private fun testConnection() {
-        saveSettingsFields()   // honour just-typed server URL + credentials
-        if (!settings.isConfigured) { toast("Enter a server URL, username and password to sync"); scrollToSync(); return }
+        saveSettingsFields()   // honour just-typed server URL + token
+        if (!settings.isConfigured) { toast("Enter a server URL, then scan or paste the device token"); scrollToSync(); return }
         b.testConn.isEnabled = false
         b.connState.text = "… testing"
         b.connState.setTextColor(col(R.color.status_grey))
@@ -289,7 +322,7 @@ class LoggerActivity : AppCompatActivity() {
                 testClient.newCall(req).execute().use {
                     when {
                         it.isSuccessful -> "✓ Connection OK" to R.color.status_green
-                        it.code == 401 -> "✕ Auth failed — check username/password" to R.color.status_red
+                        it.code == 401 -> "✕ Auth failed — re-scan the pairing QR (token may have rotated)" to R.color.status_red
                         else -> "⚠ Server error: HTTP ${it.code}" to R.color.status_amber
                     }
                 }
@@ -308,8 +341,7 @@ class LoggerActivity : AppCompatActivity() {
 
     private fun loadSettingsFields() {
         b.serverUrl.setText(settings.serverUrl)
-        b.username.setText(settings.username)
-        b.password.setText(settings.password)
+        b.deviceToken.setText(settings.deviceToken)
         b.intervalSec.setText(settings.intervalSec.toString())
         b.idleIntervalSec.setText(settings.idleIntervalSec.toString())
         b.lightIntervalSec.setText(settings.lightIntervalSec.toString())
@@ -326,8 +358,7 @@ class LoggerActivity : AppCompatActivity() {
 
     private fun saveSettingsFields() {
         settings.serverUrl = b.serverUrl.text.toString()
-        settings.username = b.username.text.toString()
-        settings.password = b.password.text.toString()
+        settings.deviceToken = b.deviceToken.text.toString()
         settings.intervalSec = b.intervalSec.text.toString().toIntOrNull() ?: settings.intervalSec
         settings.idleIntervalSec = b.idleIntervalSec.text.toString().toIntOrNull() ?: settings.idleIntervalSec
         settings.lightIntervalSec = b.lightIntervalSec.text.toString().toIntOrNull() ?: settings.lightIntervalSec
@@ -417,7 +448,7 @@ class LoggerActivity : AppCompatActivity() {
                 val retry = if (h.backoffUntil > now) " · retry in ${(h.backoffUntil - now) / 1000}s" else ""
                 b.connDetail.text = "${h.queued} fix(es) waiting$retry"
                 b.connError.visibility = View.VISIBLE
-                b.connError.text = if (auth) "Uploads are being rejected. Fix your username/password below."
+                b.connError.text = if (auth) "Uploads are being rejected — re-scan the pairing QR (the token may have rotated)."
                 else "Last error: ${h.lastError}"
             }
             h.lastSuccessAt > 0 -> {
@@ -470,7 +501,7 @@ class LoggerActivity : AppCompatActivity() {
         // Standalone (no server) is a first-class state — no setup to finish. Only nag when a
         // server URL is set but its credentials are incomplete, so sync silently can't auth.
         if (settings.hasServer && !settings.isConfigured) {
-            return "Sync setup incomplete — add your username and password below." to { scrollToSync() }
+            return "Sync setup incomplete — scan the pairing QR or paste the device token below." to { scrollToSync() }
         }
         val killAt = settings.lastKillDetectedAt
         if (killAt > settings.killAcknowledgedAt &&

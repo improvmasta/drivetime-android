@@ -275,7 +275,7 @@
             <LinearLayout style="@style/SettingsSectionBody">
 
                 <TextView style="@style/SectionHeader" android:text="SYNC (OPTIONAL)" />
-                <TextView style="@style/SettingHelp" android:text="Leave blank to stay fully on-device — drives are saved on your phone. Point the app at a drivetime server to back up drives and use the hosted dashboard." />
+                <TextView style="@style/SettingHelp" android:text="Leave blank to stay fully on-device — drives are saved on your phone. To back up to a server, open its dashboard, go to Settings → Pair a device, and scan the QR (or paste the device token). A managed backup subscription is coming for those who'd rather not self-host." />
 
                 <TextView style="@style/SettingLabel" android:text="Server URL" />
                 <EditText
@@ -286,23 +286,23 @@
                     android:hint="https://drivetime.example.com"
                     android:inputType="textUri" />
 
-                <TextView style="@style/SettingLabel" android:text="Username" />
-                <EditText
-                    android:id="@+id/username"
-                    style="@style/Widget.Dt.EditText"
+                <Button
+                    android:id="@+id/scanQr"
+                    style="?attr/materialButtonOutlinedStyle"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:autofillHints="username"
-                    android:inputType="text" />
+                    android:layout_marginTop="8dp"
+                    android:text="Scan pairing QR" />
 
-                <TextView style="@style/SettingLabel" android:text="Password" />
+                <TextView style="@style/SettingLabel" android:text="Device token" />
                 <EditText
-                    android:id="@+id/password"
+                    android:id="@+id/deviceToken"
                     style="@style/Widget.Dt.EditText"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:hint="scan the QR, or paste the token"
                     android:autofillHints="password"
-                    android:inputType="textPassword" />
+                    android:inputType="textNoSuggestions" />
 
                 <TextView
                     android:id="@+id/connState"
