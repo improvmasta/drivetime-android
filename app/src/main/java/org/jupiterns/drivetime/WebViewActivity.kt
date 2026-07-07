@@ -206,7 +206,7 @@ class WebViewActivity : AppCompatActivity() {
         @JavascriptInterface
         fun standalone(): Boolean = !settings.isConfigured
 
-        /** The absolute base URL the SPA prepends to `/api/*` so its calls reach the server
+        /** The absolute base URL the SPA prepends to its `/api` calls so they reach the server
          *  cross-origin (the SPA itself is served from the bundled local origin). Blank until
          *  a server + creds are set, which keeps the app in local mode. No trailing slash. */
         @JavascriptInterface
