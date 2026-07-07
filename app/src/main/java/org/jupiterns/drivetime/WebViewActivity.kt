@@ -27,13 +27,7 @@ import androidx.webkit.ServiceWorkerControllerCompat
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewFeature
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONObject
 import org.jupiterns.drivetime.databinding.ActivityWebBinding
-import java.util.concurrent.TimeUnit
 
 /**
  * The hybrid shell — this is the launcher. It hosts the drivetime SPA (the full web
@@ -55,8 +49,6 @@ class WebViewActivity : AppCompatActivity() {
     private val ui = Handler(Looper.getMainLooper())
 
     private var loadedOnce = false
-    private var lastLoginAt = 0L
-    private var reloginInFlight = false
 
     // Serves the APK-bundled SPA (assets/web/…) at https://appassets.androidplatform.net/
     // assets/web/ — a secure origin, so the SPA's service worker + IndexedDB replica work
@@ -173,12 +165,9 @@ class WebViewActivity : AppCompatActivity() {
         // Returning to the app: drain any upload backlog, and if the dashboard never came
         // up (e.g. setup was just finished, or we were offline), try again.
         Thread { runCatching { uploader.flush() } }.start()
+        // The SPA authenticates to the server per-request with Basic auth (no cookie session
+        // to keep alive), so a resume just retries the load if it never came up.
         if (!loadedOnce) loadDashboard()
-        else if (settings.isConfigured && System.currentTimeMillis() - lastLoginAt > RELOGIN_STALE_MS) {
-            // Long-lived session: refresh the cookie in the background so live API calls
-            // stay authed without reloading the page.
-            silentLoginAsync()
-        }
         // Offer a newer build if one's been published (throttled; silent when up to date).
         if (settings.updatesEnabled) Updater.checkFromUi(this, interactive = false)
     }
@@ -188,74 +177,23 @@ class WebViewActivity : AppCompatActivity() {
     // ---- loading + auth ----
 
     private fun loadDashboard() {
-        // Standalone: no server → serve the bundled SPA directly, no login, no setup gate.
-        // The phone's own GPS feeds the on-device replica (A2); everything works offline.
-        if (!settings.hasServer) {
-            hideOverlay()
-            b.webview.loadUrl(Shell.LOCAL_URL)
-            return
-        }
-        // Server mode: a URL is set but creds are missing → the setup gate is still right.
-        if (!settings.isConfigured) { showSetup(); return }
+        // The app ALWAYS runs its own bundled SPA on a secure local origin (STANDALONE.md
+        // A1): one storage origin, usable offline from first launch. When a server is
+        // configured the SPA reaches it as a cross-origin *sync target* (absolute URL +
+        // Basic auth handed over the bridge, see [NativeBridge]) — the server is never
+        // loaded as the page. So the dashboard is identical with or without a server, and
+        // turning sync on/off never moves where the on-device replica lives.
         hideOverlay()
-        silentLoginAsync { b.webview.loadUrl(settings.serverUrl) }
+        b.webview.loadUrl(Shell.LOCAL_URL)
     }
-
-    /** Log in on a background thread (seeding the session cookie), then run [then] on the
-     *  UI thread regardless of outcome — offline still loads so the SW cache can serve. */
-    private fun silentLoginAsync(then: (() -> Unit)? = null) {
-        if (reloginInFlight) { then?.let { ui.post(it) }; return }
-        reloginInFlight = true
-        Thread {
-            val result = runCatching { silentLogin() }.getOrDefault(LoginResult.OFFLINE)
-            reloginInFlight = false
-            ui.post {
-                when (result) {
-                    LoginResult.OK -> lastLoginAt = System.currentTimeMillis()
-                    LoginResult.AUTH_FAILED ->
-                        EventLog.warn("Dashboard login rejected — check username/password in Settings")
-                    LoginResult.OFFLINE, LoginResult.ERROR -> { /* SW cache may still serve */ }
-                }
-                then?.invoke()
-            }
-        }.start()
-    }
-
-    /** POST the stored login; copy the Set-Cookie session into [CookieManager]. */
-    private fun silentLogin(): LoginResult {
-        if (!settings.isConfigured) return LoginResult.AUTH_FAILED
-        val body = JSONObject()
-            .put("username", settings.username)
-            .put("password", settings.password)
-            .toString()
-        val req = Request.Builder()
-            .url(settings.serverUrl + "/api/auth/login")
-            .post(body.toRequestBody("application/json".toMediaType()))
-            .build()
-        return runCatching {
-            httpClient.newCall(req).execute().use { resp ->
-                when {
-                    resp.isSuccessful -> {
-                        val cm = CookieManager.getInstance()
-                        resp.headers("Set-Cookie").forEach { cm.setCookie(settings.serverUrl, it) }
-                        cm.flush()
-                        LoginResult.OK
-                    }
-                    resp.code == 401 -> LoginResult.AUTH_FAILED
-                    else -> LoginResult.ERROR
-                }
-            }
-        }.getOrDefault(LoginResult.OFFLINE)
-    }
-
-    private enum class LoginResult { OK, AUTH_FAILED, OFFLINE, ERROR }
 
     // ---- JS bridge (A2/A3) ----
 
     /**
      * Exposed to the SPA as `window.DrivetimeNative`. Methods run on a WebView-owned binder
      * thread, not the UI thread — keep them cheap + thread-safe. Read-only: the SPA pulls
-     * buffered GPS fixes to segment its own drives offline, and asks whether a server is set.
+     * buffered GPS fixes to segment its own drives offline, learns whether a server is set,
+     * and — when one is — gets the absolute server URL + Basic auth to reach it cross-origin.
      */
     inner class NativeBridge {
         /** JSON array of buffered native fixes newer than [sinceTs] (epoch seconds). The SPA
@@ -263,20 +201,25 @@ class WebViewActivity : AppCompatActivity() {
         @JavascriptInterface
         fun pullFixes(sinceTs: Double): String = WebFixBuffer.pullSince(this@WebViewActivity, sinceTs)
 
-        /** True when no server is configured — the SPA boots straight into local mode. */
+        /** True when no *usable* server is configured (missing URL or creds) — the SPA runs
+         *  purely local against its replica. Flips to false only once sync can authenticate. */
         @JavascriptInterface
-        fun standalone(): Boolean = !settings.hasServer
+        fun standalone(): Boolean = !settings.isConfigured
+
+        /** The absolute base URL the SPA prepends to `/api/*` so its calls reach the server
+         *  cross-origin (the SPA itself is served from the bundled local origin). Blank until
+         *  a server + creds are set, which keeps the app in local mode. No trailing slash. */
+        @JavascriptInterface
+        fun serverUrl(): String = if (settings.isConfigured) settings.serverUrl else ""
+
+        /** The HTTP Basic header (from the dashboard login) the SPA attaches to every
+         *  cross-origin API call — the same stateless credential the uploader uses for
+         *  `/api/ingest`. Blank when unconfigured. */
+        @JavascriptInterface
+        fun authHeader(): String = if (settings.isConfigured) settings.authHeader else ""
     }
 
     // ---- overlay states ----
-
-    private fun showSetup() {
-        b.overlayTitle.text = "Finish setup"
-        b.overlayDetail.text = "Enter your server URL, username, and password to open the dashboard."
-        b.overlayBtn.text = "Open Settings"
-        b.overlayBtn.setOnClickListener { startActivity(Intent(this, SettingsActivity::class.java)) }
-        b.overlay.visibility = View.VISIBLE
-    }
 
     private fun showOffline() {
         b.overlayTitle.text = "No connection"
@@ -301,16 +244,5 @@ class WebViewActivity : AppCompatActivity() {
         val queued = runCatching { uploader.health().queued }.getOrDefault(0)
         b.pill.text = if (queued > 0) "$label · $queued queued" else label
         b.pill.setTextColor(ContextCompat.getColor(this, colorRes))
-    }
-
-    companion object {
-        /** Re-seed the session cookie if the app has been open (loaded) this long, so a
-         *  multi-day session never lets live API calls fall out of auth. */
-        private const val RELOGIN_STALE_MS = 6L * 60 * 60_000L
-
-        private val httpClient = OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(10, TimeUnit.SECONDS)
-            .build()
     }
 }
