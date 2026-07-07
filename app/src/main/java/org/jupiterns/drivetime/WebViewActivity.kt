@@ -551,11 +551,11 @@ class WebViewActivity : AppCompatActivity() {
     // ---- JS bridge ----
 
     /**
-     * Exposed to the SPA as `window.DrivetimeNative`. Read methods (get*/pull/liveState/…)
-     * run on a WebView-owned binder thread — they only read `Settings`/`Permissions`/
-     * `Uploader`/`LiveState`, all safe off the UI thread. Action methods (set*/request*/
-     * pick*/…) touch Activity UI, so they hop to the UI thread. The SPA polls getSettings()
-     * + getStatus() to reflect the result of any action.
+     * Exposed to the SPA as `window.DrivetimeNative`. Read methods (getSettings, getStatus,
+     * pullFixes, liveState, …) run on a WebView-owned binder thread — they only read
+     * `Settings`/`Permissions`/`Uploader`/`LiveState`, all safe off the UI thread. Action
+     * methods (setSetting, requestPermission, pickBluetooth, …) touch Activity UI, so they
+     * hop to the UI thread. The SPA polls getSettings + getStatus to reflect any action.
      */
     inner class NativeBridge {
         /** JSON array of buffered native fixes newer than [sinceTs] (epoch seconds). The SPA

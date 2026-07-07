@@ -128,7 +128,7 @@ object Control {
         val applied = when (key) {
             "mode" -> {
                 val mode = parseMode(value) ?: run {
-                    EventLog.warn("SET mode ignored — bad value '$value'"); return
+                    EventLog.warn("SET mode ignored — bad value '$value'"); return false
                 }
                 applyMode(context, settings, mode, source)
                 true
