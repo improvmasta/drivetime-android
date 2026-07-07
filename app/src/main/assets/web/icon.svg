@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="108" height="108" role="img" aria-label="drivetime">
+  <defs>
+    <radialGradient id="bg" cx="70%" cy="-10%" r="120%">
+      <stop offset="0" stop-color="#14202E"/>
+      <stop offset="0.6" stop-color="#0B0F15"/>
+    </radialGradient>
+    <linearGradient id="road" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#4E6683"/>
+      <stop offset="1" stop-color="#2E3E52"/>
+    </linearGradient>
+  </defs>
+  <!-- Full-bleed for "maskable": content stays within the central safe zone. -->
+  <rect width="108" height="108" fill="url(#bg)"/>
+  <!-- road: a perspective ribbon receding to the horizon -->
+  <path d="M6,104 L102,104 L59,48 L49,48 Z" fill="url(#road)"/>
+  <!-- centre line: perspective dashes in front of the D -->
+  <g fill="#EAF1F8">
+    <path d="M49,100 L59,100 L57.6,90 L50.4,90 Z"/>
+    <path d="M51,88 L57,88 L56.1,80 L51.9,80 Z"/>
+  </g>
+  <!-- D: standing on the road -->
+  <path fill="#4CC2FF" fill-rule="evenodd"
+    d="M38,34 L50,34 C62,34 70,42 70,54 C70,66 62,74 50,74 L38,74 Z
+       M45,41 L50,41 C59,41 63,46 63,54 C63,62 59,67 50,67 L45,67 Z"/>
+</svg>

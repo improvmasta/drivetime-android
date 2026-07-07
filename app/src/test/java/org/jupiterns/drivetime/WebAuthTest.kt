@@ -40,4 +40,17 @@ class WebAuthTest {
         assertFalse(WebAuth.isInAppUrl(server, "not a url"))
         assertFalse(WebAuth.isInAppUrl(server, ""))
     }
+
+    @Test fun bundledSpaOriginIsInApp() {
+        // The standalone shell serves the SPA from the appassets origin; its own navigation
+        // must stay in the WebView even though there's no server host configured.
+        assertTrue(WebAuth.isInAppUrl("", "https://appassets.androidplatform.net/assets/web/index.html"))
+        assertTrue(WebAuth.isInAppUrl(server, "https://appassets.androidplatform.net/assets/web/index.html"))
+    }
+
+    @Test fun noServerAndNonBundledIsExternal() {
+        // Local mode (no server) → only the bundled origin is in-app; everything else opens out.
+        assertFalse(WebAuth.isInAppUrl("", "https://drivetime.jupiterns.org/"))
+        assertFalse(WebAuth.isInAppUrl("", "https://www.openstreetmap.org/"))
+    }
 }

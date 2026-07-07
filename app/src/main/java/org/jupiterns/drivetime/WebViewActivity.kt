@@ -11,16 +11,21 @@ import android.os.Handler
 import android.os.Looper
 import android.view.View
 import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
 import android.webkit.URLUtil
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.webkit.ServiceWorkerClientCompat
+import androidx.webkit.ServiceWorkerControllerCompat
 import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewFeature
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -53,6 +58,15 @@ class WebViewActivity : AppCompatActivity() {
     private var lastLoginAt = 0L
     private var reloginInFlight = false
 
+    // Serves the APK-bundled SPA (assets/web/…) at https://appassets.androidplatform.net/
+    // assets/web/ — a secure origin, so the SPA's service worker + IndexedDB replica work
+    // in standalone mode (STANDALONE.md A1).
+    private val assetLoader by lazy {
+        WebViewAssetLoader.Builder()
+            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .build()
+    }
+
     private val ticker = object : Runnable {
         override fun run() { refreshPill(); ui.postDelayed(this, 1000) }
     }
@@ -77,11 +91,29 @@ class WebViewActivity : AppCompatActivity() {
             WebSettingsCompat.setAlgorithmicDarkeningAllowed(ws, true)
         }
 
+        // Bridge for the SPA: drain the phone's own GPS into the on-device replica (A2) and
+        // learn whether we're standalone (A3). Only our own SPA is ever loaded in this
+        // WebView (external links hand off to the system browser), so the surface is trusted.
+        web.addJavascriptInterface(NativeBridge(), "DrivetimeNative")
+
         val cm = CookieManager.getInstance()
         cm.setAcceptCookie(true)
         cm.setAcceptThirdPartyCookies(web, true)   // session cookie is first-party; harmless
 
+        // Route bundled-SPA requests (appassets origin) through the asset loader, for both
+        // page loads and the service worker's own precache fetches.
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_BASIC_USAGE)) {
+            ServiceWorkerControllerCompat.getInstance().setServiceWorkerClient(
+                object : ServiceWorkerClientCompat() {
+                    override fun shouldInterceptRequest(request: WebResourceRequest): WebResourceResponse? =
+                        assetLoader.shouldInterceptRequest(request.url)
+                })
+        }
+
         web.webViewClient = object : WebViewClient() {
+            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
+                assetLoader.shouldInterceptRequest(request.url)
+
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val url = request.url.toString()
                 if (WebAuth.isInAppUrl(settings.serverUrl, url)) return false
@@ -156,6 +188,14 @@ class WebViewActivity : AppCompatActivity() {
     // ---- loading + auth ----
 
     private fun loadDashboard() {
+        // Standalone: no server → serve the bundled SPA directly, no login, no setup gate.
+        // The phone's own GPS feeds the on-device replica (A2); everything works offline.
+        if (!settings.hasServer) {
+            hideOverlay()
+            b.webview.loadUrl(Shell.LOCAL_URL)
+            return
+        }
+        // Server mode: a URL is set but creds are missing → the setup gate is still right.
         if (!settings.isConfigured) { showSetup(); return }
         hideOverlay()
         silentLoginAsync { b.webview.loadUrl(settings.serverUrl) }
@@ -209,6 +249,24 @@ class WebViewActivity : AppCompatActivity() {
     }
 
     private enum class LoginResult { OK, AUTH_FAILED, OFFLINE, ERROR }
+
+    // ---- JS bridge (A2/A3) ----
+
+    /**
+     * Exposed to the SPA as `window.DrivetimeNative`. Methods run on a WebView-owned binder
+     * thread, not the UI thread — keep them cheap + thread-safe. Read-only: the SPA pulls
+     * buffered GPS fixes to segment its own drives offline, and asks whether a server is set.
+     */
+    inner class NativeBridge {
+        /** JSON array of buffered native fixes newer than [sinceTs] (epoch seconds). The SPA
+         *  feeds these to `appendFixes` and advances its own cursor; idempotent on `ts`. */
+        @JavascriptInterface
+        fun pullFixes(sinceTs: Double): String = WebFixBuffer.pullSince(this@WebViewActivity, sinceTs)
+
+        /** True when no server is configured — the SPA boots straight into local mode. */
+        @JavascriptInterface
+        fun standalone(): Boolean = !settings.hasServer
+    }
 
     // ---- overlay states ----
 

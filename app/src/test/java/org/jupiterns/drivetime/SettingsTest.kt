@@ -44,6 +44,14 @@ class SettingsTest {
         assertEquals("accel on-foot threshold default", 250, s.onsetAccelRms)
     }
 
+    @Test fun serverUrl_defaultsEmptyForLocalFirst() {
+        // Fresh install → no server → standalone/local mode (STANDALONE.md A3).
+        assertEquals("", s.serverUrl)
+        assertFalse("no server configured by default", s.hasServer)
+        s.serverUrl = "https://example.com"
+        assertTrue(s.hasServer)
+    }
+
     @Test fun isConfigured_requiresServerAndCredentials() {
         assertFalse(s.isConfigured)
         s.serverUrl = "https://example.com"

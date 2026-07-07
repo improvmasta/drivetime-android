@@ -243,6 +243,7 @@ class LocationService : Service() {
     }
 
     private fun handleFix(loc: Location) {
+        val obd = if (currentTier == DriveDetector.Tier.DRIVING) latestObd else null
         uploader.enqueue(
             lat = loc.latitude,
             lon = loc.longitude,
@@ -250,7 +251,14 @@ class LocationService : Service() {
             speedMps = if (loc.hasSpeed()) loc.speed else null,
             accuracyM = if (loc.hasAccuracy()) loc.accuracy else null,
             courseDeg = if (loc.hasBearing()) loc.bearing else null,
-            obd = if (currentTier == DriveDetector.Tier.DRIVING) latestObd else null
+            obd = obd
+        )
+        // Also feed the phone's own GPS to the on-device SPA replica (STANDALONE.md A2), so
+        // drives + mileage work with no server. The SPA drains this via the DrivetimeNative
+        // bridge; idempotent on `ts`, independent of upload.
+        WebFixBuffer.append(
+            this, loc.latitude, loc.longitude, loc.time / 1000,
+            if (loc.hasSpeed()) loc.speed else null, obd
         )
         LiveState.logging = true
         LiveState.speedMph = if (loc.hasSpeed()) Math.round(loc.speed * 2.2369362f) else null

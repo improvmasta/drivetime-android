@@ -7,9 +7,16 @@ import android.util.Base64
 class Settings(context: Context) {
     private val prefs = context.getSharedPreferences("drivetime", Context.MODE_PRIVATE)
 
+    /** Server URL. **Empty by default → standalone/local mode** (STANDALONE.md A3): a fresh
+     *  install runs entirely on-device against the bundled SPA + replica, no server required.
+     *  Setting a URL opts into server sync + the hosted dashboard. */
     var serverUrl: String
-        get() = prefs.getString("server_url", "https://drivetime.jupiterns.org") ?: ""
+        get() = prefs.getString("server_url", "") ?: ""
         set(v) = prefs.edit().putString("server_url", v.trimEnd('/')).apply()
+
+    /** True when a server is configured (server mode); false = standalone/local mode. */
+    val hasServer: Boolean
+        get() = serverUrl.isNotBlank()
 
     /** Dashboard login — the app authenticates ingest/alerts with these via HTTP
      *  Basic (see [authHeader]), so a new build only needs creds you remember, not

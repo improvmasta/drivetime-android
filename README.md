@@ -23,6 +23,16 @@ driven by Samsung Modes & Routines) and drivetime's `NATIVE_APP.md`.
   heartbeat stays as the backstop.
 - **Durable, batched upload.** Every fix is written to an on-disk queue first, then
   POSTed in batches; a crash, kill, or dead-zone loses nothing.
+- **Standalone by default (no server needed).** With no server URL set, the app runs the
+  full drivetime SPA **bundled inside the APK**, served over a secure origin via
+  `WebViewAssetLoader` ([`Shell`](app/src/main/java/org/jupiterns/drivetime/Shell.kt)) — no
+  login. The phone's own GPS feeds the SPA's on-device replica (a bounded
+  [`WebFixBuffer`](app/src/main/java/org/jupiterns/drivetime/WebFixBuffer.kt) drained via the
+  `DrivetimeNative` JS bridge), so drives + mileage work entirely on-device. Set a server URL
+  to opt into hosted sync. See drivetime's `STANDALONE.md`.
+  - The bundled web lives in `app/src/main/assets/web/` — a committed snapshot. Refresh it
+    with drivetime's `./sync-web-to-android.sh` (builds the SPA with `base=/assets/web/`)
+    before shipping an APK when the frontend changed.
 - **Robust.** Resumes after reboot/app-update; a watchdog relaunches the service if
   the OS kills it.
 
