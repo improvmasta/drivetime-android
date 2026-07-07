@@ -74,8 +74,9 @@
         <item name="android:paddingBottom">4dp</item>
     </style>
 
-    <!-- Boxed text fields (the SPA .dt-input look). -->
-    <style name="Widget.Dt.EditText">
+    <!-- Boxed text fields (the SPA .dt-input look). Explicit parent so aapt doesn't treat
+         the dotted name as an implicit parent-by-name ("Widget.Dt"). -->
+    <style name="Widget.Dt.EditText" parent="Widget.AppCompat.EditText">
         <item name="android:background">@drawable/bg_dt_input</item>
         <item name="android:textColor">@color/dt_text</item>
         <item name="android:textColorHint">@color/dt_text_mut</item>
