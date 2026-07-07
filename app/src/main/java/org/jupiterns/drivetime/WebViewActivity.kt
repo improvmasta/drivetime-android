@@ -27,6 +27,7 @@ import androidx.webkit.ServiceWorkerControllerCompat
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewFeature
+import org.json.JSONObject
 import org.jupiterns.drivetime.databinding.ActivityWebBinding
 
 /**
@@ -217,6 +218,27 @@ class WebViewActivity : AppCompatActivity() {
          *  `/api/ingest`. Blank when unconfigured. */
         @JavascriptInterface
         fun authHeader(): String = if (settings.isConfigured) settings.authHeader else ""
+
+        /** The logger's live snapshot (LiveState) as JSON, for the SPA's active-drive bar:
+         *  whether we're driving now, the current speed, and the OBD basics. Cheap, volatile,
+         *  same-process read; the SPA polls it every few seconds and computes elapsed/distance
+         *  itself from the buffered fixes. `{}` if anything goes sideways. */
+        @JavascriptInterface
+        fun liveState(): String = runCatching {
+            val s = LiveState
+            JSONObject()
+                .put("logging", s.logging)
+                .put("tier", s.tier ?: JSONObject.NULL)
+                .put("driving", s.tier == "DRIVING")
+                .put("reason", s.driveReason ?: JSONObject.NULL)
+                .put("speed_mph", s.speedMph ?: JSONObject.NULL)
+                .put("obd_connected", s.obdConnected)
+                .put("rpm", s.rpm ?: JSONObject.NULL)
+                .put("coolant_c", s.coolantC ?: JSONObject.NULL)
+                .put("voltage", s.voltage ?: JSONObject.NULL)
+                .put("updated_at", s.updatedAt)
+                .toString()
+        }.getOrDefault("{}")
     }
 
     // ---- overlay states ----
