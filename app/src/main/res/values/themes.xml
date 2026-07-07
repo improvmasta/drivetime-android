@@ -1,14 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Drivetime" parent="Theme.Material3.DayNight.NoActionBar" />
+    <!-- Palette wired to the SPA tokens (@color/dt_* resolve light/dark via DayNight), so
+         the native Tracker chrome matches the WebView dashboard it floats over. -->
+    <style name="Theme.Drivetime" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/dt_accent</item>
+        <item name="colorOnPrimary">@color/dt_accent_contrast</item>
+        <item name="colorPrimaryContainer">@color/dt_accent</item>
+        <item name="colorOnPrimaryContainer">@color/dt_accent_contrast</item>
+        <item name="android:colorBackground">@color/dt_bg</item>
+        <item name="android:windowBackground">@color/dt_bg</item>
+        <item name="colorSurface">@color/dt_surface_1</item>
+        <item name="colorSurfaceVariant">@color/dt_surface_2</item>
+        <item name="colorOnSurface">@color/dt_text</item>
+        <item name="colorOnSurfaceVariant">@color/dt_text_dim</item>
+        <item name="colorOutline">@color/dt_border_strong</item>
+        <item name="colorOutlineVariant">@color/dt_border</item>
+        <item name="android:textColorPrimary">@color/dt_text</item>
+        <item name="android:textColorSecondary">@color/dt_text_dim</item>
+        <item name="android:textColorHint">@color/dt_text_mut</item>
+        <!-- Secondary buttons: rounded to --r-sm (10dp), hairline border, neutral text —
+             the SPA's default button, not Material's pill. -->
+        <item name="materialButtonOutlinedStyle">@style/Widget.Dt.Button.Outlined</item>
+    </style>
 
-    <!-- Settings screen building blocks: keeps cards / labels / inputs consistent
-         without repeating attributes per row. -->
+    <style name="Widget.Dt.Button.Outlined" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="cornerRadius">10dp</item>
+        <item name="strokeColor">@color/dt_border</item>
+        <item name="android:textColor">@color/dt_text</item>
+    </style>
+
+    <!-- Section card = the SPA card: flat (no elevation), 1dp hairline border, rounded
+         to --r-lg (18dp), on surface-1. -->
     <style name="SettingsSection">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
-        <item name="cardCornerRadius">16dp</item>
-        <item name="cardElevation">2dp</item>
+        <item name="cardCornerRadius">18dp</item>
+        <item name="cardElevation">0dp</item>
+        <item name="strokeColor">@color/dt_border</item>
+        <item name="strokeWidth">1dp</item>
+        <item name="cardBackgroundColor">@color/dt_surface_1</item>
     </style>
     <style name="SettingsSectionBody">
         <item name="android:layout_width">match_parent</item>
@@ -16,12 +46,16 @@
         <item name="android:orientation">vertical</item>
         <item name="android:padding">16dp</item>
     </style>
+
+    <!-- Eyebrow / overline label — small caps, letter-spaced, secondary tier (the SPA
+         .eyebrow). Never fainter than the data it heads. -->
     <style name="SectionHeader">
         <item name="android:layout_width">wrap_content</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:textSize">12sp</item>
         <item name="android:textStyle">bold</item>
-        <item name="android:alpha">0.6</item>
+        <item name="android:textColor">@color/dt_text_dim</item>
+        <item name="android:letterSpacing">0.06</item>
         <item name="android:paddingBottom">8dp</item>
     </style>
     <style name="SettingLabel">
@@ -29,16 +63,30 @@
         <item name="android:layout_height">wrap_content</item>
         <item name="android:textSize">14sp</item>
         <item name="android:textStyle">bold</item>
+        <item name="android:textColor">@color/dt_text</item>
         <item name="android:paddingTop">10dp</item>
     </style>
     <style name="SettingHelp">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:textSize">12sp</item>
-        <item name="android:alpha">0.7</item>
+        <item name="android:textColor">@color/dt_text_mut</item>
         <item name="android:paddingBottom">4dp</item>
     </style>
-    <style name="IntInput">
+
+    <!-- Boxed text fields (the SPA .dt-input look). -->
+    <style name="Widget.Dt.EditText">
+        <item name="android:background">@drawable/bg_dt_input</item>
+        <item name="android:textColor">@color/dt_text</item>
+        <item name="android:textColorHint">@color/dt_text_mut</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:paddingLeft">11dp</item>
+        <item name="android:paddingRight">11dp</item>
+        <item name="android:paddingTop">9dp</item>
+        <item name="android:paddingBottom">9dp</item>
+        <item name="android:layout_marginTop">2dp</item>
+    </style>
+    <style name="IntInput" parent="Widget.Dt.EditText">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:inputType">number</item>

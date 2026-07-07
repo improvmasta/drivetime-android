@@ -215,7 +215,10 @@ object Control {
             StateBroadcaster.emit(context, source)
             return
         }
-        if (!settings.isConfigured) return
+        // No server gate: tracking is server-optional (STANDALONE.md). The phone logs to its
+        // own on-device buffer/replica (WebFixBuffer) and segments its own drives with no
+        // server at all; the uploader simply no-ops until one is configured. So a START must
+        // always start the service — standalone is a first-class mode, not an unfinished setup.
         // Record desired state + arm the watchdog before starting, so logging resumes
         // even if this background FGS-start is throttled. The (re)start re-applies the
         // tier the detector now resolves, so a forced mode takes effect immediately.

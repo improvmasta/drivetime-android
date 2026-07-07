@@ -31,7 +31,9 @@ class BootReceiver : BroadcastReceiver() {
         }
 
         val s = Settings(context)
-        if (s.loggingEnabled && s.isConfigured) {
+        // Resume whenever the user meant logging to be on — server-optional (STANDALONE.md),
+        // so a standalone (no-server) logger must survive a reboot/update just the same.
+        if (s.loggingEnabled) {
             Watchdog.schedule(context)   // backstop if the direct start below is refused
             s.lastCommandSource = "boot"
             try {

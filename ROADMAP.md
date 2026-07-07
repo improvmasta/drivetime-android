@@ -137,7 +137,7 @@ a single routine:
 ---
 
 ## Pillar 5 — Settings UX *(the primary surface — everything the API touches lives here)*
-- [built] **`SettingsActivity`** — sectioned: Connection · Tracking · OBD · Automation · Notifications · Battery · Backup, with per-row help and a Test connection button. Every routine-controllable knob (`Control.SET_KEYS`) is editable.
+- [built] **One native Tracker screen** (`LoggerActivity`) — live status + all setup in a single scroll, reached in one tap from the shell's status pill (the old separate `SettingsActivity` is folded in). Ordered by how often it's touched: Status · Access & battery · Devices · **Sync (optional)** · Updates · **Advanced** (Drive-detection · Timing · Automation · Notifications, collapsed) · Backup — per-row help, a Test connection button, edits auto-save on leave. Every routine-controllable knob (`Control.SET_KEYS`) is editable. Sync is genuinely optional: tracking runs standalone with no server (STANDALONE.md).
 - [built] **Automation cheat-sheet** (`AutomationHelp`) — shown verbatim in Settings → Automation; a unit test (`AutomationHelpTest`) keeps it in sync with `Control.SET_KEYS` and `StateBroadcaster.ACTION_STATE_CHANGED`.
 - [built] **Import / Export settings as JSON** (`SettingsExport`) — system file pickers; keys match the routine API so an exported file doubles as a routine preset.
 - [built] All previously defaults-only knobs (`idleIntervalSec`, `lightIntervalSec`, `uploadIntervalSec`, `drivingUploadIntervalSec`, `stationaryStopMin`, `driveBySpeed`, `controlToken`) now surface as editable rows.

@@ -1,8 +1,16 @@
 package org.jupiterns.drivetime
 
 import android.Manifest
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothManager
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -11,6 +19,8 @@ import android.text.format.DateUtils
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ArrayAdapter
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.result.ActivityResultLauncher
@@ -27,10 +37,13 @@ import org.jupiterns.drivetime.databinding.ActivityMainBinding
 import java.util.concurrent.TimeUnit
 
 /**
- * Live dashboard: a single Tracking switch (the one thing you flip), a glanceable
- * status line, a colour-coded connection card, optional OBD vitals, actionable
- * warnings, and a setup section. Refreshes once a second while visible from
- * [LiveState] + [Uploader.health], so what you see matches what the logger is doing.
+ * The single native Tracker screen — the old Logger dashboard and Settings screen
+ * merged into one place, reached in one tap from the shell's status pill. It leads
+ * with live status (the Tracking switch + what the logger is doing right now) and
+ * flows down through the setup you touch less often: access/battery, devices, an
+ * *optional* sync server, in-app updates, an Advanced fold (timing / automation /
+ * notifications), and backup. The top cards refresh once a second from [LiveState] +
+ * [Uploader.health]; edits auto-save on leave (onPause), matching a routine's SET.
  */
 class LoggerActivity : AppCompatActivity() {
 
@@ -55,6 +68,12 @@ class LoggerActivity : AppCompatActivity() {
     private lateinit var bgLocationLauncher: ActivityResultLauncher<Array<String>>
     /** Notifications / Bluetooth / activity-recognition — small one-shot prompts. */
     private lateinit var miscPermLauncher: ActivityResultLauncher<Array<String>>
+    /** Backup export/import via the system file pickers. */
+    private lateinit var exportLauncher: ActivityResultLauncher<String>
+    private lateinit var importLauncher: ActivityResultLauncher<Array<String>>
+    /** Bluetooth CONNECT/SCAN, self-granted the first time a device picker opens. */
+    private lateinit var btPermLauncher: ActivityResultLauncher<Array<String>>
+    private var pendingBtPick: (() -> Unit)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,6 +81,13 @@ class LoggerActivity : AppCompatActivity() {
         b = ActivityMainBinding.inflate(layoutInflater)
         setContentView(b.root)
         settings = Settings(this)
+
+        // Load persisted values into the fields BEFORE attaching checkbox listeners, so
+        // seeding a checkbox doesn't fire its onCheckedChange (scheduling workers etc.).
+        loadSettingsFields()
+        b.cheatSheet.text = AutomationHelp.cheatSheet()
+        b.versionLabel.text =
+            "Installed version ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})"
 
         fgLocationLauncher = registerForActivityResult(
             ActivityResultContracts.RequestMultiplePermissions()
@@ -81,23 +107,83 @@ class LoggerActivity : AppCompatActivity() {
         miscPermLauncher = registerForActivityResult(
             ActivityResultContracts.RequestMultiplePermissions()
         ) { _ -> refresh(); renderPermissions() }
+        exportLauncher = registerForActivityResult(
+            ActivityResultContracts.CreateDocument("application/json")
+        ) { uri -> uri?.let { exportTo(it) } }
+        importLauncher = registerForActivityResult(
+            ActivityResultContracts.OpenDocument()
+        ) { uri -> uri?.let { importFrom(it) } }
+        btPermLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { grants ->
+            val resume = pendingBtPick; pendingBtPick = null
+            if (grants.values.all { it }) resume?.invoke()
+            else toast("Bluetooth permission is needed to find your dongle")
+        }
 
+        // --- live status controls ---
         b.trackingSwitch.setOnCheckedChangeListener { _, on ->
             if (updatingSwitch) return@setOnCheckedChangeListener
             if (on) startTracking()
             else { Control.apply(this, Control.ACTION_STOP, "user"); toast("Tracking off") }
             refresh()
         }
-
         b.modeAuto.setOnClickListener { forceMode(Control.ACTION_MODE_AUTO, "Auto") }
         b.modeDriving.setOnClickListener { forceMode(Control.ACTION_MODE_DRIVING, "Driving (forced)") }
         b.modeEco.setOnClickListener { forceMode(Control.ACTION_MODE_ECO, "Eco (light only)") }
-
-        b.testConn.setOnClickListener { testConnection() }
-        b.viewLog.setOnClickListener { startActivity(Intent(this, LogActivity::class.java)) }
-        b.openSettings.setOnClickListener { startActivity(Intent(this, SettingsActivity::class.java)) }
         b.warningAction.setOnClickListener { warningAction?.invoke() }
         b.permsRecheck.setOnClickListener { renderPermissions(); toast("Re-checked") }
+        b.viewLog.setOnClickListener { startActivity(Intent(this, LogActivity::class.java)) }
+
+        // --- access & battery ---
+        b.batteryExempt.setOnClickListener { Battery.requestExemption(this) }
+        b.openOemPage.setOnClickListener { OemBatteryLinks.openProtectedAppsPage(this) }
+
+        // --- devices ---
+        b.carBt.setOnClickListener { pickBt("Select car Bluetooth", onPick = { mac, name ->
+            settings.carBtMac = mac; settings.carBtName = name; refreshDeviceLabels()
+        }, onClear = { settings.carBtMac = ""; settings.carBtName = ""; refreshDeviceLabels() }) }
+        b.obdDevice.setOnClickListener { pickBt("Select OBD dongle", onPick = { mac, name ->
+            settings.obdMac = mac; settings.obdName = name; refreshDeviceLabels()
+        }, onClear = { settings.obdMac = ""; settings.obdName = ""; refreshDeviceLabels() }) }
+
+        // --- sync ---
+        b.testConn.setOnClickListener { testConnection() }
+
+        // --- updates ---
+        b.updatesEnabled.isChecked = settings.updatesEnabled
+        b.updatesEnabled.setOnCheckedChangeListener { _, on -> settings.updatesEnabled = on }
+        b.checkUpdates.setOnClickListener {
+            saveSettingsFields()   // honour a just-typed server URL before checking
+            toast("Checking for updates…")
+            Updater.checkFromUi(this, interactive = true)
+        }
+
+        // --- advanced (collapsed by default) ---
+        b.advancedToggle.setOnClickListener {
+            val show = b.advancedBody.visibility != View.VISIBLE
+            b.advancedBody.visibility = if (show) View.VISIBLE else View.GONE
+            b.advancedToggle.text = if (show) "▾  Advanced" else "▸  Advanced"
+        }
+        b.alerts.setOnCheckedChangeListener { _, on ->
+            settings.alertsEnabled = on
+            if (on) AlertWorker.schedule(this) else AlertWorker.cancel(this)
+        }
+        b.autoTrip.setOnCheckedChangeListener { _, on ->
+            settings.autoTrip = on
+            if (on) runCatching { TripDetector.enable(this) }
+            else runCatching { TripDetector.disable(this) }
+        }
+
+        // --- backup ---
+        b.exportSettings.setOnClickListener {
+            saveSettingsFields()
+            exportLauncher.launch("drivetime-settings.json")
+        }
+        b.importSettings.setOnClickListener {
+            importLauncher.launch(arrayOf("application/json", "*/*"))
+        }
+
         renderPermissions()
     }
 
@@ -105,20 +191,25 @@ class LoggerActivity : AppCompatActivity() {
         super.onResume()
         ui.post(ticker)
         renderPermissions()   // returning from a system permission screen → reflect the new state
+        refreshBattery()
         // Foreground = "the user is looking, ship what we have" — drains any backlog
         // immediately instead of waiting for the next tier-cadence tick.
         Thread { runCatching { uploader.flush() } }.start()
     }
-    override fun onPause() { super.onPause(); ui.removeCallbacks(ticker) }
+
+    // Auto-save on leave so edits are never silently lost by pressing Back. Device pickers
+    // and the alerts/auto-trip/updates toggles already persist instantly on tap.
+    override fun onPause() {
+        super.onPause()
+        ui.removeCallbacks(ticker)
+        saveSettingsFields()
+    }
 
     // ---- actions ----
 
     private fun startTracking() {
-        if (!settings.isConfigured) {
-            toast("Enter server URL, username + password in Settings")
-            scrollToSetup()
-            return
-        }
+        // No server gate — tracking is server-optional (STANDALONE.md). A fresh install with
+        // no server logs to the phone and segments its own drives; sync is a later opt-in.
         // Two-step flow: if fine-location is missing, kick that off and remember we
         // wanted to start so we can resume after the rationale flow completes.
         val snap = Permissions.snapshot(this, settings)
@@ -139,7 +230,6 @@ class LoggerActivity : AppCompatActivity() {
     }
 
     private fun forceMode(action: String, label: String) {
-        if (!settings.isConfigured) { toast("Finish setup first"); scrollToSetup(); return }
         if (!Permissions.snapshot(this, settings).hasFineLocation) {
             fgLocationLauncher.launch(Permissions.requestArgsFor(Permissions.Action.REQUEST_FOREGROUND_LOCATION))
             return
@@ -184,7 +274,8 @@ class LoggerActivity : AppCompatActivity() {
     }
 
     private fun testConnection() {
-        if (!settings.isConfigured) { toast("Open Settings → enter server + login"); scrollToSetup(); return }
+        saveSettingsFields()   // honour just-typed server URL + credentials
+        if (!settings.isConfigured) { toast("Enter a server URL, username and password to sync"); scrollToSync(); return }
         b.testConn.isEnabled = false
         b.connState.text = "… testing"
         b.connState.setTextColor(col(R.color.status_grey))
@@ -213,6 +304,57 @@ class LoggerActivity : AppCompatActivity() {
         }.start()
     }
 
+    // ---- settings load/save ----
+
+    private fun loadSettingsFields() {
+        b.serverUrl.setText(settings.serverUrl)
+        b.username.setText(settings.username)
+        b.password.setText(settings.password)
+        b.intervalSec.setText(settings.intervalSec.toString())
+        b.idleIntervalSec.setText(settings.idleIntervalSec.toString())
+        b.lightIntervalSec.setText(settings.lightIntervalSec.toString())
+        b.uploadIntervalSec.setText(settings.uploadIntervalSec.toString())
+        b.drivingUploadIntervalSec.setText(settings.drivingUploadIntervalSec.toString())
+        b.stationaryStopMin.setText(settings.stationaryStopMin.toString())
+        b.driveBySpeed.isChecked = settings.driveBySpeed
+        b.motionOnset.isChecked = settings.motionOnset
+        b.autoTrip.isChecked = settings.autoTrip
+        b.controlToken.setText(settings.controlToken)
+        b.alerts.isChecked = settings.alertsEnabled
+        refreshDeviceLabels()
+    }
+
+    private fun saveSettingsFields() {
+        settings.serverUrl = b.serverUrl.text.toString()
+        settings.username = b.username.text.toString()
+        settings.password = b.password.text.toString()
+        settings.intervalSec = b.intervalSec.text.toString().toIntOrNull() ?: settings.intervalSec
+        settings.idleIntervalSec = b.idleIntervalSec.text.toString().toIntOrNull() ?: settings.idleIntervalSec
+        settings.lightIntervalSec = b.lightIntervalSec.text.toString().toIntOrNull() ?: settings.lightIntervalSec
+        settings.uploadIntervalSec = b.uploadIntervalSec.text.toString().toIntOrNull() ?: settings.uploadIntervalSec
+        settings.drivingUploadIntervalSec = b.drivingUploadIntervalSec.text.toString().toIntOrNull() ?: settings.drivingUploadIntervalSec
+        settings.stationaryStopMin = b.stationaryStopMin.text.toString().toIntOrNull() ?: settings.stationaryStopMin
+        settings.driveBySpeed = b.driveBySpeed.isChecked
+        settings.motionOnset = b.motionOnset.isChecked
+        settings.autoTrip = b.autoTrip.isChecked
+        settings.controlToken = b.controlToken.text.toString()
+        settings.alertsEnabled = b.alerts.isChecked
+    }
+
+    private fun refreshDeviceLabels() {
+        b.carBt.text = "Car Bluetooth: " + settings.carBtName.ifBlank { "none" }
+        b.obdDevice.text = "OBD dongle: " + settings.obdName.ifBlank { "none" }
+    }
+
+    private fun refreshBattery() {
+        val exempt = Battery.isExempt(this)
+        val help = OemBatteryLinks.help()
+        b.batteryState.text = if (exempt) "● Battery exemption granted" else "○ Battery exemption not granted"
+        b.batteryState.setTextColor(col(if (exempt) R.color.status_green else R.color.status_amber))
+        b.batteryAdvice.text = help.advice
+        b.openOemPage.text = help.label
+    }
+
     // ---- live refresh ----
 
     private fun refresh() {
@@ -231,8 +373,9 @@ class LoggerActivity : AppCompatActivity() {
         if (!on) {
             b.statusState.text = "○ Tracking off"
             b.statusState.setTextColor(col(R.color.status_grey))
-            b.statusDetail.text = if (settings.isConfigured) "Ready — turn on to start logging"
-            else "Finish setup below first"
+            // Server-optional (STANDALONE.md): the phone tracks and saves drives on its own,
+            // so "off" is always just "ready to turn on", never "finish setup first".
+            b.statusDetail.text = "Ready — turn on to start logging"
             return
         }
         // A significant-motion wake is mid-probe (deciding "did the car just start?") —
@@ -255,6 +398,15 @@ class LoggerActivity : AppCompatActivity() {
     }
 
     private fun refreshConnection() {
+        // No server configured → standalone/local mode: there's nothing to connect to, and
+        // that's fine — drives are saved on the phone. Say so instead of "not connected yet".
+        if (!settings.hasServer) {
+            b.connState.text = "◌ Standalone"
+            b.connState.setTextColor(col(R.color.status_grey))
+            b.connDetail.text = "No server — drives are saved on your phone."
+            b.connError.visibility = View.GONE
+            return
+        }
         val h = uploader.health()
         val now = System.currentTimeMillis()
         when {
@@ -265,7 +417,7 @@ class LoggerActivity : AppCompatActivity() {
                 val retry = if (h.backoffUntil > now) " · retry in ${(h.backoffUntil - now) / 1000}s" else ""
                 b.connDetail.text = "${h.queued} fix(es) waiting$retry"
                 b.connError.visibility = View.VISIBLE
-                b.connError.text = if (auth) "Uploads are being rejected. Fix your username/password in Settings."
+                b.connError.text = if (auth) "Uploads are being rejected. Fix your username/password below."
                 else "Last error: ${h.lastError}"
             }
             h.lastSuccessAt > 0 -> {
@@ -312,11 +464,13 @@ class LoggerActivity : AppCompatActivity() {
     }
 
     /** Picks the single most-important thing the user should act on. Order matters:
-     *  setup blocks everything; a fresh OEM-kill incident is louder than a routine
-     *  permission nag because it represents data loss the user already experienced. */
+     *  a fresh OEM-kill incident is louder than a routine permission nag because it
+     *  represents data loss the user already experienced. */
     private fun nextWarning(): Pair<String, () -> Unit>? {
-        if (!settings.isConfigured) {
-            return "Finish setup: enter your server URL and login in Settings." to { scrollToSetup() }
+        // Standalone (no server) is a first-class state — no setup to finish. Only nag when a
+        // server URL is set but its credentials are incomplete, so sync silently can't auth.
+        if (settings.hasServer && !settings.isConfigured) {
+            return "Sync setup incomplete — add your username and password below." to { scrollToSync() }
         }
         val killAt = settings.lastKillDetectedAt
         if (killAt > settings.killAcknowledgedAt &&
@@ -390,6 +544,149 @@ class LoggerActivity : AppCompatActivity() {
         }
     }
 
+    // ---- device pickers ----
+
+    private fun pickBt(title: String, onPick: (mac: String, name: String) -> Unit, onClear: () -> Unit) {
+        if (!hasBtPerms()) {
+            // Request inline — the dashboard only prompts once a device is set, which can't
+            // happen until one is picked, so the picker must self-grant CONNECT + SCAN.
+            pendingBtPick = { pickBt(title, onPick, onClear) }
+            btPermLauncher.launch(btPerms())
+            return
+        }
+        val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+        if (adapter == null) { toast("No Bluetooth on this device"); return }
+        showScanningPicker(title, adapter, onPick, onClear)
+    }
+
+    /**
+     * Live device picker: lists bonded devices *and* actively discovers nearby ones —
+     * how Torque finds a dongle that never appears in system Bluetooth settings — so an
+     * unpaired ELM327 can simply be tapped (we capture its MAC) instead of hunting for
+     * the address. Discovery + the receiver are torn down when the dialog closes.
+     */
+    @SuppressLint("MissingPermission")
+    private fun showScanningPicker(
+        title: String,
+        adapter: BluetoothAdapter,
+        onPick: (mac: String, name: String) -> Unit,
+        onClear: () -> Unit,
+    ) {
+        val seen = HashSet<String>()
+        val picks = ArrayList<Pair<String, String>>()       // (mac, name), parallel to rows
+        val rows = ArrayAdapter<String>(this, android.R.layout.simple_list_item_1)
+        var nearbyCount = 0
+        var dialog: AlertDialog? = null
+
+        // Title doubles as the status line: scanning → result/empty guidance, so the user
+        // is never left staring at a static list wondering if it's still working.
+        fun setStatus(scanning: Boolean) {
+            dialog?.setTitle(when {
+                scanning -> "$title — scanning…"
+                picks.isEmpty() -> "$title — none found. Rescan, or Enter MAC."
+                nearbyCount == 0 -> "$title — tap a paired device, or Rescan / Enter MAC"
+                else -> "$title — tap your device"
+            })
+        }
+
+        fun add(mac: String?, name: String?, nearby: Boolean) {
+            if (mac == null || !seen.add(mac)) return
+            val nm = name?.takeIf { it.isNotBlank() } ?: mac
+            picks.add(mac to nm)
+            rows.add("$nm\n$mac · ${if (nearby) "nearby" else "paired"}")   // auto-refreshes
+            if (nearby) nearbyCount++
+        }
+
+        adapter.bondedDevices?.forEach { add(it.address, it.name, nearby = false) }
+
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(c: Context?, intent: Intent?) {
+                when (intent?.action) {
+                    BluetoothDevice.ACTION_FOUND -> {
+                        intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
+                            ?.let { add(it.address, it.name, nearby = true) }
+                        setStatus(scanning = true)
+                    }
+                    BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> setStatus(scanning = false)
+                }
+            }
+        }
+        val filter = IntentFilter(BluetoothDevice.ACTION_FOUND)
+            .apply { addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED) }
+        ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+
+        fun startScan() {
+            runCatching { adapter.cancelDiscovery() }
+            runCatching { adapter.startDiscovery() }
+            setStatus(scanning = true)
+        }
+
+        val d = AlertDialog.Builder(this)
+            .setTitle("$title — scanning…")
+            .setAdapter(rows) { _, i -> onPick(picks[i].first, picks[i].second) }
+            .setPositiveButton("Rescan", null)              // overridden below so it doesn't dismiss
+            .setNeutralButton("Clear") { _, _ -> onClear() }
+            .setNegativeButton("Enter MAC") { _, _ -> promptForMac(title, onPick) }
+            .setOnDismissListener {
+                runCatching { adapter.cancelDiscovery() }
+                runCatching { unregisterReceiver(receiver) }
+            }
+            .create()
+        dialog = d
+        d.show()
+        // Rescan re-runs discovery in place instead of closing the picker.
+        d.getButton(AlertDialog.BUTTON_POSITIVE)?.setOnClickListener { startScan() }
+        startScan()
+    }
+
+    private fun hasBtPerms(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.S || (
+            ContextCompat.checkSelfPermission(this, android.Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(this, android.Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED)
+
+    private fun btPerms(): Array<String> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+            arrayOf(android.Manifest.permission.BLUETOOTH_CONNECT, android.Manifest.permission.BLUETOOTH_SCAN)
+        else emptyArray()
+
+    /** Manual MAC entry — the path for an unbonded dongle (the insecure-RFCOMM case)
+     *  that never appears in the paired list. LocationService connects by MAC via
+     *  getRemoteDevice() + the insecure-socket fallback, so no bonding is needed. */
+    private fun promptForMac(title: String, onPick: (mac: String, name: String) -> Unit) {
+        val input = EditText(this).apply { hint = "AA:BB:CC:DD:EE:FF"; setSingleLine() }
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage("Enter the adapter's Bluetooth MAC (from Torque, the dongle's label, or a BT scanner app).")
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                val mac = input.text.toString().trim().uppercase()
+                if (BluetoothAdapter.checkBluetoothAddress(mac)) onPick(mac, mac)
+                else toast("Invalid MAC — expected AA:BB:CC:DD:EE:FF")
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // ---- backup ----
+
+    private fun exportTo(uri: Uri) {
+        val json = SettingsExport.toJson(settings).toString(2)
+        runCatching {
+            contentResolver.openOutputStream(uri, "w").use { it?.write(json.toByteArray()) }
+            toast("Exported")
+        }.getOrElse { toast("Export failed: ${it.message}") }
+    }
+
+    private fun importFrom(uri: Uri) {
+        val text = runCatching { contentResolver.openInputStream(uri).use { it?.bufferedReader()?.readText() } }
+            .getOrNull()
+        if (text.isNullOrBlank()) { toast("Import failed: empty file"); return }
+        val applied = SettingsExport.fromJson(this, settings, text)
+        if (applied == 0) { toast("Import failed: no recognised keys"); return }
+        loadSettingsFields()
+        toast("Imported $applied settings")
+    }
+
     // ---- helpers ----
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
@@ -399,10 +696,10 @@ class LoggerActivity : AppCompatActivity() {
     private fun toast(msg: String) = Snackbar.make(b.root, msg, Snackbar.LENGTH_SHORT).show()
     private fun snackBar(msg: String) = Snackbar.make(b.root, msg, Snackbar.LENGTH_LONG).show()
 
-    /** "Setup is missing/incomplete" → launch the full Settings screen. Replaces the
-     *  inline-setup scroll target the dashboard used to have. */
-    private fun scrollToSetup() {
-        startActivity(Intent(this, SettingsActivity::class.java))
+    /** Scroll the one-screen surface to the Sync section — used by the "sync incomplete"
+     *  warning and a Test connection with no server, now that setup lives on this page. */
+    private fun scrollToSync() {
+        b.scroll.post { b.scroll.smoothScrollTo(0, b.syncCard.top) }
     }
 
     /** "12s ago" under a minute, else a coarse relative span. */

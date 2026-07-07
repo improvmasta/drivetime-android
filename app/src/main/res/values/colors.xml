@@ -1,9 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- drivetime palette — LIGHT (day). Mirrors the SPA's frontend tokens.css
+     :root[data-theme='light'] so the native chrome matches the WebView it floats over.
+     values-night/colors.xml holds the dark set; DayNight picks per system theme. -->
 <resources>
-    <!-- Status colors, picked to read on both light and dark backgrounds. -->
-    <color name="status_green">#43A047</color>
-    <color name="status_amber">#FB8C00</color>
-    <color name="status_red">#E53935</color>
-    <color name="status_blue">#1E88E5</color>
-    <color name="status_grey">#9E9E9E</color>
+    <color name="dt_bg">#F5F7FA</color>
+    <color name="dt_surface_1">#FFFFFF</color>
+    <color name="dt_surface_2">#F0F3F7</color>
+    <color name="dt_surface_3">#E6EAF1</color>
+    <color name="dt_border">#E2E6EE</color>
+    <color name="dt_border_strong">#CBD2DD</color>
+    <color name="dt_text">#0F1319</color>
+    <color name="dt_text_dim">#48515F</color>
+    <color name="dt_text_mut">#78828F</color>
+    <color name="dt_accent">#2F6BF0</color>
+    <color name="dt_accent_strong">#2356CC</color>
+    <color name="dt_accent_contrast">#FFFFFF</color>
+
+    <!-- Status colours = the SPA good / warn / bad / accent / mut tokens, so a coloured
+         state never clashes with the ground. Names are kept (Kotlin references them). -->
+    <color name="status_green">#12A150</color>
+    <color name="status_amber">#B0790C</color>
+    <color name="status_red">#E0384F</color>
+    <color name="status_blue">#2F6BF0</color>
+    <color name="status_grey">#78828F</color>
+
+    <!-- warning-banner tint: warn at ~12% alpha (= SPA --warn-soft light) -->
+    <color name="dt_warn_soft">#1FB0790C</color>
 </resources>

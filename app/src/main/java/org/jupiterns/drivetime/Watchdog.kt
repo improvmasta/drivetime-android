@@ -31,7 +31,9 @@ class Watchdog(ctx: Context, params: WorkerParameters) : Worker(ctx, params) {
     override fun doWork(): Result {
         val s = Settings(applicationContext)
         val ready = Permissions.snapshot(applicationContext, s).isReady
-        if (s.loggingEnabled && s.isConfigured && ready && !LocationService.isRunning) {
+        // Server-optional (STANDALONE.md): reconcile against loggingEnabled alone, so a
+        // standalone logger the OEM killer took down is restarted just like a synced one.
+        if (s.loggingEnabled && ready && !LocationService.isRunning) {
             // We were *meant* to be logging and the service is dead → record a
             // suspected OEM kill so the dashboard can name the specific setting to
             // fix. We only count this if the gap exceeds the expected sample cadence

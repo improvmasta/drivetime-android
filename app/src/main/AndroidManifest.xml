@@ -52,21 +52,17 @@
                 android:resource="@xml/shortcuts" />
         </activity>
 
-        <!-- The native logger dashboard, reached in one tap from the shell's status pill. -->
+        <!-- The native Tracker screen (live status + all setup), reached in one tap from
+             the shell's status pill. The old separate Settings screen is folded into it. -->
         <activity
             android:name=".LoggerActivity"
             android:exported="false"
-            android:label="Logger" />
+            android:label="Tracking" />
 
         <activity
             android:name=".LogActivity"
             android:exported="false"
             android:label="Activity log" />
-
-        <activity
-            android:name=".SettingsActivity"
-            android:exported="false"
-            android:label="Settings" />
 
         <service
             android:name=".LocationService"

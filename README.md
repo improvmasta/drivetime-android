@@ -38,9 +38,11 @@ driven by Samsung Modes & Routines) and drivetime's `NATIVE_APP.md`.
 
 ## Status
 - [x] Foreground `LocationService` (FusedLocationProvider) with an on-disk offline queue
-- [x] **Live status dashboard** — tracking switch, glanceable state, colour-coded
-  connection card, OBD vitals, actionable warning banner, activity log
-- [x] **Sectioned Settings screen** with per-row help + JSON import/export
+- [x] **One native Tracker screen** (status + all setup merged; reached in one tap from
+  the shell's status pill) — tracking switch + live state, access/battery, devices,
+  **optional** sync, updates, an Advanced fold (timing/automation/notifications), backup;
+  per-row help + JSON import/export; styled to match the SPA (palette, flat cards, boxed
+  inputs). Tracking runs standalone — no server required (STANDALONE.md)
 - [x] **Tiered tracking + layered drive detection** (car-BT / OBD / speed → Light/Driving)
 - [x] **Tier-aware upload cadence** — ~10s while DRIVING (near-real-time), 45s in LIGHT,
   immediate flush on app-foreground / connectivity-regained / charge-connected

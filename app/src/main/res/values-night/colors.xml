@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- drivetime palette — DARK (night). Mirrors the SPA's frontend tokens.css :root
+     (dark is the SPA default). Selected automatically when the system is in dark mode,
+     matching the WebView, which follows the system theme via algorithmic darkening. -->
+<resources>
+    <color name="dt_bg">#0B0D11</color>
+    <color name="dt_surface_1">#14171D</color>
+    <color name="dt_surface_2">#191D25</color>
+    <color name="dt_surface_3">#222834</color>
+    <color name="dt_border">#262C36</color>
+    <color name="dt_border_strong">#38414E</color>
+    <color name="dt_text">#F3F6FA</color>
+    <color name="dt_text_dim">#AEB8C6</color>
+    <color name="dt_text_mut">#6D7787</color>
+    <color name="dt_accent">#4D8DFF</color>
+    <color name="dt_accent_strong">#74A6FF</color>
+    <color name="dt_accent_contrast">#FFFFFF</color>
+
+    <color name="status_green">#34D399</color>
+    <color name="status_amber">#FBBF24</color>
+    <color name="status_red">#F87284</color>
+    <color name="status_blue">#4D8DFF</color>
+    <color name="status_grey">#6D7787</color>
+
+    <!-- warn at ~14% alpha (= SPA --warn-soft dark) -->
+    <color name="dt_warn_soft">#24FBBF24</color>
+</resources>
