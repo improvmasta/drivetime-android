@@ -85,7 +85,7 @@ object Control {
         if (action == ACTION_SET) {
             if (!tokenOk(settings, intent)) return settings.trackingMode
             val src = source(intent, default = "routine")
-            applySet(context, settings, intent, src)
+            applySet(context, intent, src)
             return settings.trackingMode
         }
 
@@ -107,12 +107,23 @@ object Control {
 
     /** Parse and apply a SET intent. Supports either {key, value} extras or a
      *  top-level extra named after a known SET key. */
-    private fun applySet(context: Context, settings: Settings, intent: Intent?, source: String) {
+    private fun applySet(context: Context, intent: Intent?, source: String) {
         if (intent == null) return
         val (key, value) = resolveKv(intent) ?: return
+        set(context, key, value, source)
+    }
+
+    /**
+     * Apply one setting change directly (no intent/token gating) — the shared path for the
+     * in-app Settings tabs' bridge writes (`DrivetimeNative.setSetting`) and, via [applySet],
+     * the routine SET intent. Same key set + side effects (mode, workers) so the UI and the
+     * routine API can never drift. Returns true when the value was recognised and applied.
+     */
+    fun set(context: Context, key: String, value: String, source: String): Boolean {
+        val settings = Settings(context)
         if (key !in SET_KEYS) {
             EventLog.warn("SET ignored — unknown key '$key'")
-            return
+            return false
         }
         val applied = when (key) {
             "mode" -> {
@@ -152,6 +163,7 @@ object Control {
         } else {
             EventLog.warn("SET $key ignored — bad value '$value'")
         }
+        return applied
     }
 
     private fun resolveKv(intent: Intent): Pair<String, String>? {

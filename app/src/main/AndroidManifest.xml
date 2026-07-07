@@ -57,12 +57,11 @@
                 android:resource="@xml/shortcuts" />
         </activity>
 
-        <!-- The native Tracker screen (live status + all setup), reached in one tap from
-             the shell's status pill. The old separate Settings screen is folded into it. -->
-        <activity
-            android:name=".LoggerActivity"
-            android:exported="false"
-            android:label="Tracking" />
+        <!-- The tracker's setup now lives in the SPA's Settings tabs (rendered in the
+             WebViewActivity shell); the genuinely-native flows it needs — permission prompts,
+             Bluetooth pairing, backup pickers, the QR scanner, the updater — are hosted by
+             WebViewActivity itself and fired over the DrivetimeNative bridge. There is no
+             separate native Tracker Activity any more. -->
 
         <activity
             android:name=".LogActivity"

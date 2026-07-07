@@ -3,8 +3,8 @@
   The hybrid shell: the drivetime SPA fills the screen (its own tab bar is the only
   navigation), a status pill in the top-right corner — sitting in the SPA header band,
   which keeps its own controls to the left to leave room — reports the logger and taps
-  through to the native LoggerActivity, and an overlay covers the WebView when setup is
-  missing or the dashboard can't load offline.
+  through to the SPA's own Settings route (the tracker settings live there as tabs), and
+  an overlay covers the WebView when the dashboard can't load offline.
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
