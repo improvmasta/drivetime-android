@@ -215,6 +215,18 @@ class WebViewActivity : AppCompatActivity() {
             ui.post { startActivity(Intent(this@WebViewActivity, LoggerActivity::class.java)) }
         }
 
+        /** Like [openTracker] but deep-links straight to a section of the native Tracker
+         *  screen ('tracking' | 'devices' | 'sync' | 'backup' | 'updates' | 'advanced'), so
+         *  the SPA Settings tabs land the user in the matching area. Runs on a binder thread,
+         *  so hop to the UI thread to start the Activity. */
+        @JavascriptInterface
+        fun openTrackerSection(section: String) {
+            ui.post {
+                startActivity(Intent(this@WebViewActivity, LoggerActivity::class.java)
+                    .putExtra(LoggerActivity.EXTRA_SECTION, section))
+            }
+        }
+
         /** The absolute base URL the SPA prepends to its `/api` calls so they reach the server
          *  cross-origin (the SPA itself is served from the bundled local origin). Blank until
          *  a server + creds are set, which keeps the app in local mode. No trailing slash. */

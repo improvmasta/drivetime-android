@@ -193,6 +193,12 @@ class LoggerActivity : AppCompatActivity() {
         }
 
         renderPermissions()
+
+        // Deep-link from the SPA Settings tabs (NativeBridge.openTrackerSection): land the
+        // user straight in the requested section instead of at the top of the screen.
+        intent?.getStringExtra(EXTRA_SECTION)?.let { section ->
+            b.scroll.post { scrollToSection(section) }
+        }
     }
 
     override fun onResume() {
@@ -727,11 +733,41 @@ class LoggerActivity : AppCompatActivity() {
     private fun toast(msg: String) = Snackbar.make(b.root, msg, Snackbar.LENGTH_SHORT).show()
     private fun snackBar(msg: String) = Snackbar.make(b.root, msg, Snackbar.LENGTH_LONG).show()
 
-    /** Scroll the one-screen surface to the Sync section — used by the "sync incomplete"
-     *  warning and a Test connection with no server, now that setup lives on this page. */
-    private fun scrollToSync() {
-        b.scroll.post { b.scroll.smoothScrollTo(0, b.syncCard.top) }
+    /** Scroll the one-screen surface to a section — used by the SPA Settings tabs' deep-links
+     *  (NativeBridge.openTrackerSection) and by in-screen jumps like the "sync incomplete"
+     *  warning or a Test connection with no server. */
+    private fun scrollToSection(section: String?) {
+        val target = when (section) {
+            "tracking" -> b.statusState
+            "devices" -> b.obdCard
+            "sync" -> b.syncCard
+            "backup" -> b.exportSettings
+            "updates" -> b.checkUpdates
+            "advanced" -> {
+                if (b.advancedBody.visibility != View.VISIBLE) {
+                    b.advancedBody.visibility = View.VISIBLE
+                    b.advancedToggle.text = "▾  Advanced"
+                }
+                b.advancedToggle
+            }
+            else -> return
+        }
+        b.scroll.post { b.scroll.smoothScrollTo(0, scrollTopOf(target)) }
     }
+
+    /** Y of [v] within the scroll content — summed offsets, since a target may be nested in a
+     *  card rather than a direct child of the scroll's LinearLayout. */
+    private fun scrollTopOf(v: View): Int {
+        var y = 0
+        var view: View? = v
+        while (view != null && view !== b.scroll) {
+            y += view.top
+            view = view.parent as? View
+        }
+        return y
+    }
+
+    private fun scrollToSync() = scrollToSection("sync")
 
     /** "12s ago" under a minute, else a coarse relative span. */
     private fun rel(ts: Long): String {
@@ -741,6 +777,9 @@ class LoggerActivity : AppCompatActivity() {
     }
 
     companion object {
+        /** Intent extra: which section to scroll to on open (set by NativeBridge.openTrackerSection). */
+        const val EXTRA_SECTION = "section"
+
         /** How long after a suspected OEM kill we keep nagging the user about it — a
          *  week is enough to notice and fix, after that there's nothing actionable
          *  left and the warning becomes noise. */
