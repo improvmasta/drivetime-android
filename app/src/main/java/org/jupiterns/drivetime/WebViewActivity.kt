@@ -204,10 +204,15 @@ class WebViewActivity : AppCompatActivity() {
             b.webview.evaluateJavascript("location.hash = '#/settings'", null)
         }
 
-        // Hardware back walks the SPA's history first, then exits.
+        // Hardware back is owned by the SPA: it closes an open sheet/dialog, then exits a
+        // multi-select, then returns to the first tab from anywhere else. Only when the SPA
+        // has nothing left to handle (home tab, nothing open) do we act — and even then we
+        // background the app rather than finish it, so BACK never closes drivetime.
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (b.webview.canGoBack()) b.webview.goBack() else finish()
+                b.webview.evaluateJavascript(
+                    "(typeof window.__dtHandleBack==='function') ? window.__dtHandleBack() : false"
+                ) { res -> if (res != "true") moveTaskToBack(true) }
             }
         })
 
@@ -855,15 +860,20 @@ class WebViewActivity : AppCompatActivity() {
     // ---- status pill ----
 
     private fun refreshPill() {
+        // Deliberately minimal so it reads as part of the SPA header, not a floating card:
+        //   • tracking off        → a dim grey dot
+        //   • tracking, not driving → a green dot (all it needs to say: "on, healthy")
+        //   • driving              → a green dot + "Driving"
         val on = settings.trackingMode != Settings.MODE_OFF
+        val driving = LiveState.tier == "DRIVING"
         val (label, colorRes) = when {
-            !on -> "○ Off" to R.color.status_grey
-            LiveState.tier == "DRIVING" -> "● Driving" to R.color.status_green
-            LiveState.tier == "LIGHT" -> "● Light" to R.color.status_blue
-            else -> "● Starting" to R.color.status_amber
+            !on -> "●" to R.color.status_grey
+            driving -> "● Driving" to R.color.status_green
+            else -> "●" to R.color.status_green
         }
         val queued = runCatching { uploader.health().queued }.getOrDefault(0)
-        b.pill.text = if (queued > 0) "$label · $queued queued" else label
+        // Only surface a backlog when it's meaningful — a passing "1 queued" in Light is noise.
+        b.pill.text = if (driving && queued > 0) "$label · $queued" else label
         b.pill.setTextColor(ContextCompat.getColor(this, colorRes))
     }
 

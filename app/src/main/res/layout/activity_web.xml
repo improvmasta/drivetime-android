@@ -23,22 +23,23 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="top|end"
-        android:layout_marginTop="9dp"
-        android:layout_marginEnd="12dp"
+        android:layout_marginTop="14dp"
+        android:layout_marginEnd="14dp"
         android:clickable="true"
         android:focusable="true"
+        app:cardBackgroundColor="@android:color/transparent"
         app:cardCornerRadius="20dp"
-        app:cardElevation="6dp">
+        app:cardElevation="0dp">
 
         <TextView
             android:id="@+id/pill"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:paddingHorizontal="12dp"
-            android:paddingVertical="6dp"
+            android:paddingHorizontal="8dp"
+            android:paddingVertical="4dp"
             android:textSize="12sp"
             android:textStyle="bold"
-            android:text="○ Off" />
+            android:text="●" />
     </com.google.android.material.card.MaterialCardView>
 
     <!-- Setup-needed / offline cover. Hidden while the dashboard is up. -->
