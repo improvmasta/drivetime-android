@@ -22,6 +22,6 @@
     <color name="status_blue">#4D8DFF</color>
     <color name="status_grey">#6D7787</color>
 
-    <!-- warn at ~14% alpha (= SPA --warn-soft dark) -->
+    <!-- warn at ~14% alpha (= SPA warn-soft dark) -->
     <color name="dt_warn_soft">#24FBBF24</color>
 </resources>

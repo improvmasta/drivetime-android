@@ -18,8 +18,8 @@
         <item name="android:textColorPrimary">@color/dt_text</item>
         <item name="android:textColorSecondary">@color/dt_text_dim</item>
         <item name="android:textColorHint">@color/dt_text_mut</item>
-        <!-- Secondary buttons: rounded to --r-sm (10dp), hairline border, neutral text —
-             the SPA's default button, not Material's pill. -->
+        <!-- Secondary buttons: rounded to the r-sm radius (10dp), hairline border, neutral
+             text — the SPA's default button, not Material's pill. -->
         <item name="materialButtonOutlinedStyle">@style/Widget.Dt.Button.Outlined</item>
     </style>
 
@@ -30,7 +30,7 @@
     </style>
 
     <!-- Section card = the SPA card: flat (no elevation), 1dp hairline border, rounded
-         to --r-lg (18dp), on surface-1. -->
+         to the r-lg radius (18dp), on surface-1. -->
     <style name="SettingsSection">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>

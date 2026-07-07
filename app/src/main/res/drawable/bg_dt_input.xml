@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Boxed text field = the SPA's .dt-input: surface-3 fill, 1dp hairline border rounded
-     to --r-sm (10dp), and an accent border on focus. Replaces the dated Material underline. -->
+     to the r-sm radius (10dp), and an accent border on focus. Replaces the dated underline. -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_focused="true">
         <shape android:shape="rectangle">

@@ -24,6 +24,6 @@
     <color name="status_blue">#2F6BF0</color>
     <color name="status_grey">#78828F</color>
 
-    <!-- warning-banner tint: warn at ~12% alpha (= SPA --warn-soft light) -->
+    <!-- warning-banner tint: warn at ~12% alpha (= SPA warn-soft light) -->
     <color name="dt_warn_soft">#1FB0790C</color>
 </resources>
