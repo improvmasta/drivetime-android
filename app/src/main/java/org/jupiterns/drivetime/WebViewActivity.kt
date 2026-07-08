@@ -225,7 +225,9 @@ class WebViewActivity : AppCompatActivity() {
     override fun onPause() { super.onPause(); ui.removeCallbacks(ticker) }
 
     override fun onDestroy() {
-        btPicker.close()   // tear down an open scan (dialog/receiver/discovery)
+        // tear down an open scan (dialog/receiver/discovery); lateinit-guarded in case
+        // onCreate never completed
+        if (::btPicker.isInitialized) btPicker.close()
         super.onDestroy()
     }
 
