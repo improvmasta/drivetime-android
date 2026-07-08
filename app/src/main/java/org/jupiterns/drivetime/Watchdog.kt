@@ -1,8 +1,6 @@
 package org.jupiterns.drivetime
 
 import android.content.Context
-import android.content.Intent
-import android.os.Build
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.Worker
@@ -44,15 +42,10 @@ class Watchdog(ctx: Context, params: WorkerParameters) : Worker(ctx, params) {
                 s.lastKillDetectedAt = System.currentTimeMillis()
                 EventLog.warn("Logger was killed for ~${gap / 60_000}min — likely OEM battery manager")
             }
-            try {
-                val svc = Intent(applicationContext, LocationService::class.java)
-                s.lastCommandSource = "watchdog"
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-                    applicationContext.startForegroundService(svc)
-                else
-                    applicationContext.startService(svc)
+            s.lastCommandSource = "watchdog"
+            if (Control.startTrackingService(applicationContext)) {
                 EventLog.warn("Watchdog restarted the logging service")
-            } catch (e: Exception) {
+            } else {
                 // Background FGS-start was refused (throttled / no exemption yet) —
                 // try again next cycle rather than giving up.
                 return Result.retry()

@@ -14,12 +14,10 @@ object LiveState {
     @Volatile var rpm: Int? = null
     @Volatile var coolantC: Int? = null
     @Volatile var voltage: Double? = null
-    @Volatile var pids: Map<String, Double> = emptyMap()   // every OBD PID we're reading
     @Volatile var updatedAt = 0L
 
     fun clear() {
         tier = null; driveReason = null; onsetState = null
         speedMph = null; obdConnected = false; rpm = null; coolantC = null; voltage = null
-        pids = emptyMap()
     }
 }

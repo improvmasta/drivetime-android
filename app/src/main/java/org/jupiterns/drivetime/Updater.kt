@@ -9,7 +9,6 @@ import android.provider.Settings as AndroidSettings
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.FileProvider
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.io.File
@@ -42,8 +41,8 @@ object Updater {
     /** Don't re-check on every foreground; a few hours is plenty for a sideload app. */
     private const val CHECK_INTERVAL_MS = 6L * 60 * 60_000L
 
-    private val http = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
+    // Shared process client, with the longer read timeout an APK download needs.
+    private val http = Http.client.newBuilder()
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
@@ -82,7 +81,7 @@ object Updater {
         Thread {
             val release = runCatching { fetch(serverUrl) }.getOrNull()
             settings.lastUpdateCheckAt = System.currentTimeMillis()
-            if (activity.isFinishing) return@Thread
+            if (activity.isFinishing || activity.isDestroyed) return@Thread
             activity.runOnUiThread {
                 when {
                     release == null ->
@@ -126,11 +125,11 @@ object Updater {
 
         Thread {
             val result = runCatching { download(activity, apkUrl(serverUrl, r)) { pct ->
-                if (!activity.isFinishing) activity.runOnUiThread {
+                if (!activity.isFinishing && !activity.isDestroyed) activity.runOnUiThread {
                     progress.setMessage(if (pct >= 0) "$pct%" else "Downloading…")
                 }
             } }
-            if (activity.isFinishing) return@Thread
+            if (activity.isFinishing || activity.isDestroyed) return@Thread
             activity.runOnUiThread {
                 progress.dismiss()
                 result.onSuccess { file -> install(activity, file) }

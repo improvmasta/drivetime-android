@@ -54,8 +54,6 @@ class Elm327Client {
     private val slowCache = mutableMapOf<String, Double>()
 
     fun isConnected() = socket?.isConnected == true
-    fun supportedPids(): Set<String> = supported
-    fun vin(): String? = vin
 
     @SuppressLint("MissingPermission")
     fun connect(device: BluetoothDevice) {
@@ -392,18 +390,6 @@ class Elm327Client {
             PidDef("5C", "Oil temp", "°C", true) { a(it)?.minus(40) },
             PidDef("5E", "Fuel rate", "L/h", false) { ab(it)?.div(20) },
         )
-
-        /** pid → (label, unit), plus the synthetic "RV" battery reading, for display. */
-        private val PID_META: Map<String, Pair<String, String>> =
-            PID_TABLE.associate { it.pid to (it.label to it.unit) } + ("RV" to ("Battery" to "V"))
-
-        /** Format a raw PID map into "Label value unit" strings, in table order, for the
-         *  in-app dashboard / activity log. Unknown keys fall back to the raw pid. */
-        fun describe(pids: Map<String, Double>): List<String> = pids.entries.map { (k, v) ->
-            val (label, unit) = PID_META[k] ?: (k to "")
-            val n = if (v == v.toLong().toDouble()) v.toLong().toString() else "%.1f".format(v)
-            if (unit.isEmpty()) "$label $n" else "$label $n$unit"
-        }
 
         /** MAC → last-known-good openSocket strategy index, so a reconnect skips the
          *  secure-SPP timeout that fails on every connect to a clone dongle. In-process

@@ -10,7 +10,6 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.Worker
 import androidx.work.WorkerParameters
 import androidx.work.WorkManager
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
@@ -23,9 +22,8 @@ class AlertWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params) 
         EventLog.init(applicationContext)
         val s = Settings(applicationContext)
         if (!s.isConfigured || !s.alertsEnabled) return Result.success()
-        val client = OkHttpClient()
         return try {
-            val resp = client.newCall(
+            val resp = Http.client.newCall(
                 Request.Builder().url("${s.serverUrl}/api/alerts?unread_only=true")
                     .header("Authorization", s.authHeader).build()
             ).execute()

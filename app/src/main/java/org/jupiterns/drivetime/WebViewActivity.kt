@@ -3,14 +3,9 @@ package org.jupiterns.drivetime
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.DownloadManager
-import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothDevice
-import android.bluetooth.BluetoothManager
-import android.content.BroadcastReceiver
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -30,8 +25,6 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.ArrayAdapter
-import android.widget.EditText
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
@@ -47,13 +40,11 @@ import com.google.android.material.snackbar.Snackbar
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import org.jupiterns.drivetime.databinding.ActivityWebBinding
-import java.util.concurrent.TimeUnit
 
 /**
  * The hybrid shell — this is the launcher AND the app's one native surface. It hosts the
@@ -85,11 +76,11 @@ class WebViewActivity : AppCompatActivity() {
     // Activity + the ActivityResult APIs, so they can't live in the WebView — the Settings
     // tabs trigger them over the bridge and re-poll getSettings()/getStatus() for the result.
     private var pendingStartAfterGrant = false
-    private var pendingBtPick: (() -> Unit)? = null
+    private lateinit var btPicker: BtDevicePicker
+    private val syncStatus by lazy { SyncStatus(settings, uploader) }
     private lateinit var fgLocationLauncher: ActivityResultLauncher<Array<String>>
     private lateinit var bgLocationLauncher: ActivityResultLauncher<Array<String>>
     private lateinit var miscPermLauncher: ActivityResultLauncher<Array<String>>
-    private lateinit var btPermLauncher: ActivityResultLauncher<Array<String>>
     private lateinit var exportLauncher: ActivityResultLauncher<String>
     private lateinit var importLauncher: ActivityResultLauncher<Array<String>>
     private lateinit var scanLauncher: ActivityResultLauncher<ScanOptions>
@@ -120,6 +111,7 @@ class WebViewActivity : AppCompatActivity() {
         settings = Settings(this)
 
         registerLaunchers()
+        btPicker = BtDevicePicker(this) { toast(it) }
 
         val web = b.webview
         val ws: WebSettings = web.settings
@@ -139,9 +131,7 @@ class WebViewActivity : AppCompatActivity() {
         // links hand off to the system browser), so the surface is trusted.
         web.addJavascriptInterface(NativeBridge(), "DrivetimeNative")
 
-        val cm = CookieManager.getInstance()
-        cm.setAcceptCookie(true)
-        cm.setAcceptThirdPartyCookies(web, true)   // session cookie is first-party; harmless
+        CookieManager.getInstance().setAcceptCookie(true)
 
         // Route bundled-SPA requests (appassets origin) through the asset loader, for both
         // page loads and the service worker's own precache fetches.
@@ -234,6 +224,11 @@ class WebViewActivity : AppCompatActivity() {
 
     override fun onPause() { super.onPause(); ui.removeCallbacks(ticker) }
 
+    override fun onDestroy() {
+        btPicker.close()   // tear down an open scan (dialog/receiver/discovery)
+        super.onDestroy()
+    }
+
     // ---- loading + auth ----
 
     private fun loadDashboard() {
@@ -263,13 +258,6 @@ class WebViewActivity : AppCompatActivity() {
         miscPermLauncher = registerForActivityResult(
             ActivityResultContracts.RequestMultiplePermissions()
         ) { _ -> }
-        btPermLauncher = registerForActivityResult(
-            ActivityResultContracts.RequestMultiplePermissions()
-        ) { grants ->
-            val resume = pendingBtPick; pendingBtPick = null
-            if (grants.values.all { it }) resume?.invoke()
-            else toast("Bluetooth permission is needed to find your dongle")
-        }
         exportLauncher = registerForActivityResult(
             ActivityResultContracts.CreateDocument("application/json")
         ) { uri -> uri?.let { exportTo(it) } }
@@ -295,8 +283,16 @@ class WebViewActivity : AppCompatActivity() {
             maybeRequestBackgroundLocation()
             return
         }
-        if (!snap.hasBatteryExempt) Battery.requestExemption(this)
+        finishStart()
+    }
+
+    /** Complete a start: fine location is enough for the foreground service — background
+     *  location only extends logging past the screen turning off, so declining it must
+     *  degrade to foreground-only tracking, never block the start ("Not now" used to
+     *  strand the toggle in the off state). The Tracking tab's checklist keeps nagging. */
+    private fun finishStart() {
         pendingStartAfterGrant = false
+        if (!Permissions.snapshot(this, settings).hasBatteryExempt) Battery.requestExemption(this)
         Control.apply(this, Control.ACTION_MODE_AUTO, "user")
         toast("Tracking on — Auto mode")
     }
@@ -311,15 +307,10 @@ class WebViewActivity : AppCompatActivity() {
     }
 
     /** If logging was queued behind a permission prompt and the prompt has cleared,
-     *  complete the start. The fine→background steps each call this on grant. */
+     *  complete the start. Fine location alone is sufficient (see [finishStart]). */
     private fun tryResumeStart() {
-        val snap = Permissions.snapshot(this, settings)
-        if (!snap.hasFineLocation) return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !snap.hasBackgroundLocation) return
-        pendingStartAfterGrant = false
-        if (!snap.hasBatteryExempt) Battery.requestExemption(this)
-        Control.apply(this, Control.ACTION_MODE_AUTO, "user")
-        toast("Tracking on — Auto mode")
+        if (!Permissions.snapshot(this, settings).hasFineLocation) return
+        finishStart()
     }
 
     /** Step 2 of the location flow: explain that background access is what lets logging
@@ -335,7 +326,11 @@ class WebViewActivity : AppCompatActivity() {
                 "On the next screen, pick \"Allow all the time\".\n\n" +
                 "Without this, fixes stop the moment the phone sleeps."
             )
-            .setNegativeButton("Not now", null)
+            .setNegativeButton("Not now") { _, _ ->
+                // Declining background access degrades to foreground-only logging —
+                // it must not cancel a queued start.
+                if (pendingStartAfterGrant) finishStart()
+            }
             .setPositiveButton("Continue") { _, _ ->
                 bgLocationLauncher.launch(
                     Permissions.requestArgsFor(Permissions.Action.REQUEST_BACKGROUND_LOCATION)
@@ -402,7 +397,7 @@ class WebViewActivity : AppCompatActivity() {
                     .header("Authorization", settings.authHeader)
                     .post("[]".toRequestBody("application/json".toMediaType()))
                     .build()
-                testClient.newCall(req).execute().use {
+                Http.client.newCall(req).execute().use {
                     when {
                         it.isSuccessful -> "✓ Connection OK" to "good"
                         it.code == 401 -> "✕ Auth failed — re-scan the pairing QR (token may have rotated)" to "bad"
@@ -414,124 +409,6 @@ class WebViewActivity : AppCompatActivity() {
             ui.post { snack(msg) }
             EventLog.info("Test connection: $msg")
         }.start()
-    }
-
-    // ---- Bluetooth device pickers ----
-
-    private fun pickBt(title: String, onPick: (mac: String, name: String) -> Unit, onClear: () -> Unit) {
-        if (!hasBtPerms()) {
-            // Request inline — the picker must self-grant CONNECT + SCAN the first time.
-            pendingBtPick = { pickBt(title, onPick, onClear) }
-            btPermLauncher.launch(btPerms())
-            return
-        }
-        val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
-        if (adapter == null) { toast("No Bluetooth on this device"); return }
-        showScanningPicker(title, adapter, onPick, onClear)
-    }
-
-    /**
-     * Live device picker: lists bonded devices *and* actively discovers nearby ones — how
-     * Torque finds a dongle that never appears in system Bluetooth settings — so an unpaired
-     * ELM327 can simply be tapped (we capture its MAC). Discovery + the receiver are torn
-     * down when the dialog closes.
-     */
-    @SuppressLint("MissingPermission")
-    private fun showScanningPicker(
-        title: String,
-        adapter: BluetoothAdapter,
-        onPick: (mac: String, name: String) -> Unit,
-        onClear: () -> Unit,
-    ) {
-        val seen = HashSet<String>()
-        val picks = ArrayList<Pair<String, String>>()       // (mac, name), parallel to rows
-        val rows = ArrayAdapter<String>(this, android.R.layout.simple_list_item_1)
-        var nearbyCount = 0
-        var dialog: AlertDialog? = null
-
-        fun setStatus(scanning: Boolean) {
-            dialog?.setTitle(when {
-                scanning -> "$title — scanning…"
-                picks.isEmpty() -> "$title — none found. Rescan, or Enter MAC."
-                nearbyCount == 0 -> "$title — tap a paired device, or Rescan / Enter MAC"
-                else -> "$title — tap your device"
-            })
-        }
-
-        fun add(mac: String?, name: String?, nearby: Boolean) {
-            if (mac == null || !seen.add(mac)) return
-            val nm = name?.takeIf { it.isNotBlank() } ?: mac
-            picks.add(mac to nm)
-            rows.add("$nm\n$mac · ${if (nearby) "nearby" else "paired"}")   // auto-refreshes
-            if (nearby) nearbyCount++
-        }
-
-        adapter.bondedDevices?.forEach { add(it.address, it.name, nearby = false) }
-
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(c: Context?, intent: Intent?) {
-                when (intent?.action) {
-                    BluetoothDevice.ACTION_FOUND -> {
-                        intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
-                            ?.let { add(it.address, it.name, nearby = true) }
-                        setStatus(scanning = true)
-                    }
-                    BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> setStatus(scanning = false)
-                }
-            }
-        }
-        val filter = IntentFilter(BluetoothDevice.ACTION_FOUND)
-            .apply { addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED) }
-        ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
-
-        fun startScan() {
-            runCatching { adapter.cancelDiscovery() }
-            runCatching { adapter.startDiscovery() }
-            setStatus(scanning = true)
-        }
-
-        val d = AlertDialog.Builder(this)
-            .setTitle("$title — scanning…")
-            .setAdapter(rows) { _, i -> onPick(picks[i].first, picks[i].second) }
-            .setPositiveButton("Rescan", null)              // overridden below so it doesn't dismiss
-            .setNeutralButton("Clear") { _, _ -> onClear() }
-            .setNegativeButton("Enter MAC") { _, _ -> promptForMac(title, onPick) }
-            .setOnDismissListener {
-                runCatching { adapter.cancelDiscovery() }
-                runCatching { unregisterReceiver(receiver) }
-            }
-            .create()
-        dialog = d
-        d.show()
-        d.getButton(AlertDialog.BUTTON_POSITIVE)?.setOnClickListener { startScan() }
-        startScan()
-    }
-
-    private fun hasBtPerms(): Boolean =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.S || (
-            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED)
-
-    private fun btPerms(): Array<String> =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-            arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN)
-        else emptyArray()
-
-    /** Manual MAC entry — the path for an unbonded dongle that never appears in the paired
-     *  list. LocationService connects by MAC via the insecure-socket fallback, no bonding. */
-    private fun promptForMac(title: String, onPick: (mac: String, name: String) -> Unit) {
-        val input = EditText(this).apply { hint = "AA:BB:CC:DD:EE:FF"; setSingleLine() }
-        AlertDialog.Builder(this)
-            .setTitle(title)
-            .setMessage("Enter the adapter's Bluetooth MAC (from Torque, the dongle's label, or a BT scanner app).")
-            .setView(input)
-            .setPositiveButton("Save") { _, _ ->
-                val mac = input.text.toString().trim().uppercase()
-                if (BluetoothAdapter.checkBluetoothAddress(mac)) onPick(mac, mac)
-                else toast("Invalid MAC — expected AA:BB:CC:DD:EE:FF")
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
     }
 
     // ---- backup ----
@@ -623,7 +500,7 @@ class WebViewActivity : AppCompatActivity() {
                 perms.put(JSONObject()
                     .put("label", c.label)
                     .put("granted", c.granted)
-                    .put("action", actionKey(c.action)))
+                    .put("action", Permissions.keyOf(c.action)))
             }
             val oem = OemBatteryLinks.help()
             JSONObject()
@@ -631,8 +508,8 @@ class WebViewActivity : AppCompatActivity() {
                 .put("batteryExempt", Battery.isExempt(this@WebViewActivity))
                 .put("oemLabel", oem.label)
                 .put("oemAdvice", oem.advice)
-                .put("conn", connStatus())
-                .put("killWarning", killWarning() ?: JSONObject.NULL)
+                .put("conn", syncStatus.connStatus())
+                .put("killWarning", syncStatus.killWarning() ?: JSONObject.NULL)
                 .put("test", JSONObject().put("msg", lastTestMsg).put("kind", lastTestKind))
                 .toString()
         }.getOrDefault("{}")
@@ -680,7 +557,7 @@ class WebViewActivity : AppCompatActivity() {
         /** Run the grant flow for one checklist item, keyed by its [getStatus] `action`. */
         @JavascriptInterface
         fun requestPermission(action: String) {
-            val a = actionFromKey(action) ?: return
+            val a = Permissions.fromKey(action) ?: return
             ui.post { runPermissionAction(a) }
         }
 
@@ -701,10 +578,10 @@ class WebViewActivity : AppCompatActivity() {
         fun pickBluetooth(kind: String) {
             ui.post {
                 when (kind) {
-                    "car" -> pickBt("Select car Bluetooth",
+                    "car" -> btPicker.pick("Select car Bluetooth",
                         onPick = { mac, name -> settings.carBtMac = mac; settings.carBtName = name },
                         onClear = { settings.carBtMac = ""; settings.carBtName = "" })
-                    "obd" -> pickBt("Select OBD dongle",
+                    "obd" -> btPicker.pick("Select OBD dongle",
                         onPick = { mac, name -> settings.obdMac = mac; settings.obdName = name },
                         onClear = { settings.obdMac = ""; settings.obdName = "" })
                 }
@@ -775,6 +652,12 @@ class WebViewActivity : AppCompatActivity() {
             EventLog.info(if (ok) "Saved export: $safe" else "Export save failed: $safe")
         }
 
+        /** Open the native event log (diagnostics — service starts/stops, OBD, uploads). */
+        @JavascriptInterface
+        fun openLog() {
+            ui.post { startActivity(Intent(this@WebViewActivity, LogActivity::class.java)) }
+        }
+
         /** The logger's live snapshot (LiveState) as JSON, for the SPA's active-drive bar and
          *  the Tracking/Devices tab status lines. `{}` if anything goes sideways. */
         @JavascriptInterface
@@ -793,56 +676,6 @@ class WebViewActivity : AppCompatActivity() {
                 .put("updated_at", s.updatedAt)
                 .toString()
         }.getOrDefault("{}")
-    }
-
-    // ---- status helpers shared by the bridge ----
-
-    /** The connection/upload summary the Sync tab shows — mirrors what the old native screen
-     *  rendered: standalone, connected, reconnecting/auth-failed, or not-connected-yet. */
-    private fun connStatus(): JSONObject {
-        val o = JSONObject()
-        if (!settings.hasServer) {
-            return o.put("state", "standalone").put("detail", "No server — drives are saved on your phone.")
-        }
-        val h = uploader.health()
-        val now = System.currentTimeMillis()
-        when {
-            h.lastError != null && h.failures > 0 -> {
-                val auth = h.lastError!!.contains("Auth", ignoreCase = true)
-                val retry = if (h.backoffUntil > now) " · retry in ${(h.backoffUntil - now) / 1000}s" else ""
-                o.put("state", if (auth) "auth_failed" else "reconnecting")
-                o.put("detail", "${h.queued} fix(es) waiting$retry")
-                o.put("error", if (auth) "Uploads are being rejected — re-scan the pairing QR (the token may have rotated)."
-                    else "Last error: ${h.lastError}")
-            }
-            h.lastSuccessAt > 0 -> {
-                o.put("state", "connected")
-                o.put("detail", "Last upload ${rel(h.lastSuccessAt)} · ${h.queued} queued")
-            }
-            else -> {
-                o.put("state", "idle")
-                o.put("detail", "${h.queued} queued · no upload yet — try Test connection")
-            }
-        }
-        return o
-    }
-
-    /** The OEM-kill warning string, or null — only while an incident is newer than the last
-     *  acknowledgement and within the nag window. */
-    private fun killWarning(): String? {
-        val killAt = settings.lastKillDetectedAt
-        if (killAt > settings.killAcknowledgedAt &&
-            System.currentTimeMillis() - killAt < KILL_WARNING_TTL_MS) {
-            return "Your phone killed logging for a while. ${OemBatteryLinks.help().advice}"
-        }
-        return null
-    }
-
-    private fun rel(ts: Long): String {
-        val d = System.currentTimeMillis() - ts
-        return if (d < 60_000) "${d / 1000}s ago"
-        else android.text.format.DateUtils.getRelativeTimeSpanString(
-            ts, System.currentTimeMillis(), android.text.format.DateUtils.MINUTE_IN_MILLIS).toString()
     }
 
     // ---- overlay states ----
@@ -884,39 +717,4 @@ class WebViewActivity : AppCompatActivity() {
     private fun toast(msg: String) = Snackbar.make(b.root, msg, Snackbar.LENGTH_SHORT).show()
     private fun snack(msg: String) = Snackbar.make(b.root, msg, Snackbar.LENGTH_LONG).show()
 
-    companion object {
-        /** Stable string keys for the permission-checklist actions, so the SPA can pass one
-         *  back to [NativeBridge.requestPermission] without knowing the Kotlin enum. */
-        private fun actionKey(a: Permissions.Action): String = when (a) {
-            Permissions.Action.REQUEST_FOREGROUND_LOCATION -> "foreground_location"
-            Permissions.Action.REQUEST_BACKGROUND_LOCATION -> "background_location"
-            Permissions.Action.REQUEST_NOTIFICATIONS -> "notifications"
-            Permissions.Action.REQUEST_BLUETOOTH -> "bluetooth"
-            Permissions.Action.REQUEST_ACTIVITY_RECOGNITION -> "activity_recognition"
-            Permissions.Action.REQUEST_BATTERY_EXEMPT -> "battery"
-            Permissions.Action.OPEN_LOCATION_SETTINGS -> "location_settings"
-            Permissions.Action.OPEN_APP_SETTINGS -> "app_settings"
-        }
-
-        private fun actionFromKey(k: String): Permissions.Action? = when (k) {
-            "foreground_location" -> Permissions.Action.REQUEST_FOREGROUND_LOCATION
-            "background_location" -> Permissions.Action.REQUEST_BACKGROUND_LOCATION
-            "notifications" -> Permissions.Action.REQUEST_NOTIFICATIONS
-            "bluetooth" -> Permissions.Action.REQUEST_BLUETOOTH
-            "activity_recognition" -> Permissions.Action.REQUEST_ACTIVITY_RECOGNITION
-            "battery" -> Permissions.Action.REQUEST_BATTERY_EXEMPT
-            "location_settings" -> Permissions.Action.OPEN_LOCATION_SETTINGS
-            "app_settings" -> Permissions.Action.OPEN_APP_SETTINGS
-            else -> null
-        }
-
-        /** How long after a suspected OEM kill we keep nagging — a week is enough to notice
-         *  and fix; after that there's nothing actionable left and it becomes noise. */
-        private const val KILL_WARNING_TTL_MS = 7L * 24 * 60 * 60_000L
-
-        private val testClient = OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(10, TimeUnit.SECONDS)
-            .build()
-    }
 }
