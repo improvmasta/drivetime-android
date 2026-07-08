@@ -2,14 +2,12 @@ package org.jupiterns.drivetime
 
 import android.content.Context
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import org.jupiterns.drivetime.obd.Elm327Client
 import java.io.File
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.random.Random
 
@@ -65,8 +63,11 @@ class Uploader(context: Context, private val settings: Settings) {
         }
         synchronized(LOCK) {
             ensureCountLocked()
-            queueFile.appendText(o.toString() + "\n")
-            queuedApprox++
+            // runCatching like every other queue write: a full disk must degrade to a
+            // dropped fix + a log line, not crash the location callback.
+            runCatching { queueFile.appendText(o.toString() + "\n") }
+                .onSuccess { queuedApprox++ }
+                .onFailure { EventLog.warn("Queue append failed: ${it.message}") }
             enforceCapLocked()
         }
     }
@@ -101,22 +102,29 @@ class Uploader(context: Context, private val settings: Settings) {
                     .post(body.toString().toRequestBody(JSON))
                     .build()
                 lastAttemptAt = System.currentTimeMillis()
+                var was401 = false
                 val err = try {
-                    client.newCall(req).execute().use {
+                    Http.client.newCall(req).execute().use {
                         when {
                             it.isSuccessful -> null
-                            it.code == 401 -> "Auth failed — check username/password"
+                            it.code == 401 -> {
+                                was401 = true
+                                "Auth failed — re-scan the pairing QR (the token may have rotated)"
+                            }
                             else -> "Server returned HTTP ${it.code}"
                         }
                     }
                 } catch (e: Exception) {
                     e.message ?: e.javaClass.simpleName
                 }
+                lastAuthFailed = was401
                 if (err == null) {
-                    // Drop exactly the lines we sent. Only enqueue (append-only) can have
-                    // touched the file meanwhile, so the head is still our batch — even if
-                    // one or more lines were unparseable, they're consumed and won't wedge.
-                    val empty = synchronized(LOCK) { dropHeadLocked(batch.size) }
+                    // Drop exactly the lines we sent — matched by CONTENT, not count.
+                    // While the POST was in flight, enqueue may have appended AND its cap
+                    // trim may have rewritten the file (dropping the oldest quarter, i.e.
+                    // possibly part of our in-flight head); a count-based drop would then
+                    // delete newer, never-sent fixes.
+                    val empty = synchronized(LOCK) { dropHeadLocked(batch) }
                     if (failures > 0) EventLog.info("Upload recovered — back online")
                     failures = 0
                     nextAttemptAt = 0L
@@ -143,7 +151,8 @@ class Uploader(context: Context, private val settings: Settings) {
     /** Process-global upload health snapshot for the connection card. */
     fun health(): Health = synchronized(LOCK) {
         ensureCountLocked()
-        Health(queuedApprox, lastSuccessAt, lastAttemptAt, lastError, failures, nextAttemptAt)
+        Health(queuedApprox, lastSuccessAt, lastAttemptAt, lastError, failures, nextAttemptAt,
+            lastAuthFailed)
     }
 
     // --- internals (all callers hold LOCK) ---
@@ -154,9 +163,17 @@ class Uploader(context: Context, private val settings: Settings) {
     private fun queuedCountLocked(): Int =
         if (queueFile.exists()) queueFile.readLines().count { it.isNotBlank() } else 0
 
-    /** Remove the first [n] non-blank lines; returns true if the queue is now empty. */
-    private fun dropHeadLocked(n: Int): Boolean {
-        val remaining = queueFile.readLines().filter { it.isNotBlank() }.drop(n)
+    /** Remove the acked [sent] lines from the head of the queue, matching by content:
+     *  drop leading lines only while they equal the batch in order. If the cap trim
+     *  rewrote the file mid-POST the prefix match stops early — a few acked fixes may
+     *  be re-sent later, which is safe (the server ingests idempotently on (ts,source));
+     *  the reverse (deleting unsent fixes) is not. Returns true if the queue is empty. */
+    private fun dropHeadLocked(sent: List<String>): Boolean {
+        if (!queueFile.exists()) { queuedApprox = 0; return true }
+        val lines = queueFile.readLines().filter { it.isNotBlank() }
+        var i = 0
+        while (i < sent.size && i < lines.size && lines[i] == sent[i]) i++
+        val remaining = lines.drop(i)
         if (remaining.isEmpty()) { queueFile.delete(); tmpFile.delete(); queuedApprox = 0; return true }
         atomicWriteLocked(remaining)
         queuedApprox = remaining.size
@@ -208,6 +225,7 @@ class Uploader(context: Context, private val settings: Settings) {
         @Volatile private var lastSuccessAt = 0L
         @Volatile private var lastAttemptAt = 0L
         @Volatile private var lastError: String? = null
+        @Volatile private var lastAuthFailed = false   // last failure was a 401 (typed, not string-matched)
         @Volatile private var queuedApprox = -1   // -1 = not yet seeded from disk
 
         /** Test-only: forget the process-global cached count so the next access
@@ -215,7 +233,8 @@ class Uploader(context: Context, private val settings: Settings) {
          *  test must reset it to isolate runs / exercise the seed-from-disk path. */
         internal fun resetQueueCacheForTest() { synchronized(LOCK) { queuedApprox = -1 } }
 
-        /** A glanceable snapshot of upload state for the dashboard's connection card. */
+        /** A glanceable snapshot of upload state for the dashboard's connection card.
+         *  [authFailed] is the typed 401 signal (the UI used to string-match the message). */
         data class Health(
             val queued: Int,
             val lastSuccessAt: Long,
@@ -223,13 +242,8 @@ class Uploader(context: Context, private val settings: Settings) {
             val lastError: String?,
             val failures: Int,
             val backoffUntil: Long,
+            val authFailed: Boolean = false,
         )
-
-        /** One client for the whole process so the watchdog doesn't build one per tick. */
-        private val client = OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .writeTimeout(20, TimeUnit.SECONDS)
-            .build()
 
         /** Exponential backoff capped at [BACKOFF_MAX_MS], with ±25% jitter so many
          *  retries don't synchronize into a thundering herd. */

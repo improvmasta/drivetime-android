@@ -35,7 +35,6 @@ object EventLog {
 
     fun info(msg: String) = add(Level.INFO, msg)
     fun warn(msg: String) = add(Level.WARN, msg)
-    fun error(msg: String) = add(Level.ERROR, msg)
 
     fun add(level: Level, msg: String) {
         synchronized(LOCK) {

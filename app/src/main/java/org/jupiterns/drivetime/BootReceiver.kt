@@ -3,7 +3,6 @@ package org.jupiterns.drivetime
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 
 /**
  * Resume logging after the two events that otherwise silently end it:
@@ -36,15 +35,8 @@ class BootReceiver : BroadcastReceiver() {
         if (s.loggingEnabled) {
             Watchdog.schedule(context)   // backstop if the direct start below is refused
             s.lastCommandSource = "boot"
-            try {
-                val svc = Intent(context, LocationService::class.java)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-                    context.startForegroundService(svc)
-                else
-                    context.startService(svc)
-            } catch (e: Exception) {
-                // Too early / throttled — the watchdog will pick it up.
-            }
+            // Refused (too early / throttled) → the watchdog picks it up next cycle.
+            Control.startTrackingService(context)
         }
         // Reboot clears these registrations; re-arm whatever the user had enabled.
         if (s.autoTrip) runCatching { TripDetector.enable(context) }

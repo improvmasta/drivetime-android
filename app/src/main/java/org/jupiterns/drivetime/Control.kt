@@ -216,13 +216,12 @@ object Control {
     }
 
     private fun applyMode(context: Context, settings: Settings, mode: String, source: String) {
-        val svc = Intent(context, LocationService::class.java)
         settings.lastCommandSource = source
         if (mode == Settings.MODE_OFF) {
             settings.trackingMode = Settings.MODE_OFF
             settings.loggingEnabled = false
             Watchdog.cancel(context)
-            context.stopService(svc)
+            context.stopService(Intent(context, LocationService::class.java))
             EventLog.info("Tracking stopped (from $source)")
             StateBroadcaster.emit(context, source)
             return
@@ -232,14 +231,34 @@ object Control {
         // server at all; the uploader simply no-ops until one is configured. So a START must
         // always start the service — standalone is a first-class mode, not an unfinished setup.
         // Record desired state + arm the watchdog before starting, so logging resumes
-        // even if this background FGS-start is throttled. The (re)start re-applies the
-        // tier the detector now resolves, so a forced mode takes effect immediately.
+        // even if this background FGS-start is throttled/refused. The (re)start re-applies
+        // the tier the detector now resolves, so a forced mode takes effect immediately.
         settings.trackingMode = mode
         settings.loggingEnabled = true
         Watchdog.schedule(context)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(svc)
-        else context.startService(svc)
+        startTrackingService(context)
         EventLog.info("Tracking mode = $mode (from $source)")
         StateBroadcaster.emit(context, source)
+    }
+
+    /**
+     * Start the logging foreground service, absorbing the two ways Android can refuse:
+     * ForegroundServiceStartNotAllowedException (a background broadcast START on 12+
+     * without the battery exemption) and a location-permission SecurityException at
+     * startForeground time (14+ enforces the FGS type's prerequisites). The watchdog is
+     * always armed by callers first, so a refused start is retried rather than fatal.
+     * The one shared incantation — Control, Watchdog and BootReceiver each had their own
+     * copy with divergent error handling (only one of the three caught anything).
+     */
+    fun startTrackingService(context: Context): Boolean {
+        val svc = Intent(context, LocationService::class.java)
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(svc)
+            else context.startService(svc)
+            true
+        } catch (e: Exception) {
+            EventLog.warn("Service start refused: ${e.message ?: e.javaClass.simpleName}")
+            false
+        }
     }
 }

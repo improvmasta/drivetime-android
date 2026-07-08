@@ -11,10 +11,10 @@ import androidx.car.app.model.Row
 import androidx.car.app.model.Template
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import org.jupiterns.drivetime.Control
+import org.jupiterns.drivetime.Http
 import org.jupiterns.drivetime.LiveState
 import org.jupiterns.drivetime.Settings
 
@@ -76,10 +76,17 @@ class DriveScreen(carContext: CarContext) : Screen(carContext), DefaultLifecycle
     private fun maybeFetchCommute() {
         if (System.currentTimeMillis() - fetchedAt < 120_000) return
         fetchedAt = System.currentTimeMillis()
+        // Standalone / unpaired: there is no server to ask (an empty serverUrl used to
+        // build a relative URL that threw; a paired server 401'd without the header).
+        val settings = Settings(carContext)
+        if (!settings.isConfigured) return
         Thread {
             try {
-                val url = Settings(carContext).serverUrl + "/api/commute/today"
-                OkHttpClient().newCall(Request.Builder().url(url).build()).execute().use { r ->
+                val req = Request.Builder()
+                    .url(settings.serverUrl + "/api/commute/today")
+                    .header("Authorization", settings.authHeader)
+                    .build()
+                Http.client.newCall(req).execute().use { r ->
                     commute = JSONObject(r.body?.string() ?: "{}")
                 }
             } catch (_: Exception) {

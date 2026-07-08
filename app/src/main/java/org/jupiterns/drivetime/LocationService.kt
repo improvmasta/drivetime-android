@@ -22,6 +22,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
 import com.google.android.gms.location.LocationCallback
@@ -59,6 +60,10 @@ class LocationService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val main = Handler(Looper.getMainLooper())
+    // Fix handling does disk I/O (queue append, cap check, WebFixBuffer rewrite) on every
+    // callback — that must not run on the UI thread of the process that also hosts the
+    // WebView (it was a periodic jank/ANR source while driving with the app open).
+    private val locThread by lazy { HandlerThread("dt-location").also { it.start() } }
     private lateinit var settings: Settings
     private lateinit var uploader: Uploader
     private lateinit var detector: DriveDetector
@@ -81,6 +86,7 @@ class LocationService : Service() {
 
     private var currentTier = DriveDetector.Tier.LIGHT
     private var requestedIntervalMs = -1L         // active LocationRequest interval (avoid churn)
+    private var requestedPriority = -1            // active LocationRequest priority (ditto)
     private var pendingSinceFlush = 0             // fixes enqueued since the last flush trigger
     private var lastPersistedFixAt = 0L           // throttle Settings writes for the kill detector
 
@@ -131,7 +137,16 @@ class LocationService : Service() {
         settings = Settings(this)
         uploader = Uploader(this, settings)
         detector = DriveDetector(settings)
-        startForeground(NOTIF_ID, buildNotification("Starting…"))
+        // Android 14 enforces the FGS type's prerequisites at startForeground time: with
+        // fine location revoked this throws SecurityException. Callers can't all pre-check
+        // (boot/reboot races), so degrade to a clean stop instead of a crash-loop.
+        try {
+            startForeground(NOTIF_ID, buildNotification("Starting…"))
+        } catch (e: Exception) {
+            EventLog.warn("Can't start logging: ${e.message ?: e.javaClass.simpleName}")
+            stopSelf()
+            return
+        }
         EventLog.info("Logging service started")
         ContextCompat.registerReceiver(this, btReceiver, IntentFilter().apply {
             addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
@@ -182,6 +197,7 @@ class LocationService : Service() {
         Watchdog.schedule(this)               // arm the self-healing backstop
         // Apply the tier the detector currently resolves (forces a fresh request).
         requestedIntervalMs = -1L
+        requestedPriority = -1
         applyTier(detector.tier())
         return START_STICKY
     }
@@ -228,15 +244,19 @@ class LocationService : Service() {
     }
 
     /** (Re)subscribe to fixes at the given interval/priority. Skips a no-op re-request
-     *  when the interval is unchanged to avoid thrashing the GPS request. */
+     *  only when BOTH are unchanged (a LIGHT→DRIVING flip with equal intervals must
+     *  still upgrade the priority, or the whole drive gets balanced-power fixes). */
     private fun requestUpdates(intervalMs: Long, priority: Int) {
-        if (intervalMs == requestedIntervalMs) return
+        if (intervalMs == requestedIntervalMs && priority == requestedPriority) return
         requestedIntervalMs = intervalMs
+        requestedPriority = priority
         val req = LocationRequest.Builder(priority, intervalMs)
             .setMinUpdateIntervalMillis(minOf(intervalMs, 1000L))
             .build()
         try {
-            fused.requestLocationUpdates(req, callback, Looper.getMainLooper())
+            // Deliver fixes on the service's own thread: handleFix writes the queue +
+            // WebFixBuffer to disk, which must stay off the UI thread.
+            fused.requestLocationUpdates(req, callback, locThread.looper)
         } catch (se: SecurityException) {
             stopSelf()
         }
@@ -353,7 +373,6 @@ class LocationService : Service() {
                         }
                         latestObd = if (ticks % 120 == 0) s.copy(dtcs = client.readDtcs()) else s
                         LiveState.rpm = s.rpm; LiveState.coolantC = s.coolantC; LiveState.voltage = s.voltage
-                        LiveState.pids = s.pids
                         ticks++
                         delay(1500)
                     }
@@ -518,6 +537,7 @@ class LocationService : Service() {
         runCatching { onsetTokenSource?.cancel() }
         accelListener?.let { runCatching { sensors?.unregisterListener(it) } }
         fused.removeLocationUpdates(callback)
+        runCatching { locThread.quitSafely() }
         obd?.close(); obd = null
         // Final flush off the cancelled scope so a last batch isn't dropped.
         Thread { runCatching { uploader.flush() } }.start()

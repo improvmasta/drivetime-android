@@ -160,6 +160,32 @@ object Permissions {
         else -> emptyArray()
     }
 
+    /** Stable string key for an [Action], so the SPA can pass one back over the bridge
+     *  (`DrivetimeNative.requestPermission`) without knowing the Kotlin enum. */
+    fun keyOf(a: Action): String = when (a) {
+        Action.REQUEST_FOREGROUND_LOCATION -> "foreground_location"
+        Action.REQUEST_BACKGROUND_LOCATION -> "background_location"
+        Action.REQUEST_NOTIFICATIONS -> "notifications"
+        Action.REQUEST_BLUETOOTH -> "bluetooth"
+        Action.REQUEST_ACTIVITY_RECOGNITION -> "activity_recognition"
+        Action.REQUEST_BATTERY_EXEMPT -> "battery"
+        Action.OPEN_LOCATION_SETTINGS -> "location_settings"
+        Action.OPEN_APP_SETTINGS -> "app_settings"
+    }
+
+    /** Inverse of [keyOf]; null for an unknown key (a stale SPA build). */
+    fun fromKey(k: String): Action? = when (k) {
+        "foreground_location" -> Action.REQUEST_FOREGROUND_LOCATION
+        "background_location" -> Action.REQUEST_BACKGROUND_LOCATION
+        "notifications" -> Action.REQUEST_NOTIFICATIONS
+        "bluetooth" -> Action.REQUEST_BLUETOOTH
+        "activity_recognition" -> Action.REQUEST_ACTIVITY_RECOGNITION
+        "battery" -> Action.REQUEST_BATTERY_EXEMPT
+        "location_settings" -> Action.OPEN_LOCATION_SETTINGS
+        "app_settings" -> Action.OPEN_APP_SETTINGS
+        else -> null
+    }
+
     private fun hasPermission(context: Context, name: String) =
         ContextCompat.checkSelfPermission(context, name) == PackageManager.PERMISSION_GRANTED
 
