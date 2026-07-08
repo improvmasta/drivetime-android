@@ -36,7 +36,7 @@ class AlertWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params) 
                 val a = arr.getJSONObject(i)
                 notify(a.optInt("id", i), a.optString("title"), a.optString("body"))
             }
-            client.newCall(
+            Http.client.newCall(
                 Request.Builder().url("${s.serverUrl}/api/alerts/read")
                     .header("Authorization", s.authHeader)
                     .post(ByteArray(0).toRequestBody()).build()
