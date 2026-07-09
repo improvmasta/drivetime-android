@@ -178,6 +178,14 @@ class Settings(context: Context) {
         get() = prefs.getLong("last_fix_at", 0L)
         set(v) = prefs.edit().putLong("last_fix_at", v).apply()
 
+    /** Wall-clock (ms) the current drive began, 0 when not driving. Written when the tier
+     *  enters DRIVING and zeroed when it leaves. Durable (not just [LiveState]) so a service
+     *  restart in the middle of a drive — watchdog resurrection, OEM kill — re-enters DRIVING
+     *  and keeps the original start instead of pretending the drive began just now. */
+    var driveStartedAt: Long
+        get() = prefs.getLong("drive_started_at", 0L)
+        set(v) = prefs.edit().putLong("drive_started_at", v).apply()
+
     /** Wall-clock (ms) of the most recent suspected OEM-kill — set by the watchdog
      *  when it restarts the service after a suspicious gap, so the dashboard can name
      *  the manufacturer-specific setting. Zero = no incident recorded. */

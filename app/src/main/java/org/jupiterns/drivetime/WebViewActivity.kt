@@ -677,6 +677,11 @@ class WebViewActivity : AppCompatActivity() {
                 .put("tier", s.tier ?: JSONObject.NULL)
                 .put("driving", s.tier == "DRIVING")
                 .put("reason", s.driveReason ?: JSONObject.NULL)
+                // Epoch *seconds* (0 = not driving), the same unit as a buffered fix's `ts`, so
+                // the SPA can anchor the live bar to the real drive start with no unit juggling.
+                .put("drive_started_at", if (s.driveStartedAt > 0L) s.driveStartedAt / 1000 else 0L)
+                .put("lat", s.lat ?: JSONObject.NULL)
+                .put("lon", s.lon ?: JSONObject.NULL)
                 .put("speed_mph", s.speedMph ?: JSONObject.NULL)
                 .put("obd_connected", s.obdConnected)
                 .put("rpm", s.rpm ?: JSONObject.NULL)
@@ -701,22 +706,23 @@ class WebViewActivity : AppCompatActivity() {
 
     // ---- status pill ----
 
+    private var pillIcon = 0
+
     private fun refreshPill() {
-        // A GPS/location glyph tinted by state, so it reads as part of the SPA header:
-        //   • tracking off         → grey location icon, no label
-        //   • tracking, not driving → green location icon (all it needs: "on, locating")
-        //   • driving              → green location icon + "Driving"
+        // A single glyph, tinted by state, sized to sit on the SPA's own header row:
+        //   • tracking off          → grey location icon
+        //   • tracking, not driving → green location icon ("on, locating")
+        //   • driving               → green car icon
+        // The glyph carries the state on its own; a "Driving" label next to it widened the
+        // pill mid-drive and pushed the SPA's header controls around, so there is no text.
         val on = settings.trackingMode != Settings.MODE_OFF
         val driving = LiveState.tier == "DRIVING"
-        val color = ContextCompat.getColor(this, if (on) R.color.status_green else R.color.status_grey)
-        val queued = runCatching { uploader.health().queued }.getOrDefault(0)
-        // Only surface a backlog when it's meaningful — a passing "1 queued" in Light is noise.
-        b.pill.text = when {
-            driving && queued > 0 -> "Driving · $queued"
-            driving -> "Driving"
-            else -> ""
+        val icon = if (driving) R.drawable.ic_driving else R.drawable.ic_tracking
+        if (icon != pillIcon) {
+            pillIcon = icon
+            b.pill.setCompoundDrawablesRelativeWithIntrinsicBounds(icon, 0, 0, 0)
         }
-        b.pill.setTextColor(color)
+        val color = ContextCompat.getColor(this, if (on) R.color.status_green else R.color.status_grey)
         androidx.core.widget.TextViewCompat.setCompoundDrawableTintList(
             b.pill, android.content.res.ColorStateList.valueOf(color))
     }

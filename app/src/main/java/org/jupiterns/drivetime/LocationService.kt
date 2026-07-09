@@ -208,6 +208,7 @@ class LocationService : Service() {
         if (t == DriveDetector.Tier.OFF) {
             settings.trackingMode = Settings.MODE_OFF
             settings.loggingEnabled = false
+            settings.driveStartedAt = 0L   // tracking off ends the drive; don't resume it later
             Watchdog.cancel(this)
             stopSelf()
             return
@@ -240,7 +241,30 @@ class LocationService : Service() {
         }
         LiveState.tier = tier.name
         LiveState.driveReason = detector.reason()
+        LiveState.driveStartedAt = markDriveStart(tier)
         updateNotification()
+    }
+
+    /**
+     * Maintain the durable drive-start mark and return it (0 = not driving). Entering DRIVING
+     * from anywhere but a mid-drive service restart stamps `now`; leaving DRIVING clears it.
+     *
+     * The reason this is a *durable* mark rather than a field: when the service is killed and
+     * restarts mid-drive it re-enters DRIVING with the car still connected, and stamping a
+     * fresh start there would silently reset the live bar's clock in the middle of the drive.
+     * A surviving mark is reused instead — unless it's implausibly old ([MAX_DRIVE_MS]), which
+     * means we crashed out of a long-finished drive without ever clearing it.
+     */
+    private fun markDriveStart(tier: DriveDetector.Tier): Long {
+        if (tier != DriveDetector.Tier.DRIVING) {
+            if (settings.driveStartedAt != 0L) settings.driveStartedAt = 0L
+            return 0L
+        }
+        val now = System.currentTimeMillis()
+        val existing = settings.driveStartedAt
+        val resume = existing != 0L && now - existing in 0L..MAX_DRIVE_MS
+        if (!resume) settings.driveStartedAt = now
+        return if (resume) existing else now
     }
 
     /** (Re)subscribe to fixes at the given interval/priority. Skips a no-op re-request
@@ -282,6 +306,8 @@ class LocationService : Service() {
         )
         LiveState.logging = true
         LiveState.speedMph = if (loc.hasSpeed()) Math.round(loc.speed * 2.2369362f) else null
+        LiveState.lat = loc.latitude
+        LiveState.lon = loc.longitude
         val now = System.currentTimeMillis()
         LiveState.updatedAt = now
         // Persist lastFixAt at most every PERSIST_FIX_MS so the watchdog's kill
@@ -611,5 +637,9 @@ class LocationService : Service() {
         // Throttle for persisting "last fix" to Settings (cheap but not free; we only
         // need this fresh to the order of a minute for the OEM kill detector).
         private const val PERSIST_FIX_MS = 30_000L
+
+        // Longest a persisted drive-start mark stays resumable. Past this it can only be a
+        // leak (crashed out of a drive without clearing), never a drive still in progress.
+        private const val MAX_DRIVE_MS = 12 * 60 * 60 * 1000L
     }
 }
