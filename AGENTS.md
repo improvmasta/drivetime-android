@@ -29,23 +29,36 @@ Its source is `drivetime/frontend/`. Refresh it with
 `cd /home/lindsay/drivetime && ./sync-web-to-android.sh`. Editing `assets/web/` directly is
 always wrong — the next sync overwrites it and the website and phone drift apart.
 
-## Phone first — every frontend change must land here
+## Phone first: update always, ship only when told
 
 A change to `drivetime/frontend/` that is only committed in `drivetime` updates the
-*website* and nothing else; the phone keeps running the old bundled snapshot. The full
-sequence for any frontend change:
+*website* and nothing else; the phone keeps running the old bundled snapshot. The two halves
+are deliberately separate:
+
+**Update (always, unprompted).** Every frontend change ends with `drivetime`'s
+`./sync-web-to-android.sh`, which refreshes `app/src/main/assets/web/` here. It leaves the new
+snapshot in this repo's **working tree** and pushes/publishes nothing. A dirty `assets/web/` is
+therefore the correct, expected state: the app carries the change and is ready to ship. **Do
+not** run `ship.sh` just to clean it up.
+
+**Ship (only on explicit instruction).** Shipping means **both repos, ending in a published
+APK** — never one without the other:
 
 ```bash
 cd /home/lindsay/drivetime
-bash ship.sh "message"                  # 1. commit the SPA change
-./sync-web-to-android.sh                # 2. rebuild (base=/assets/web/) → this repo's assets
+bash ship.sh "message"                  # 1. drivetime: commit + push
+./sync-web-to-android.sh                # 2. re-sync if anything changed since
 cd ../drivetime-android
 bash ship.sh "message"                  # 3. commit+push, await CI APK, publish to /dl
 ```
 
-Step 3 blocks on the "Build APK" CI run then calls `drivetime/publish-apk.sh --watch <sha>`,
-so on return the in-app updater already offers the build. Skipping step 2 or 3 leaves the
-phone on stale web assets — the single most common way a "fixed" bug survives a ship.
+Step 3 blocks on the "Build APK" CI run then calls `drivetime/publish-apk.sh --watch <sha>`, so
+a ship is not finished until the in-app updater offers the new APK. Shipping `drivetime` alone
+leaves the phone on the old snapshot — the single most common way a "fixed" bug survives a ship.
+
+The one exception: a commit here that changes **nothing the app runs** (docs, CI config) can go
+up with `SHIP_SKIP_PUBLISH=1 bash ship.sh "…"` — pushed, no APK built for users. Anything
+touching `app/` or `assets/web/` publishes.
 
 Verify on the phone, not just in a browser: touch targets, the hardware BACK button (the
 shell calls `window.__dtHandleBack()`), offline / no-server behavior, and the
