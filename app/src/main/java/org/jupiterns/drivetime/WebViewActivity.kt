@@ -124,6 +124,13 @@ class WebViewActivity : AppCompatActivity() {
         if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
             WebSettingsCompat.setAlgorithmicDarkeningAllowed(ws, true)
         }
+        // Chromium starts its text selection from the container view's performLongClick(), before
+        // the page's `user-select: none` or selectstart guard can weigh in — so holding a drive row
+        // to select it highlighted the row's text and raised the magnifier. Consume the long-click
+        // here, except over an editable field where the hold is how you reach the paste menu.
+        web.setOnLongClickListener { v ->
+            (v as WebView).hitTestResult.type != WebView.HitTestResult.EDIT_TEXT_TYPE
+        }
 
         // Bridge for the SPA: drain the phone's own GPS into the on-device replica (A2), learn
         // whether we're standalone (A3), and drive/read every native tracker setting + action
