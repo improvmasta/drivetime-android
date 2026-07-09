@@ -454,6 +454,28 @@ class WebViewActivity : AppCompatActivity() {
         @JavascriptInterface
         fun pullFixes(sinceTs: Double): String = WebFixBuffer.pullSince(this@WebViewActivity, sinceTs)
 
+        /** JSON array of markers stamped natively (the notification's Mark button, Android
+         *  Auto) at or after [sinceTs]. Native minted each `id`, so the SPA's drain is
+         *  idempotent: it ignores an id it already holds (MARKERS.md §6). */
+        @JavascriptInterface
+        fun pullMarkers(sinceTs: Double): String = WebMarkerBuffer.pullSince(this@WebViewActivity, sinceTs)
+
+        /**
+         * Stamp a marker from the SPA's own Mark button, through the SAME service path the
+         * notification and Android Auto use. One writer: otherwise an in-app mark would land
+         * in IndexedDB without ever reaching [LiveState.markerCount], and the notification's
+         * "since #N" would disagree with the live bar's — the two surfaces the driver checks
+         * against each other. The SPA then drains it back out of the buffer like any other.
+         *
+         * False when no drive is in progress (nothing to mark) — the caller falls back.
+         */
+        @JavascriptInterface
+        fun mark(): Boolean {
+            if (!LocationService.isRunning || LiveState.tier != "DRIVING") return false
+            val i = Intent(this@WebViewActivity, LocationService::class.java).setAction(Control.ACTION_MARK)
+            return runCatching { startService(i) }.isSuccess
+        }
+
         /** True when no *usable* server is configured — the SPA runs purely local. */
         @JavascriptInterface
         fun standalone(): Boolean = !settings.isConfigured
@@ -490,6 +512,7 @@ class WebViewActivity : AppCompatActivity() {
                 .put("motion_onset", settings.motionOnset)
                 .put("auto_trip", settings.autoTrip)
                 .put("alerts_enabled", settings.alertsEnabled)
+                .put("notif_driving_only", settings.notifDrivingOnly)
                 .put("control_token", settings.controlToken)
                 .put("updates_enabled", settings.updatesEnabled)
                 .put("carBtName", settings.carBtName)
@@ -682,6 +705,13 @@ class WebViewActivity : AppCompatActivity() {
                 .put("drive_started_at", if (s.driveStartedAt > 0L) s.driveStartedAt / 1000 else 0L)
                 .put("lat", s.lat ?: JSONObject.NULL)
                 .put("lon", s.lon ?: JSONObject.NULL)
+                // The drive's own running totals. LiveState is the single source of truth for
+                // the drive in progress (MARKERS.md §6): the service sees every fix and every
+                // mark, including while the WebView is dead, so the bar READS these rather
+                // than rescanning the fix buffer and re-summing haversine on every tick.
+                .put("drive_meters", s.driveMeters)
+                .put("markers", s.markerCount)
+                .put("last_marker_ts", s.lastMarkerTs ?: JSONObject.NULL)
                 .put("speed_mph", s.speedMph ?: JSONObject.NULL)
                 .put("obd_connected", s.obdConnected)
                 .put("rpm", s.rpm ?: JSONObject.NULL)

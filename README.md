@@ -23,6 +23,17 @@ driven by Samsung Modes & Routines) and drivetime's `NATIVE_APP.md`.
   heartbeat stays as the backstop.
 - **Durable, batched upload.** Every fix is written to an on-disk queue first, then
   POSTed in batches; a crash, kill, or dead-zone loses nothing.
+- **The notification IS the live drive.** While driving, the foreground-service card shows
+  what the SPA's live bar shows — tier, speed, miles, a running elapsed chronometer,
+  "since #N" — plus **Mark** and **Stop**. That card is on the lock screen for the whole
+  drive by law, which is exactly when the SPA is not on screen and you still need to mark a
+  job site. Marks go through the service into a bounded
+  [`WebMarkerBuffer`](app/src/main/java/org/jupiterns/drivetime/WebMarkerBuffer.kt), which the
+  SPA drains idempotently (native mints the uuid) and names on arrival. Android Auto dispatches
+  the same `ACTION_MARK`. See drivetime's `MARKERS.md` §6.
+  - `notif_driving_only` **demotes** the idle card to a silent, icon-less channel rather than
+    removing it: a location FGS may not hide its notification, and actually removing it would
+    cost the LIGHT tier that detects the next drive onset.
 - **Standalone by default (no server needed).** With no server URL set, the app runs the
   full drivetime SPA **bundled inside the APK**, served over a secure origin via
   `WebViewAssetLoader` ([`Shell`](app/src/main/java/org/jupiterns/drivetime/Shell.kt)) — no

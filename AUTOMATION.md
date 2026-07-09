@@ -42,6 +42,7 @@ or routine engine that supports App Shortcuts.
 | `org.jupiterns.drivetime.action.MODE_ECO`               | trackingMode = LIGHT                     |
 | `org.jupiterns.drivetime.action.SET`                    | one-shot setting change (see §3)         |
 | `org.jupiterns.drivetime.action.QUERY`                  | emit a `STATE_CHANGED` broadcast back    |
+| `org.jupiterns.drivetime.action.MARK`                   | stamp a marker here, now (drive only)    |
 
 Send either:
 * via **Tasker → "Send Intent"** (target: Broadcast Receiver), or
@@ -71,6 +72,7 @@ a key. Keys + value formats:
 | `stationary_stop_min`            | 0+                                         | Auto-trip backstop minutes             |
 | `auto_trip`                      | bool                                       | Activity-recognition auto-trip         |
 | `alerts_enabled`                 | bool                                       | Server alert polling                   |
+| `notif_driving_only`             | bool                                       | Collapse the notification when idle    |
 | `motion_onset`                   | bool                                       | Significant-motion fast-start path     |
 | `onset_probe_interval_sec`       | positive int                               | Probationary GPS cadence after a wake  |
 | `onset_probe_window_sec`         | positive int                               | Probation duration before LIGHT        |

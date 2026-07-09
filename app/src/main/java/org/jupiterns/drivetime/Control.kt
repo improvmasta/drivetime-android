@@ -38,6 +38,11 @@ object Control {
     const val ACTION_SET = "org.jupiterns.drivetime.action.SET"
     const val ACTION_QUERY = "org.jupiterns.drivetime.action.QUERY"
 
+    /** Stamp a marker at the phone's current place and time (MARKERS.md). A side-effect
+     *  action like SET/QUERY, NOT a mode switch: it changes no tracking mode, so it must
+     *  stay out of the mode `when` below or it would silently set the mode to OFF. */
+    const val ACTION_MARK = "org.jupiterns.drivetime.action.MARK"
+
     const val EXTRA_KEY = "key"
     const val EXTRA_VALUE = "value"
     const val EXTRA_TOKEN = "token"
@@ -54,7 +59,7 @@ object Control {
         "interval_sec", "idle_interval_sec", "light_interval_sec",
         "upload_interval_sec", "driving_upload_interval_sec",
         "drive_by_speed", "stationary_stop_min",
-        "auto_trip", "alerts_enabled",
+        "auto_trip", "alerts_enabled", "notif_driving_only",
         "motion_onset", "onset_probe_interval_sec", "onset_probe_window_sec",
         "onset_speed_mps", "onset_accel_rms",
     )
@@ -78,6 +83,23 @@ object Control {
         if (action == ACTION_QUERY) {
             if (!tokenOk(settings, intent)) return settings.trackingMode
             StateBroadcaster.emit(context, source(intent, default = "query"))
+            return settings.trackingMode
+        }
+
+        // MARK is a side effect, not a mode change — it belongs here with SET/QUERY, and
+        // NOT in the mode `when` below, whose `else` branch would leave the mode untouched
+        // but silently drop the mark. Forwarded to the service, which owns LiveState and the
+        // marker buffer. Nothing to mark when we aren't logging, and starting the service
+        // from a background broadcast just to mark would be refused on Android 12+ anyway.
+        if (action == ACTION_MARK) {
+            if (!tokenOk(settings, intent)) return settings.trackingMode
+            if (!LocationService.isRunning) {
+                EventLog.warn("MARK ignored — not logging")
+                return settings.trackingMode
+            }
+            val svc = Intent(context, LocationService::class.java).setAction(ACTION_MARK)
+            runCatching { context.startService(svc) }
+                .onFailure { EventLog.warn("MARK refused: ${it.message ?: it.javaClass.simpleName}") }
             return settings.trackingMode
         }
 
@@ -148,6 +170,16 @@ object Control {
             "alerts_enabled" -> setBool(value) {
                 settings.alertsEnabled = it
                 if (it) AlertWorker.schedule(context) else AlertWorker.cancel(context)
+            }
+            "notif_driving_only" -> setBool(value) {
+                settings.notifDrivingOnly = it
+                // Re-post the card now rather than at the next fix — an idle tier can be a
+                // minute between fixes, and a preference the user just flipped should look
+                // like it took. A no-action start on a running service re-applies the tier,
+                // which rebuilds the notification on the right channel.
+                if (LocationService.isRunning) {
+                    runCatching { context.startService(Intent(context, LocationService::class.java)) }
+                }
             }
             "motion_onset" -> setBool(value) { settings.motionOnset = it }
             "onset_probe_interval_sec" -> setPosInt(value) { settings.onsetProbeIntervalSec = it }

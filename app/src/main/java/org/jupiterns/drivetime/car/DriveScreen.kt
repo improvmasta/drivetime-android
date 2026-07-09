@@ -46,13 +46,25 @@ class DriveScreen(carContext: CarContext) : Screen(carContext), DefaultLifecycle
             .build()
     }
 
-    private fun livePane(): Pane = Pane.Builder()
-        .addRow(row("Speed", LiveState.speedMph?.let { "$it mph" }))
-        .addRow(row("RPM", LiveState.rpm?.toString()))
-        .addRow(row("Coolant", LiveState.coolantC?.let { "$it°C" }))
-        .addRow(row("Battery", LiveState.voltage?.let { String.format("%.1f V", it) }))
-        .addAction(toggle("Stop", Control.ACTION_STOP))
-        .build()
+    private fun livePane(): Pane {
+        val driving = LiveState.tier == "DRIVING"
+        val b = Pane.Builder()
+            .addRow(row("Speed", LiveState.speedMph?.let { "$it mph" }))
+        if (driving) {
+            b.addRow(row("Distance", String.format("%.1f mi", LiveState.driveMeters * 0.000621371)))
+            b.addRow(row("Marks", LiveState.markerCount.toString()))
+        } else {
+            b.addRow(row("RPM", LiveState.rpm?.toString()))
+            b.addRow(row("Coolant", LiveState.coolantC?.let { "$it°C" }))
+        }
+        b.addRow(row("Battery", LiveState.voltage?.let { String.format("%.1f V", it) }))
+        // A steering-wheel-height tap target is the actual ergonomics of marking a job site
+        // (MARKERS.md §6). Same ACTION_MARK the notification button dispatches. A Pane takes
+        // at most two actions, and while driving these are the two that earn their place.
+        if (driving) b.addAction(toggle("Mark", Control.ACTION_MARK))
+        b.addAction(toggle("Stop", Control.ACTION_STOP))
+        return b.build()
+    }
 
     private fun idlePane(): Pane {
         val c = commute

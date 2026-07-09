@@ -1,8 +1,9 @@
 package org.jupiterns.drivetime
 
 /**
- * In-process snapshot of the current drive, written by LocationService and read
- * by the Android Auto screen (same app process). Glanceable, not persisted.
+ * The single source of truth for the drive in progress, written by LocationService and read
+ * by the Android Auto screen, the notification, and the SPA's live bar (all one process).
+ * Glanceable, not persisted.
  */
 object LiveState {
     @Volatile var logging = false
@@ -26,9 +27,26 @@ object LiveState {
     @Volatile var lat: Double? = null
     @Volatile var lon: Double? = null
 
+    /**
+     * Metres driven since [driveStartedAt] — summed by LocationService as each fix arrives,
+     * reset when a new drive is stamped.
+     *
+     * This used to be the SPA's job: live.js re-scanned the whole fixes store every tick and
+     * re-summed haversine from scratch. The service already sees every fix, so it keeps a
+     * running total instead — cheaper, and *correct while the WebView is dead*, which is the
+     * entire point of moving the live drive into the notification (MARKERS.md §6).
+     */
+    @Volatile var driveMeters = 0.0
+
+    /** Markers stamped during the current drive, and the newest one's epoch-second ts. The
+     *  notification's "since #N" line and its "Marked #3" confirmation both read these. */
+    @Volatile var markerCount = 0
+    @Volatile var lastMarkerTs: Long? = null
+
     fun clear() {
         tier = null; driveReason = null; onsetState = null
         speedMph = null; obdConnected = false; rpm = null; coolantC = null; voltage = null
         driveStartedAt = 0L; lat = null; lon = null
+        driveMeters = 0.0; markerCount = 0; lastMarkerTs = null
     }
 }

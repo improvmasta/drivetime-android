@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
@@ -33,6 +34,7 @@ import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import com.google.android.gms.tasks.Tasks
 import androidx.core.content.ContextCompat
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -109,6 +111,9 @@ class LocationService : Service() {
     private var idleMode = false
     private var slowCount = 0
     private var lastMoveLoc: Location? = null
+    /** Previous fix, for the running [LiveState.driveMeters] sum. Distinct from lastMoveLoc,
+     *  which adaptSampling resets on its own schedule. */
+    private var lastDistLoc: Location? = null
 
     private val callback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
@@ -141,7 +146,7 @@ class LocationService : Service() {
         // fine location revoked this throws SecurityException. Callers can't all pre-check
         // (boot/reboot races), so degrade to a clean stop instead of a crash-loop.
         try {
-            startForeground(NOTIF_ID, buildNotification("Starting…"))
+            startForeground(NOTIF_ID, buildNotification())
         } catch (e: Exception) {
             EventLog.warn("Can't start logging: ${e.message ?: e.javaClass.simpleName}")
             stopSelf()
@@ -186,6 +191,12 @@ class LocationService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // A side-effect action, handled before the mode logic below: marking changes no
+        // tracking mode, and must never be mistaken for a stop.
+        if (intent?.action == Control.ACTION_MARK) {
+            markNow()
+            return START_STICKY
+        }
         if (intent?.action == Control.ACTION_STOP || settings.trackingMode == Settings.MODE_OFF) {
             settings.trackingMode = Settings.MODE_OFF
             settings.loggingEnabled = false   // intentional stop
@@ -258,13 +269,41 @@ class LocationService : Service() {
     private fun markDriveStart(tier: DriveDetector.Tier): Long {
         if (tier != DriveDetector.Tier.DRIVING) {
             if (settings.driveStartedAt != 0L) settings.driveStartedAt = 0L
+            resetDriveTotals()
             return 0L
         }
         val now = System.currentTimeMillis()
         val existing = settings.driveStartedAt
         val resume = existing != 0L && now - existing in 0L..MAX_DRIVE_MS
-        if (!resume) settings.driveStartedAt = now
+        if (resume) {
+            resumeDriveTotals(existing)
+        } else {
+            settings.driveStartedAt = now
+            resetDriveTotals()   // a NEW drive: its miles and markers start at zero
+        }
         return if (resume) existing else now
+    }
+
+    /**
+     * Zero the running totals the notification shows. On a *resumed* drive (a service restart
+     * mid-drive) they are rebuilt instead: the marker count is recovered from the on-disk
+     * buffer, because a driver who marked three job sites must not see the count fall to zero
+     * when the OS kills and revives the service. Distance can't be recovered the same way — we
+     * never buffered a running sum — so it restarts from the resume point and undercounts.
+     * The SPA's own figure, computed from the full fix buffer, stays correct regardless.
+     */
+    private fun resetDriveTotals() {
+        LiveState.driveMeters = 0.0
+        LiveState.markerCount = 0
+        LiveState.lastMarkerTs = null
+        lastDistLoc = null
+    }
+
+    private fun resumeDriveTotals(startedAtMs: Long) {
+        val startSec = startedAtMs / 1000
+        LiveState.markerCount = runCatching { WebMarkerBuffer.countSince(this, startSec) }.getOrDefault(0)
+        LiveState.lastMarkerTs = runCatching { WebMarkerBuffer.latestTs(this) }.getOrNull()
+            ?.takeIf { it >= startSec }
     }
 
     /** (Re)subscribe to fixes at the given interval/priority. Skips a no-op re-request
@@ -308,6 +347,12 @@ class LocationService : Service() {
         LiveState.speedMph = if (loc.hasSpeed()) Math.round(loc.speed * 2.2369362f) else null
         LiveState.lat = loc.latitude
         LiveState.lon = loc.longitude
+        // Running distance for the notification + the SPA's live bar. Only while DRIVING:
+        // idle-tier wander (GPS drift in a parking lot) is not mileage.
+        if (currentTier == DriveDetector.Tier.DRIVING) {
+            lastDistLoc?.let { LiveState.driveMeters += it.distanceTo(loc) }
+            lastDistLoc = loc
+        }
         val now = System.currentTimeMillis()
         LiveState.updatedAt = now
         // Persist lastFixAt at most every PERSIST_FIX_MS so the watchdog's kill
@@ -325,6 +370,11 @@ class LocationService : Service() {
         detector.onSpeed(speed, System.currentTimeMillis())
         reevaluate()
         if (currentTier == DriveDetector.Tier.DRIVING) adaptSampling(loc)
+        // Redraw the drive card on each recorded fix (~1 Hz while driving), not on a timer:
+        // Android rate-limits notify() well above that, and the chronometer covers the gaps.
+        // Idle fixes redraw too — cheap, and it's what makes a just-flipped `notif_driving_only`
+        // take effect without waiting for the next tier change.
+        if (currentTier != DriveDetector.Tier.OFF) updateNotification()
     }
 
     /**
@@ -576,32 +626,154 @@ class LocationService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun updateNotification() {
+    private fun updateNotification(flash: String? = null) {
         val mgr = getSystemService(NotificationManager::class.java)
-        mgr.notify(NOTIF_ID, buildNotification(tierText()))
+        runCatching { mgr.notify(NOTIF_ID, buildNotification(flash)) }
     }
 
     private fun tierText(): String = when (currentTier) {
         DriveDetector.Tier.DRIVING -> "Driving · ${detector.reason()}"
-        DriveDetector.Tier.LIGHT -> "Light tracking"
+        DriveDetector.Tier.LIGHT -> "Idle"
         DriveDetector.Tier.OFF -> "Off"
     }
 
-    private fun buildNotification(text: String): Notification {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val mgr = getSystemService(NotificationManager::class.java)
-            if (mgr.getNotificationChannel(CHANNEL) == null) {
-                mgr.createNotificationChannel(
-                    NotificationChannel(CHANNEL, "Drive logging", NotificationManager.IMPORTANCE_LOW)
-                )
-            }
+    /** Car glyph while a drive is in progress, crosshair otherwise — the status bar says
+     *  which state we're in by its shape, without the shade having to be pulled down. */
+    private fun tierIcon(): Int =
+        if (currentTier == DriveDetector.Tier.DRIVING) R.drawable.ic_notif_driving
+        else R.drawable.ic_notif_tracking
+
+    private fun driving(): Boolean = currentTier == DriveDetector.Tier.DRIVING
+
+    /**
+     * Which channel the ongoing notification rides on. `notif_driving_only` demotes the idle
+     * card to IMPORTANCE_MIN — no status-bar icon, collapsed at the bottom of the shade —
+     * instead of removing it, which a location FGS may not do (see [Settings.notifDrivingOnly]).
+     * Re-posting an FGS notification on a different channel under the same id is allowed.
+     */
+    private fun activeChannel(): String =
+        if (settings.notifDrivingOnly && !driving()) IDLE_CHANNEL else CHANNEL
+
+    private fun ensureChannels() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val mgr = getSystemService(NotificationManager::class.java)
+        if (mgr.getNotificationChannel(CHANNEL) == null) {
+            mgr.createNotificationChannel(
+                NotificationChannel(CHANNEL, "Drive logging", NotificationManager.IMPORTANCE_LOW)
+            )
         }
-        return Notification.Builder(this, CHANNEL)
-            .setContentTitle("drivetime")
-            .setContentText(text)
-            .setSmallIcon(android.R.drawable.ic_menu_mylocation)
-            .setOngoing(true)
+        if (mgr.getNotificationChannel(IDLE_CHANNEL) == null) {
+            mgr.createNotificationChannel(
+                NotificationChannel(IDLE_CHANNEL, "Idle tracking", NotificationManager.IMPORTANCE_MIN)
+            )
+        }
+    }
+
+    private fun servicePi(action: String, code: Int): PendingIntent {
+        val i = Intent(this, LocationService::class.java).setAction(action)
+        return PendingIntent.getService(
+            this, code, i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    private fun action(icon: Int, title: String, pi: PendingIntent): Notification.Action =
+        Notification.Action.Builder(android.graphics.drawable.Icon.createWithResource(this, icon), title, pi)
             .build()
+
+    /** "12.4 mi · since #3" — the stats line. Elapsed is NOT in here: the chronometer below
+     *  renders it for free, and stays honest between fixes without waking the CPU. */
+    private fun driveStats(): String {
+        val miles = LiveState.driveMeters * 0.000621371
+        val parts = ArrayList<String>(2)
+        parts.add(String.format("%.1f mi", miles))
+        if (LiveState.markerCount > 0) parts.add("since #${LiveState.markerCount}")
+        return parts.joinToString(" · ")
+    }
+
+    /**
+     * The notification IS the live drive (MARKERS.md §6): while driving it mirrors what
+     * ActiveDriveBar.svelte shows — tier, speed, miles, elapsed, "since #N" — plus Mark and
+     * Stop. It is on the lock screen for the whole drive by law, which is precisely when the
+     * SPA is not on screen and the driver still needs to mark a job site.
+     *
+     * Idle and Off collapse back to one line with no actions: a Mark button on a parked phone
+     * would write a marker into no drive at all.
+     *
+     * [flash] briefly replaces the stats line ("Marked #3") — the only confirmation a driver
+     * with a locked phone ever gets.
+     */
+    private fun buildNotification(flash: String? = null): Notification {
+        ensureChannels()
+        val open = PendingIntent.getActivity(
+            this, 0, Intent(this, WebViewActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val b = Notification.Builder(this, activeChannel())
+            .setSmallIcon(tierIcon())
+            .setOngoing(true)
+            .setContentIntent(open)
+            // A per-fix redraw (~1 Hz while driving) must never buzz or re-alert.
+            .setOnlyAlertOnce(true)
+
+        if (!driving()) {
+            return b.setContentTitle("drivetime").setContentText(tierText()).build()
+        }
+
+        val speed = LiveState.speedMph
+        val title = if (speed != null) "${tierText()} · $speed mph" else tierText()
+        b.setContentTitle(title)
+            .setContentText(flash ?: driveStats())
+            // The running elapsed clock, rendered by the system: nothing ticks, nothing wakes
+            // the CPU, and the time stays honest between fixes.
+            .setUsesChronometer(true)
+            .setWhen(LiveState.driveStartedAt.takeIf { it > 0L } ?: System.currentTimeMillis())
+            // The numbers have to survive the lock screen — that is the entire point.
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .addAction(action(R.drawable.ic_notif_driving, "Mark", servicePi(Control.ACTION_MARK, 1)))
+            .addAction(action(R.drawable.ic_notif_tracking, "Stop", servicePi(Control.ACTION_STOP, 2)))
+        return b.build()
+    }
+
+    /**
+     * Stamp a marker at the phone's current place and time, from the notification, Android
+     * Auto, or a routine. Native mints the uuid so the SPA's pull is idempotent by `id`
+     * (MARKERS.md §6) — a crash between append and drain re-delivers, never duplicates.
+     *
+     * The service does NOT need to know which drive is in progress: a marker resolves to the
+     * drive spanning its `ts` at read time. That is the whole reason this button is cheap.
+     */
+    private fun markNow() {
+        if (!driving()) return  // a mark on a parked phone would belong to no drive
+        val lat = LiveState.lat
+        val lon = LiveState.lon
+        if (lat == null || lon == null) {
+            // Marking before the drive's first fix: there is nothing honest to stamp, and a
+            // marker at 0,0 would be worse than none.
+            flashNotification("No GPS yet — not marked")
+            return
+        }
+        val ts = System.currentTimeMillis() / 1000
+        try {
+            WebMarkerBuffer.append(this, UUID.randomUUID().toString(), ts, lat, lon)
+        } catch (e: Exception) {
+            EventLog.warn("Mark failed: ${e.message ?: e.javaClass.simpleName}")
+            flashNotification("Couldn't mark")
+            return
+        }
+        LiveState.markerCount += 1
+        LiveState.lastMarkerTs = ts
+        EventLog.info("Marker #${LiveState.markerCount} stamped")
+        flashNotification("Marked #${LiveState.markerCount}")
+    }
+
+    /** Show [text] in place of the stats line, then fall back. With the phone locked this is
+     *  the only feedback the driver gets, so it has to land. */
+    private fun flashNotification(text: String) {
+        updateNotification(flash = text)
+        scope.launch {
+            delay(FLASH_MS)
+            updateNotification()
+        }
     }
 
     companion object {
@@ -611,7 +783,12 @@ class LocationService : Service() {
             private set
 
         private const val CHANNEL = "drive_logging"
+        /** IMPORTANCE_MIN twin of [CHANNEL]: same notification id, no status-bar icon, used
+         *  while idle when `notif_driving_only` is on. */
+        private const val IDLE_CHANNEL = "drive_idle"
         private const val NOTIF_ID = 1
+        /** How long "Marked #3" replaces the stats line before it falls back. */
+        private const val FLASH_MS = 3_000L
 
         // Within-drive dense/idle thresholds.
         private const val MOVING_MPS = 1.4f    // ~3 mph: at/above this counts as moving

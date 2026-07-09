@@ -154,6 +154,20 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("alerts_enabled", false)
         set(v) = prefs.edit().putBoolean("alerts_enabled", v).apply()
 
+    /**
+     * Show the full drive card only while DRIVING; collapse to a bare, icon-less notification
+     * when idle (MARKERS.md §6). It **demotes**, it never stops the service.
+     *
+     * A location foreground service is not allowed to hide its notification, and actually
+     * removing it would mean giving up the LIGHT tier that watches for the next drive onset:
+     * no idle GPS, and a restart-from-broadcast that Android 12+ blocks for the receivers we
+     * have. So the idle card moves to an IMPORTANCE_MIN channel with no status-bar icon, and
+     * every drive is still detected, every idle fix still logged.
+     */
+    var notifDrivingOnly: Boolean
+        get() = prefs.getBoolean("notif_driving_only", false)
+        set(v) = prefs.edit().putBoolean("notif_driving_only", v).apply()
+
     /** Optional shared secret gating *parameter-setting* control intents (SET, QUERY).
      *  Blank → open (the default; this is a private app on the user's own phone). When
      *  set, a routine must include `token=<this>` in its intent extras or the action is

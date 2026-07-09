@@ -23,6 +23,8 @@ object AutomationHelp {
           org.jupiterns.drivetime.action.MODE_ECO
           org.jupiterns.drivetime.action.SET        → see SET keys below
           org.jupiterns.drivetime.action.QUERY      → emits STATE_CHANGED
+          org.jupiterns.drivetime.action.MARK       → stamp a marker here, now
+                                                      (ignored unless a drive is in progress)
 
         SET keys (extras key=<name>, value=<...>):
           mode                            auto | driving | light | off
@@ -35,6 +37,7 @@ object AutomationHelp {
           stationary_stop_min             0+    auto-trip backstop
           auto_trip                       true|false
           alerts_enabled                  true|false
+          notif_driving_only              true|false  collapse the card when idle
           motion_onset                    true|false  significant-motion fast start
           onset_probe_interval_sec        1+    probationary GPS cadence
           onset_probe_window_sec          1+    probation duration
