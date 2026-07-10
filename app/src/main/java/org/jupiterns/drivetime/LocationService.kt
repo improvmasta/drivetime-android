@@ -200,6 +200,15 @@ class LocationService : Service() {
             markNow()
             return START_STICKY
         }
+        // Dashboard opened/closed: re-apply the (now boosted or restored) dense fix rate at
+        // once instead of waiting for the next adaptSampling tick. OBD picks up its own boost
+        // on its next loop iteration. Never mistaken for a stop.
+        if (intent?.action == ACTION_DASHBOARD) {
+            if (currentTier == DriveDetector.Tier.DRIVING && !idleMode) {
+                requestUpdates(drivingIntervalMs(), Priority.PRIORITY_HIGH_ACCURACY)
+            }
+            return START_STICKY
+        }
         if (intent?.action == Control.ACTION_STOP || settings.trackingMode == Settings.MODE_OFF) {
             settings.trackingMode = Settings.MODE_OFF
             settings.loggingEnabled = false   // intentional stop
@@ -245,7 +254,7 @@ class LocationService : Service() {
             DriveDetector.Tier.DRIVING -> {
                 idleMode = false; slowCount = 0; lastMoveLoc = null
                 disarmMotionOnset()   // already dense; no point waking on motion
-                requestUpdates(settings.intervalSec * 1000L, Priority.PRIORITY_HIGH_ACCURACY)
+                requestUpdates(drivingIntervalMs(), Priority.PRIORITY_HIGH_ACCURACY)
             }
             DriveDetector.Tier.LIGHT -> {
                 requestUpdates(settings.lightIntervalSec * 1000L, Priority.PRIORITY_BALANCED_POWER_ACCURACY)
@@ -311,6 +320,11 @@ class LocationService : Service() {
         LiveState.lastMarkerTs = runCatching { WebMarkerBuffer.latestTs(this) }.getOrNull()
             ?.takeIf { it >= startSec }
     }
+
+    /** The dense-tier GPS interval, dropped to [DASH_BOOST_MS] while the live dashboard is open
+     *  so the speedometer reads ~1s-live; otherwise the user's `intervalSec`. */
+    private fun drivingIntervalMs(): Long =
+        if (dashboardBoost) minOf(settings.intervalSec * 1000L, DASH_BOOST_MS) else settings.intervalSec * 1000L
 
     /** (Re)subscribe to fixes at the given interval/priority. Skips a no-op re-request
      *  only when BOTH are unchanged (a LIGHT→DRIVING flip with equal intervals must
@@ -405,7 +419,7 @@ class LocationService : Service() {
             slowCount = 0
             if (idleMode) {
                 idleMode = false
-                requestUpdates(settings.intervalSec * 1000L, Priority.PRIORITY_HIGH_ACCURACY)
+                requestUpdates(drivingIntervalMs(), Priority.PRIORITY_HIGH_ACCURACY)
             }
             return
         }
@@ -463,7 +477,9 @@ class LocationService : Service() {
                         LiveState.rpm = s.rpm; LiveState.throttle = s.throttle
                         LiveState.coolantC = s.coolantC; LiveState.voltage = s.voltage
                         ticks++
-                        delay(1500)
+                        // Poll faster while the live dashboard is open so the RPM/throttle
+                        // gauges keep up; ~0.8s is within a cheap ELM327 clone's reach.
+                        delay(if (dashboardBoost) OBD_BOOST_MS else OBD_POLL_MS)
                     }
                 } catch (e: Exception) {
                     // dongle off/unpaired/out of range — log it so a real fault is visible
@@ -810,6 +826,32 @@ class LocationService : Service() {
          *  process death, so the watchdog reading false after an OS kill knows to relaunch. */
         @Volatile var isRunning = false
             private set
+
+        /** The live dashboard is open in the WebView: boost the GPS + OBD sample rate so the
+         *  gauges read ~1s-live. A short, screen-on, user-attended window, so the extra draw is
+         *  self-limiting; cleared the moment the dashboard collapses. */
+        @Volatile var dashboardBoost = false
+            private set
+
+        const val ACTION_DASHBOARD = "org.jupiterns.drivetime.action.DASHBOARD"
+        /** Boosted GPS fix interval while the dashboard is open. */
+        private const val DASH_BOOST_MS = 1_000L
+        /** Boosted OBD poll while the dashboard is open (vs OBD_POLL_MS). */
+        private const val OBD_BOOST_MS = 800L
+        /** Ordinary OBD poll cadence. */
+        private const val OBD_POLL_MS = 1_500L
+
+        /** Toggle the dashboard boost and, if the service is live, re-apply the fix rate now. */
+        fun setDashboardBoost(context: Context, active: Boolean) {
+            if (dashboardBoost == active) return
+            dashboardBoost = active
+            if (!isRunning) return
+            runCatching {
+                context.startService(
+                    Intent(context, LocationService::class.java).setAction(ACTION_DASHBOARD)
+                )
+            }
+        }
 
         private const val CHANNEL = "drive_logging"
         /** IMPORTANCE_MIN twin of [CHANNEL]: same notification id, no status-bar icon, used

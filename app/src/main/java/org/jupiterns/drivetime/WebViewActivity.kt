@@ -476,6 +476,14 @@ class WebViewActivity : AppCompatActivity() {
             return runCatching { startService(i) }.isSuccess
         }
 
+        /** The live drive dashboard was opened/closed in the SPA. While open, the logger boosts
+         *  its GPS + OBD sample rate so the gauges read ~1s-live; on close it drops back to the
+         *  battery-saving cadence. A no-op when not driving. */
+        @JavascriptInterface
+        fun setDashboardActive(active: Boolean) {
+            LocationService.setDashboardBoost(this@WebViewActivity, active)
+        }
+
         /** True when no *usable* server is configured — the SPA runs purely local. */
         @JavascriptInterface
         fun standalone(): Boolean = !settings.isConfigured
