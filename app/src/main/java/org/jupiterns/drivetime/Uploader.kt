@@ -209,7 +209,12 @@ class Uploader(context: Context, private val settings: Settings) {
         private const val QUEUE_TMP = "queue.tmp"
         private const val MAX_BATCH = 500                 // fixes per POST
         private const val MAX_FLUSH_BATCHES = 50          // POSTs per flush() call (drain bound)
-        private const val MAX_QUEUE_BYTES = 16L * 1024 * 1024   // ~16 MB hard cap on backlog
+        // Hard cap on the backlog. Dropping the oldest fixes is what made the server segment a
+        // strictly smaller stream than the phone, so the two disagreed about where a drive began
+        // and the same drive rendered twice. The SPA now re-sends the intervals the server is
+        // short of, and the server adopts the phone's boundaries either way — but a cap this
+        // generous means an offline stretch rarely reaches the drop path at all.
+        private const val MAX_QUEUE_BYTES = 64L * 1024 * 1024
         private const val BACKOFF_BASE_MS = 5_000L
         private const val BACKOFF_MAX_MS = 5 * 60_000L
         private val JSON = "application/json".toMediaType()

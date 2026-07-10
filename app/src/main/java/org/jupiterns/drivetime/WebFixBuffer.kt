@@ -18,7 +18,10 @@ import java.io.File
  */
 object WebFixBuffer {
     private const val FILE = "web_fixes.jsonl"
-    private const val MAX_FIXES = 40_000          // ~a few days of dense driving; then drop oldest
+    // Then drop oldest. The phone is the durable fix archive the server heals from, and a drive
+    // whose fixes fall out of this ring before the SPA drains them is one the phone can never
+    // re-derive or re-send — so the ring is sized well past any plausible gap between launches.
+    private const val MAX_FIXES = 120_000         // ~a week of dense driving
     private const val TRIM_EVERY = 500            // amortize the rewrite: trim every N appends
     private val LOCK = Any()
     private var appendsSinceTrim = 0
