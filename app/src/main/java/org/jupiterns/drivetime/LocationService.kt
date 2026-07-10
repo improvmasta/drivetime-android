@@ -26,6 +26,8 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
+import android.widget.RemoteViews
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
@@ -91,6 +93,7 @@ class LocationService : Service() {
     private var requestedPriority = -1            // active LocationRequest priority (ditto)
     private var pendingSinceFlush = 0             // fixes enqueued since the last flush trigger
     private var lastPersistedFixAt = 0L           // throttle Settings writes for the kill detector
+    private var lastPersistedMeters = 0.0         // last driveMeters mirrored to durable Settings
 
     private val connectivity by lazy { getSystemService(ConnectivityManager::class.java) }
     /** Flush as soon as a usable network returns, so a dead-zone backlog clears
@@ -287,20 +290,23 @@ class LocationService : Service() {
     /**
      * Zero the running totals the notification shows. On a *resumed* drive (a service restart
      * mid-drive) they are rebuilt instead: the marker count is recovered from the on-disk
-     * buffer, because a driver who marked three job sites must not see the count fall to zero
-     * when the OS kills and revives the service. Distance can't be recovered the same way — we
-     * never buffered a running sum — so it restarts from the resume point and undercounts.
-     * The SPA's own figure, computed from the full fix buffer, stays correct regardless.
+     * buffer and the running distance from the durable [Settings.driveMeters] mirror, because a
+     * driver who marked three job sites and drove twenty miles must not see either fall to zero
+     * when the OS kills and revives the service.
      */
     private fun resetDriveTotals() {
         LiveState.driveMeters = 0.0
+        settings.driveMeters = 0f
         LiveState.markerCount = 0
         LiveState.lastMarkerTs = null
         lastDistLoc = null
+        lastPersistedMeters = 0.0
     }
 
     private fun resumeDriveTotals(startedAtMs: Long) {
         val startSec = startedAtMs / 1000
+        LiveState.driveMeters = settings.driveMeters.toDouble()
+        lastPersistedMeters = LiveState.driveMeters
         LiveState.markerCount = runCatching { WebMarkerBuffer.countSince(this, startSec) }.getOrDefault(0)
         LiveState.lastMarkerTs = runCatching { WebMarkerBuffer.latestTs(this) }.getOrNull()
             ?.takeIf { it >= startSec }
@@ -357,9 +363,15 @@ class LocationService : Service() {
         LiveState.updatedAt = now
         // Persist lastFixAt at most every PERSIST_FIX_MS so the watchdog's kill
         // detector has a recent timestamp without one SharedPreferences write per fix.
+        // Mirror the running distance on the same tick (near-free) so a mid-drive restart
+        // resumes the miles instead of zeroing them (resumeDriveTotals reads Settings.driveMeters).
         if (now - lastPersistedFixAt >= PERSIST_FIX_MS) {
             settings.lastFixAt = now
             lastPersistedFixAt = now
+            if (LiveState.driveMeters != lastPersistedMeters) {
+                settings.driveMeters = LiveState.driveMeters.toFloat()
+                lastPersistedMeters = LiveState.driveMeters
+            }
         }
         // Batched upload: buffer to the durable queue; flush on the periodic tick,
         // when a full batch has accumulated, or when connectivity returns.
@@ -448,7 +460,8 @@ class LocationService : Service() {
                                 " tank=${s.fuelLevel?.let { "%.0f".format(it) }}% v=${s.voltage} ctrlV=${s.ctrlVoltage}")
                         }
                         latestObd = if (ticks % 120 == 0) s.copy(dtcs = client.readDtcs()) else s
-                        LiveState.rpm = s.rpm; LiveState.coolantC = s.coolantC; LiveState.voltage = s.voltage
+                        LiveState.rpm = s.rpm; LiveState.throttle = s.throttle
+                        LiveState.coolantC = s.coolantC; LiveState.voltage = s.voltage
                         ticks++
                         delay(1500)
                     }
@@ -680,16 +693,6 @@ class LocationService : Service() {
         Notification.Action.Builder(android.graphics.drawable.Icon.createWithResource(this, icon), title, pi)
             .build()
 
-    /** "12.4 mi · since #3" — the stats line. Elapsed is NOT in here: the chronometer below
-     *  renders it for free, and stays honest between fixes without waking the CPU. */
-    private fun driveStats(): String {
-        val miles = LiveState.driveMeters * 0.000621371
-        val parts = ArrayList<String>(2)
-        parts.add(String.format("%.1f mi", miles))
-        if (LiveState.markerCount > 0) parts.add("since #${LiveState.markerCount}")
-        return parts.joinToString(" · ")
-    }
-
     /**
      * The notification IS the live drive (MARKERS.md §6): while driving it mirrors what
      * ActiveDriveBar.svelte shows — tier, speed, miles, elapsed, "since #N" — plus Mark and
@@ -719,19 +722,45 @@ class LocationService : Service() {
             return b.setContentTitle("drivetime").setContentText(tierText()).build()
         }
 
-        val speed = LiveState.speedMph
-        val title = if (speed != null) "${tierText()} · $speed mph" else tierText()
-        b.setContentTitle(title)
-            .setContentText(flash ?: driveStats())
-            // The running elapsed clock, rendered by the system: nothing ticks, nothing wakes
-            // the CPU, and the time stays honest between fixes.
-            .setUsesChronometer(true)
-            .setWhen(LiveState.driveStartedAt.takeIf { it > 0L } ?: System.currentTimeMillis())
-            // The numbers have to survive the lock screen — that is the entire point.
+        // A custom mini-dashboard (speed / miles / live elapsed) drawn inside the system's
+        // DecoratedCustomViewStyle, which still renders the header, small icon, background and
+        // the Mark/Stop actions. The numbers have to survive the lock screen — the whole point.
+        b.setStyle(Notification.DecoratedCustomViewStyle())
+            .setCustomContentView(driveRemoteViews(R.layout.notif_drive, expanded = false, flash = flash))
+            .setCustomBigContentView(driveRemoteViews(R.layout.notif_drive_big, expanded = true, flash = flash))
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .addAction(action(R.drawable.ic_notif_driving, "Mark", servicePi(Control.ACTION_MARK, 1)))
             .addAction(action(R.drawable.ic_notif_tracking, "Stop", servicePi(Control.ACTION_STOP, 2)))
         return b.build()
+    }
+
+    /**
+     * Populate the drive card's custom content. Both the collapsed and expanded layouts read the
+     * same live totals; elapsed is a [Chronometer] anchored to [LiveState.driveStartedAt] so it
+     * ticks on the lock screen without waking the service. [flash] briefly replaces the stats
+     * line ("Marked #3") — the only confirmation a driver with a locked phone gets.
+     */
+    private fun driveRemoteViews(layout: Int, expanded: Boolean, flash: String?): RemoteViews {
+        val rv = RemoteViews(packageName, layout)
+        val startedMs = LiveState.driveStartedAt.takeIf { it > 0L } ?: System.currentTimeMillis()
+        val base = SystemClock.elapsedRealtime() - (System.currentTimeMillis() - startedMs)
+        val speed = LiveState.speedMph
+        val miles = String.format("%.1f", LiveState.driveMeters * 0.000621371)
+        val since = if (LiveState.markerCount > 0) "since #${LiveState.markerCount}" else null
+        if (expanded) {
+            rv.setChronometer(R.id.n_chrono_big, base, null, true)
+            rv.setTextViewText(R.id.n_tier, tierText())
+            rv.setTextViewText(R.id.n_speed_val, if (speed != null) "$speed" else "—")
+            rv.setTextViewText(R.id.n_miles_val, miles)
+            rv.setTextViewText(R.id.n_since, flash ?: since ?: "")
+        } else {
+            rv.setChronometer(R.id.n_chrono, base, null, true)
+            rv.setTextViewText(R.id.n_title, tierText())
+            rv.setTextViewText(R.id.n_speed, if (speed != null) "$speed mph" else "")
+            val stats = flash ?: listOfNotNull("$miles mi", since).joinToString(" · ")
+            rv.setTextViewText(R.id.n_stats, "· $stats")
+        }
+        return rv
     }
 
     /**

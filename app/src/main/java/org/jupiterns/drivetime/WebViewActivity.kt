@@ -715,6 +715,7 @@ class WebViewActivity : AppCompatActivity() {
                 .put("speed_mph", s.speedMph ?: JSONObject.NULL)
                 .put("obd_connected", s.obdConnected)
                 .put("rpm", s.rpm ?: JSONObject.NULL)
+                .put("throttle", s.throttle ?: JSONObject.NULL)
                 .put("coolant_c", s.coolantC ?: JSONObject.NULL)
                 .put("voltage", s.voltage ?: JSONObject.NULL)
                 .put("updated_at", s.updatedAt)

@@ -200,6 +200,15 @@ class Settings(context: Context) {
         get() = prefs.getLong("drive_started_at", 0L)
         set(v) = prefs.edit().putLong("drive_started_at", v).apply()
 
+    /** Metres driven in the current drive, mirrored from [LiveState.driveMeters] on the same
+     *  throttled cadence as [lastFixAt]. Durable for the same reason [driveStartedAt] is: a
+     *  service restart mid-drive (app update, OEM kill, watchdog) re-enters DRIVING, and without
+     *  this the running distance would reset to zero and the drive card would undercount. 0 when
+     *  not driving; restored by `resumeDriveTotals`, zeroed on a genuinely new drive. */
+    var driveMeters: Float
+        get() = prefs.getFloat("drive_meters", 0f)
+        set(v) = prefs.edit().putFloat("drive_meters", v).apply()
+
     /** Wall-clock (ms) of the most recent suspected OEM-kill — set by the watchdog
      *  when it restarts the service after a suspicious gap, so the dashboard can name
      *  the manufacturer-specific setting. Zero = no incident recorded. */
