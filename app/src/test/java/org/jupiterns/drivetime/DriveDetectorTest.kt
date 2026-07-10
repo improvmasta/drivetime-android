@@ -153,4 +153,41 @@ class DriveDetectorTest {
         d.onSpeed(0.5f, 200_000L)                            // past EXIT_MS (3 min)
         assertEquals(DriveDetector.Tier.LIGHT, d.tier())
     }
+
+    // ---- resume latch (process restart in the middle of a drive: app update / OEM kill) ----
+
+    @Test fun resumeDriving_promotesToDriving() {
+        val d = DriveDetector(settings())
+        assertEquals(DriveDetector.Tier.LIGHT, d.tier())
+        d.resumeDriving = true
+        assertEquals(DriveDetector.Tier.DRIVING, d.tier())
+        assertEquals("resumed", d.reason())
+    }
+
+    @Test fun resume_holdsThroughColdStartThenEndsOnSustainedStop() {
+        val d = DriveDetector(settings())
+        d.resumeDriving = true
+        // Cold restart: no speed sample yet. The drive must NOT be dropped here — that is the
+        // whole bug (the first fixless tier resolution used to end it and zero its stats).
+        assertEquals(DriveDetector.Tier.DRIVING, d.tier())
+        d.onSpeed(0.5f, 0L)
+        assertEquals(DriveDetector.Tier.DRIVING, d.tier())   // brief stop held by hysteresis
+        d.onSpeed(0.5f, 200_000L)                            // past EXIT_MS (3 min): drive really over
+        assertEquals(DriveDetector.Tier.LIGHT, d.tier())
+    }
+
+    @Test fun resume_survivesWithSpeedBackstopOff() {
+        val d = DriveDetector(settings(bySpeed = false))
+        d.resumeDriving = true
+        assertEquals(DriveDetector.Tier.DRIVING, d.tier())   // independent of driveBySpeed
+    }
+
+    @Test fun resume_realDrivingCarriesPastTheGrace() {
+        val d = DriveDetector(settings())
+        d.resumeDriving = true
+        d.onSpeed(10f, 0L)                                   // still actually moving (~22 mph)
+        d.onSpeed(10f, 400_000L)                             // long after EXIT_MS
+        assertEquals(DriveDetector.Tier.DRIVING, d.tier())   // the speed backstop carries it
+        assertEquals("speed", d.reason())                    // cascade: speed outranks the resume latch
+    }
 }

@@ -33,12 +33,22 @@ class DriveDetector(private val settings: Settings) {
      *  stop by [onSpeed], independent of the speed backstop's own toggle. */
     @Volatile var motionDriving = false
 
+    /** Set by LocationService when the process restarts in the *middle* of a drive (app
+     *  update, OEM kill): the persisted drive start survived but the in-memory driving
+     *  signals ([speedDriving] etc.) did not, so the cold detector would resolve LIGHT and
+     *  end the drive — resetting its live clock and miles — before the first speed fix lands.
+     *  This latch holds DRIVING across that cold start and clears on the same sustained stop
+     *  as the speed/motion latches, so a drive that truly ended still ends. Independent of the
+     *  speed-backstop toggle, mirroring [motionDriving]. */
+    @Volatile var resumeDriving = false
+
     // Speed-backstop state (hysteresis). NO_TS = "window not started" — a distinct
     // sentinel rather than 0L, so a sample stamped at t=0 still accumulates the window.
     @Volatile private var speedDriving = false
     private var fastSince = NO_TS
     private var slowSince = NO_TS
     private var motionSlowSince = NO_TS   // sustained-stop timer for the motion latch
+    private var resumeSlowSince = NO_TS   // sustained-stop timer for the resume latch
 
     /** Feed a GPS speed sample (m/s) to drive the speed backstop. */
     fun onSpeed(mps: Float, now: Long) {
@@ -51,6 +61,15 @@ class DriveDetector(private val settings: Settings) {
                 if (motionSlowSince == NO_TS) motionSlowSince = now
                 if (now - motionSlowSince >= EXIT_MS) { motionDriving = false; motionSlowSince = NO_TS }
             } else motionSlowSince = NO_TS
+        }
+        // The resume latch ends the same way — a sustained stop — so a drive resumed across a
+        // mid-drive restart that has actually finished (you parked during the update) still
+        // ends cleanly, independent of driveBySpeed.
+        if (resumeDriving) {
+            if (mps < EXIT_MPS) {
+                if (resumeSlowSince == NO_TS) resumeSlowSince = now
+                if (now - resumeSlowSince >= EXIT_MS) { resumeDriving = false; resumeSlowSince = NO_TS }
+            } else resumeSlowSince = NO_TS
         }
         if (!settings.driveBySpeed) { speedDriving = false; fastSince = NO_TS; slowSince = NO_TS; return }
         when {
@@ -74,7 +93,7 @@ class DriveDetector(private val settings: Settings) {
         Settings.MODE_OFF -> Tier.OFF
         Settings.MODE_DRIVING -> Tier.DRIVING
         Settings.MODE_LIGHT -> Tier.LIGHT
-        else -> if (carConnected || obdConnected || motionDriving || speedDriving) Tier.DRIVING else Tier.LIGHT
+        else -> if (carConnected || obdConnected || motionDriving || speedDriving || resumeDriving) Tier.DRIVING else Tier.LIGHT
     }
 
     /** Short human reason for the current Driving decision (for the notification/status). */
@@ -85,6 +104,7 @@ class DriveDetector(private val settings: Settings) {
         obdConnected -> "OBD"
         motionDriving -> "motion"
         speedDriving -> "speed"
+        resumeDriving -> "resumed"
         else -> "auto"
     }
 

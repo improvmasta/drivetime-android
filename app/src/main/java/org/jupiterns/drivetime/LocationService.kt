@@ -145,6 +145,15 @@ class LocationService : Service() {
         settings = Settings(this)
         uploader = Uploader(this, settings)
         detector = DriveDetector(settings)
+        // Resuming mid-drive (app update / OEM kill): the persisted drive start survived but the
+        // detector's in-memory driving signals didn't. Hold DRIVING through the cold start so the
+        // drive keeps its identity — original start time, running miles, marker count — instead
+        // of the first (fixless) tier resolution ending it and a brand-new drive taking its place.
+        if (settings.loggingEnabled && settings.driveStartedAt != 0L &&
+            System.currentTimeMillis() - settings.driveStartedAt in 0L..MAX_DRIVE_MS) {
+            detector.resumeDriving = true
+            EventLog.info("Resuming drive in progress (restart mid-drive)")
+        }
         // Android 14 enforces the FGS type's prerequisites at startForeground time: with
         // fine location revoked this throws SecurityException. Callers can't all pre-check
         // (boot/reboot races), so degrade to a clean stop instead of a crash-loop.
