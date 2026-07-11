@@ -14,7 +14,7 @@
     <color name="dt_text_mut">#7D7466</color>
     <color name="dt_accent">#FFB454</color>
     <color name="dt_accent_strong">#FFCF8A</color>
-    <!-- dark text on amber fills (SPA --accent-contrast) -->
+    <!-- dark text on amber fills (SPA accent-contrast) -->
     <color name="dt_accent_contrast">#241A0C</color>
 
     <color name="status_green">#9ECF70</color>
