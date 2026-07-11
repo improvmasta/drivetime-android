@@ -120,9 +120,12 @@ class WebViewActivity : AppCompatActivity() {
         ws.cacheMode = WebSettings.LOAD_DEFAULT
         ws.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW   // site is https-only
         ws.mediaPlaybackRequiresUserGesture = true
-        // Let the WebView honour the app's night mode → the SPA's prefers-color-scheme CSS.
+        // The SPA ships its OWN complete light+dark themes and toggles them itself (Settings →
+        // Theme), so the WebView must NOT algorithmically darken content. With darkening allowed
+        // it re-darkened an explicit LIGHT theme whenever the OS was in night mode, so "light mode
+        // looked like dark mode". Off = the page's own CSS fully decides the appearance.
         if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
-            WebSettingsCompat.setAlgorithmicDarkeningAllowed(ws, true)
+            WebSettingsCompat.setAlgorithmicDarkeningAllowed(ws, false)
         }
         // Chromium starts its text selection from the container view's performLongClick(), before
         // the page's `user-select: none` or selectstart guard can weigh in — so holding a drive row
