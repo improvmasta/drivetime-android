@@ -98,10 +98,6 @@ class WebViewActivity : AppCompatActivity() {
             .build()
     }
 
-    private val ticker = object : Runnable {
-        override fun run() { refreshPill(); ui.postDelayed(this, 1000) }
-    }
-
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -198,12 +194,6 @@ class WebViewActivity : AppCompatActivity() {
             }
         }
 
-        // The pill now drops the user into the SPA's own Settings route rather than a separate
-        // native screen — the tracker settings live there as tabs.
-        b.pill.setOnClickListener {
-            b.webview.evaluateJavascript("location.hash = '#/settings'", null)
-        }
-
         // Hardware back is owned by the SPA: it closes an open sheet/dialog, then exits a
         // multi-select, then returns to the first tab from anywhere else. Only when the SPA
         // has nothing left to handle (home tab, nothing open) do we act — and even then we
@@ -221,7 +211,6 @@ class WebViewActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        ui.post(ticker)
         // Returning to the app: drain any upload backlog, and if the dashboard never came
         // up (e.g. setup was just finished, or we were offline), try again.
         Thread { runCatching { uploader.flush() } }.start()
@@ -232,7 +221,6 @@ class WebViewActivity : AppCompatActivity() {
         if (settings.updatesEnabled) Updater.checkFromUi(this, interactive = false)
     }
 
-    override fun onPause() { super.onPause(); ui.removeCallbacks(ticker) }
 
     override fun onDestroy() {
         // tear down an open scan (dialog/receiver/discovery); lateinit-guarded in case
@@ -745,29 +733,6 @@ class WebViewActivity : AppCompatActivity() {
     }
 
     private fun hideOverlay() { b.overlay.visibility = View.GONE }
-
-    // ---- status pill ----
-
-    private var pillIcon = 0
-
-    private fun refreshPill() {
-        // A single glyph, tinted by state, sized to sit on the SPA's own header row:
-        //   • tracking off          → grey location icon
-        //   • tracking, not driving → green location icon ("on, locating")
-        //   • driving               → green car icon
-        // The glyph carries the state on its own; a "Driving" label next to it widened the
-        // pill mid-drive and pushed the SPA's header controls around, so there is no text.
-        val on = settings.trackingMode != Settings.MODE_OFF
-        val driving = LiveState.tier == "DRIVING"
-        val icon = if (driving) R.drawable.ic_driving else R.drawable.ic_tracking
-        if (icon != pillIcon) {
-            pillIcon = icon
-            b.pill.setCompoundDrawablesRelativeWithIntrinsicBounds(icon, 0, 0, 0)
-        }
-        val color = ContextCompat.getColor(this, if (on) R.color.status_green else R.color.status_grey)
-        androidx.core.widget.TextViewCompat.setCompoundDrawableTintList(
-            b.pill, android.content.res.ColorStateList.valueOf(color))
-    }
 
     // ---- misc ----
 
