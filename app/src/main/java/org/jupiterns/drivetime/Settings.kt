@@ -207,6 +207,13 @@ class Settings(context: Context) {
         get() = prefs.getLong("drive_started_at", 0L)
         set(v) = prefs.edit().putLong("drive_started_at", v).apply()
 
+    /** Epoch-ms at which a "turn off tracking for N hours" snooze auto-resumes to AUTO;
+     *  0 = not snoozed. An exact alarm ([Control.snooze]) drives the resume; this persists
+     *  the target so a reboot can re-arm it (the alarm itself doesn't survive a reboot). */
+    var snoozeUntil: Long
+        get() = prefs.getLong("snooze_until", 0L)
+        set(v) = prefs.edit().putLong("snooze_until", v).apply()
+
     /** Metres driven in the current drive, mirrored from [LiveState.driveMeters] on the same
      *  throttled cadence as [lastFixAt]. Durable for the same reason [driveStartedAt] is: a
      *  service restart mid-drive (app update, OEM kill, watchdog) re-enters DRIVING, and without

@@ -585,6 +585,21 @@ class WebViewActivity : AppCompatActivity() {
             }
         }
 
+        /** Turn tracking off now and auto-resume after [minutes] (header "Turn off for…"). */
+        @JavascriptInterface
+        fun snoozeTracking(minutes: String) {
+            val m = minutes.toIntOrNull() ?: return
+            ui.post {
+                Control.snooze(this@WebViewActivity, m)
+                val label = when {
+                    m % 1440 == 0 -> "${m / 1440}d"
+                    m % 60 == 0 -> "${m / 60}h"
+                    else -> "${m}m"
+                }
+                toast("Tracking off — back on in $label")
+            }
+        }
+
         /** Run the grant flow for one checklist item, keyed by its [getStatus] `action`. */
         @JavascriptInterface
         fun requestPermission(action: String) {

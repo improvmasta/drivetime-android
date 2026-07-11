@@ -12,6 +12,10 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- Robustness: resume logging after reboot / app update -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- "Turn off tracking for N hours" then auto-resume: an exact alarm fires the resume
+         so it lands on time through Doze (and grants the brief FGS-start allowance). -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <!-- In-app self-update: download a newer signed APK from the server and hand it to
          the system package installer (sideload loop, no Play Store). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />

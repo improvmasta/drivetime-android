@@ -38,6 +38,9 @@ class BootReceiver : BroadcastReceiver() {
             // Refused (too early / throttled) → the watchdog picks it up next cycle.
             Control.startTrackingService(context)
         }
+        // A "turn off for N hours" snooze was pending: reboot dropped its alarm, so resume
+        // now if it's due, else re-arm it — otherwise tracking would stay silently off.
+        Control.resumeAfterReboot(context)
         // Reboot clears these registrations; re-arm whatever the user had enabled.
         if (s.autoTrip) runCatching { TripDetector.enable(context) }
         // Check-engine alerts are on-device now; retire any legacy server-poll worker.

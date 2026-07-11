@@ -1,5 +1,7 @@
 package org.jupiterns.drivetime
 
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
@@ -251,6 +253,10 @@ object Control {
 
     private fun applyMode(context: Context, settings: Settings, mode: String, source: String) {
         settings.lastCommandSource = source
+        // Any pending "off for N hours" auto-resume is moot the moment the mode is set
+        // explicitly (user toggle, routine, or the resume alarm itself firing START).
+        cancelResumeAlarm(context)
+        settings.snoozeUntil = 0L
         if (mode == Settings.MODE_OFF) {
             settings.trackingMode = Settings.MODE_OFF
             settings.loggingEnabled = false
@@ -294,5 +300,64 @@ object Control {
             EventLog.warn("Service start refused: ${e.message ?: e.javaClass.simpleName}")
             false
         }
+    }
+
+    // ---- snooze: "turn off tracking for N minutes", then auto-resume to AUTO ----
+
+    private const val RESUME_REQUEST = 7301
+
+    /** Turn logging off now and schedule an auto-resume [minutes] out. The resume is an
+     *  exact alarm firing ACTION_START at [ControlReceiver] — which lands on time through
+     *  Doze and carries the brief FGS-start allowance, with the watchdog as backstop. */
+    fun snooze(context: Context, minutes: Int) {
+        if (minutes <= 0) return
+        val settings = Settings(context)
+        // Stops the service and (via applyMode) clears any prior snooze + its alarm.
+        applyMode(context, settings, Settings.MODE_OFF, "snooze")
+        val at = System.currentTimeMillis() + minutes.toLong() * 60_000L
+        settings.snoozeUntil = at
+        scheduleResumeAlarm(context, at)
+        EventLog.info("Tracking off for ${minutes}m — resumes ${java.util.Date(at)}")
+        StateBroadcaster.emit(context, "snooze")
+    }
+
+    /** Reboot drops scheduled alarms; if a snooze was pending, resume now (past due) or
+     *  re-arm the alarm. Called from [BootReceiver]. */
+    fun resumeAfterReboot(context: Context) {
+        val settings = Settings(context)
+        val at = settings.snoozeUntil
+        if (at <= 0L) return
+        if (System.currentTimeMillis() >= at) applyMode(context, settings, Settings.MODE_AUTO, "snooze")
+        else scheduleResumeAlarm(context, at)
+    }
+
+    private fun resumePendingIntent(context: Context): PendingIntent {
+        val i = Intent(context, ControlReceiver::class.java)
+            .setAction(ACTION_START)
+            .putExtra(EXTRA_SOURCE, "snooze")
+        // minSdk 26 → FLAG_IMMUTABLE (API 23) is always available.
+        return PendingIntent.getBroadcast(
+            context, RESUME_REQUEST, i,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    private fun scheduleResumeAlarm(context: Context, at: Long) {
+        val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val pi = resumePendingIntent(context)
+        val exact = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) am.canScheduleExactAlarms() else true
+        try {
+            if (exact) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+            else am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+        } catch (e: SecurityException) {
+            // Exact-alarm permission revoked at runtime → fall back to inexact (may drift
+            // in deep Doze, but still resumes).
+            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+        }
+    }
+
+    private fun cancelResumeAlarm(context: Context) {
+        val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        am.cancel(resumePendingIntent(context))
     }
 }
