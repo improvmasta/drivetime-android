@@ -4,8 +4,8 @@
   "description": "Personal driving-intelligence dashboard",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0b0f15",
-  "theme_color": "#0f1419",
+  "background_color": "#0f0d0a",
+  "theme_color": "#0f0d0a",
   "icons": [
     { "src": "/icon.svg", "type": "image/svg+xml", "sizes": "any", "purpose": "any maskable" },
     { "src": "/icon-192.png", "type": "image/png", "sizes": "192x192", "purpose": "any maskable" },

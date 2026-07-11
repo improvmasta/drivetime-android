@@ -18,23 +18,23 @@
         <item name="android:textColorPrimary">@color/dt_text</item>
         <item name="android:textColorSecondary">@color/dt_text_dim</item>
         <item name="android:textColorHint">@color/dt_text_mut</item>
-        <!-- Secondary buttons: rounded to the r-sm radius (10dp), hairline border, neutral
+        <!-- Secondary buttons: rounded to the r-sm radius (6dp), hairline border, neutral
              text — the SPA's default button, not Material's pill. -->
         <item name="materialButtonOutlinedStyle">@style/Widget.Dt.Button.Outlined</item>
     </style>
 
     <style name="Widget.Dt.Button.Outlined" parent="Widget.Material3.Button.OutlinedButton">
-        <item name="cornerRadius">10dp</item>
+        <item name="cornerRadius">6dp</item>
         <item name="strokeColor">@color/dt_border</item>
         <item name="android:textColor">@color/dt_text</item>
     </style>
 
     <!-- Section card = the SPA card: flat (no elevation), 1dp hairline border, rounded
-         to the r-lg radius (18dp), on surface-1. -->
+         to the r-lg radius (14dp), on surface-1. -->
     <style name="SettingsSection">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
-        <item name="cardCornerRadius">18dp</item>
+        <item name="cardCornerRadius">14dp</item>
         <item name="cardElevation">0dp</item>
         <item name="strokeColor">@color/dt_border</item>
         <item name="strokeWidth">1dp</item>
