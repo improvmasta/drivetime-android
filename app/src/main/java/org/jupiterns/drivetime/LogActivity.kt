@@ -28,6 +28,7 @@ class LogActivity : AppCompatActivity() {
         EventLog.init(this)
         b = ActivityLogBinding.inflate(layoutInflater)
         setContentView(b.root)
+        b.logClose.setOnClickListener { finish() }
         b.logClear.setOnClickListener { confirmClear() }
         b.logShare.setOnClickListener { share() }
         render()
