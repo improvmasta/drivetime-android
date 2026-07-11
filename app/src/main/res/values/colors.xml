@@ -3,27 +3,27 @@
      :root[data-theme='light'] so the native chrome matches the WebView it floats over.
      values-night/colors.xml holds the dark set; DayNight picks per system theme. -->
 <resources>
-    <color name="dt_bg">#F7F3EA</color>
-    <color name="dt_surface_1">#FFFDF7</color>
-    <color name="dt_surface_2">#F1EBDF</color>
-    <color name="dt_surface_3">#E8E0D0</color>
-    <color name="dt_border">#E6DDCB</color>
-    <color name="dt_border_strong">#CEC2AB</color>
-    <color name="dt_text">#221C12</color>
-    <color name="dt_text_dim">#5C5443</color>
-    <color name="dt_text_mut">#8A8171</color>
-    <color name="dt_accent">#A5631D</color>
-    <color name="dt_accent_strong">#96591D</color>
+    <color name="dt_bg">#EEF2F8</color>
+    <color name="dt_surface_1">#FFFFFF</color>
+    <color name="dt_surface_2">#E7ECF3</color>
+    <color name="dt_surface_3">#DCE3EC</color>
+    <color name="dt_border">#DDE3EC</color>
+    <color name="dt_border_strong">#C2CCD8</color>
+    <color name="dt_text">#0A0E14</color>
+    <color name="dt_text_dim">#47535F</color>
+    <color name="dt_text_mut">#737F8C</color>
+    <color name="dt_accent">#1668A0</color>
+    <color name="dt_accent_strong">#0F5F96</color>
     <color name="dt_accent_contrast">#FFFFFF</color>
 
     <!-- Status colours = the SPA good / warn / bad / accent / mut tokens, so a coloured
          state never clashes with the ground. Names are kept (Kotlin references them). -->
-    <color name="status_green">#478029</color>
-    <color name="status_amber">#A5631D</color>
-    <color name="status_red">#C73A35</color>
-    <color name="status_blue">#3F74D8</color>
-    <color name="status_grey">#8A8171</color>
+    <color name="status_green">#12805A</color>
+    <color name="status_amber">#8A6A10</color>
+    <color name="status_red">#CC2F42</color>
+    <color name="status_blue">#1668A0</color>
+    <color name="status_grey">#737F8C</color>
 
     <!-- warning-banner tint: warn at ~12% alpha (= SPA warn-soft light) -->
-    <color name="dt_warn_soft">#1F9A7A10</color>
+    <color name="dt_warn_soft">#1F8A6A10</color>
 </resources>

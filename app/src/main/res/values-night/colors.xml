@@ -3,26 +3,26 @@
      (dark is the SPA default). Selected automatically when the system is in dark mode,
      matching the WebView, which follows the system theme via algorithmic darkening. -->
 <resources>
-    <color name="dt_bg">#0F0D0A</color>
-    <color name="dt_surface_1">#171410</color>
-    <color name="dt_surface_2">#1D1915</color>
-    <color name="dt_surface_3">#282117</color>
-    <color name="dt_border">#2B241C</color>
-    <color name="dt_border_strong">#453C31</color>
-    <color name="dt_text">#F5F1E8</color>
-    <color name="dt_text_dim">#B9AD9B</color>
-    <color name="dt_text_mut">#7D7466</color>
-    <color name="dt_accent">#FFB454</color>
-    <color name="dt_accent_strong">#FFCF8A</color>
-    <!-- dark text on amber fills (SPA accent-contrast) -->
-    <color name="dt_accent_contrast">#241A0C</color>
+    <color name="dt_bg">#000000</color>
+    <color name="dt_surface_1">#0C0F14</color>
+    <color name="dt_surface_2">#12161D</color>
+    <color name="dt_surface_3">#1B212B</color>
+    <color name="dt_border">#1E242E</color>
+    <color name="dt_border_strong">#333C48</color>
+    <color name="dt_text">#FFFFFF</color>
+    <color name="dt_text_dim">#9FADBD</color>
+    <color name="dt_text_mut">#616E7E</color>
+    <color name="dt_accent">#56C8FF</color>
+    <color name="dt_accent_strong">#8AD8FF</color>
+    <!-- dark text on bright cyan fills (SPA accent-contrast) -->
+    <color name="dt_accent_contrast">#04121C</color>
 
-    <color name="status_green">#9ECF70</color>
-    <color name="status_amber">#FFB454</color>
-    <color name="status_red">#FF7368</color>
-    <color name="status_blue">#6EA8FF</color>
-    <color name="status_grey">#7D7466</color>
+    <color name="status_green">#2EE6A8</color>
+    <color name="status_amber">#FFB340</color>
+    <color name="status_red">#FF5D6E</color>
+    <color name="status_blue">#56C8FF</color>
+    <color name="status_grey">#616E7E</color>
 
     <!-- warn at ~14% alpha (= SPA warn-soft dark) -->
-    <color name="dt_warn_soft">#24FFD94D</color>
+    <color name="dt_warn_soft">#24FFB340</color>
 </resources>
