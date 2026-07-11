@@ -149,10 +149,17 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("auto_trip", false)
         set(v) = prefs.edit().putBoolean("auto_trip", v).apply()
 
-    /** Poll the server for alerts and post notifications. */
+    /** Post a local check-engine notification the moment the OBD dongle reports a new
+     *  diagnostic trouble code. Fully on-device — no server, no 15-minute poll. */
     var alertsEnabled: Boolean
         get() = prefs.getBoolean("alerts_enabled", false)
         set(v) = prefs.edit().putBoolean("alerts_enabled", v).apply()
+
+    /** Trouble codes we've already alerted on, so a standing fault isn't re-notified every
+     *  OBD poll. A code that clears drops out of the set, so its return alerts again. */
+    var knownDtcs: Set<String>
+        get() = prefs.getStringSet("known_dtcs", emptySet()) ?: emptySet()
+        set(v) = prefs.edit().putStringSet("known_dtcs", v).apply()
 
     /**
      * Show the full drive card only while DRIVING; collapse to a bare, icon-less notification

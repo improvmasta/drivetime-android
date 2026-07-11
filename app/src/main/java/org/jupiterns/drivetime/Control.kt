@@ -169,7 +169,9 @@ object Control {
             }
             "alerts_enabled" -> setBool(value) {
                 settings.alertsEnabled = it
-                if (it) AlertWorker.schedule(context) else AlertWorker.cancel(context)
+                // Check-engine alerts are on-device now — the running service reads this
+                // live. Kill any legacy server-poll worker a prior build scheduled.
+                AlertWorker.cancel(context)
             }
             "notif_driving_only" -> setBool(value) {
                 settings.notifDrivingOnly = it

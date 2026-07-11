@@ -40,6 +40,7 @@ class BootReceiver : BroadcastReceiver() {
         }
         // Reboot clears these registrations; re-arm whatever the user had enabled.
         if (s.autoTrip) runCatching { TripDetector.enable(context) }
-        if (s.alertsEnabled) AlertWorker.schedule(context)
+        // Check-engine alerts are on-device now; retire any legacy server-poll worker.
+        AlertWorker.cancel(context)
     }
 }

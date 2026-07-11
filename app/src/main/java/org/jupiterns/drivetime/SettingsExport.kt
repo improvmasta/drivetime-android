@@ -82,7 +82,8 @@ object SettingsExport {
         if (o.has("alerts_enabled")) {
             val v = o.optBoolean("alerts_enabled", s.alertsEnabled)
             s.alertsEnabled = v
-            if (v) AlertWorker.schedule(context) else AlertWorker.cancel(context)
+            // On-device alerts now — no worker to schedule; drop any legacy server poll.
+            AlertWorker.cancel(context)
             applied++
         }
         if (o.has("car_bt_mac")) { s.carBtMac = o.optString("car_bt_mac"); applied++ }

@@ -482,7 +482,11 @@ class LocationService : Service() {
                                 " maf=${s.maf?.let { "%.1f".format(it) }} fuel=${s.fuelLph?.let { "%.1f".format(it) }}L/h" +
                                 " tank=${s.fuelLevel?.let { "%.0f".format(it) }}% v=${s.voltage} ctrlV=${s.ctrlVoltage}")
                         }
-                        latestObd = if (ticks % 120 == 0) s.copy(dtcs = client.readDtcs()) else s
+                        latestObd = if (ticks % 120 == 0) {
+                            val fresh = s.copy(dtcs = client.readDtcs())
+                            maybeAlertDtcs(fresh.dtcs)
+                            fresh
+                        } else s
                         LiveState.rpm = s.rpm; LiveState.throttle = s.throttle
                         LiveState.coolantC = s.coolantC; LiveState.voltage = s.voltage
                         ticks++
@@ -707,6 +711,44 @@ class LocationService : Service() {
         }
     }
 
+    /**
+     * Fire a check-engine notification the instant the dongle reports a trouble code we
+     * haven't already flagged — fully on-device, no server round-trip. The remembered set is
+     * replaced with the current codes each read, so a fault that clears drops out and its
+     * later return alerts again. Reading DTCs but leaving [Settings.alertsEnabled] off still
+     * updates the set, so enabling it later doesn't dump every standing code at once.
+     */
+    private fun maybeAlertDtcs(codes: List<String>) {
+        val cur = codes.toSet()
+        val prev = settings.knownDtcs
+        if (cur == prev) return
+        if (settings.alertsEnabled) {
+            for (code in cur) if (code !in prev) postDtcAlert(code)
+        }
+        settings.knownDtcs = cur
+    }
+
+    private fun postDtcAlert(code: String) {
+        val mgr = getSystemService(NotificationManager::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            mgr.getNotificationChannel(ALERT_CHANNEL) == null) {
+            mgr.createNotificationChannel(
+                NotificationChannel(ALERT_CHANNEL, "Check-engine alerts", NotificationManager.IMPORTANCE_HIGH))
+        }
+        val open = PendingIntent.getActivity(
+            this, 0, Intent(this, WebViewActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val n = Notification.Builder(this, ALERT_CHANNEL)
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setContentTitle("Check engine: $code")
+            .setContentText("Your vehicle reported a diagnostic trouble code.")
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .build()
+        mgr.notify(ALERT_NOTIF_BASE + (code.hashCode() and 0xffff), n)
+        EventLog.info("Check-engine alert: $code")
+    }
+
     private fun servicePi(action: String, code: Int): PendingIntent {
         val i = Intent(this, LocationService::class.java).setAction(action)
         return PendingIntent.getService(
@@ -866,6 +908,12 @@ class LocationService : Service() {
         /** IMPORTANCE_MIN twin of [CHANNEL]: same notification id, no status-bar icon, used
          *  while idle when `notif_driving_only` is on. */
         private const val IDLE_CHANNEL = "drive_idle"
+        /** IMPORTANCE_HIGH channel for on-device check-engine alerts (distinct from the
+         *  ongoing tracking notification, so the user can tune/silence each separately). */
+        private const val ALERT_CHANNEL = "check_engine"
+        /** Base id for DTC notifications; one stable id per code (base + code hash) so the
+         *  same standing fault re-posts in place instead of stacking. */
+        private const val ALERT_NOTIF_BASE = 2000
         private const val NOTIF_ID = 1
         /** How long "Marked #3" replaces the stats line before it falls back. */
         private const val FLASH_MS = 3_000L
