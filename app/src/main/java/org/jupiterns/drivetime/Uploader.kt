@@ -96,14 +96,17 @@ class Uploader(context: Context, private val settings: Settings) {
                 }
                 val body = JSONArray()
                 batch.forEach { runCatching { body.put(JSONObject(it)) } }  // skip any corrupt line
-                val req = Request.Builder()
-                    .url(settings.ingestUrl)
-                    .header("Authorization", settings.authHeader)
-                    .post(body.toString().toRequestBody(JSON))
-                    .build()
                 lastAttemptAt = System.currentTimeMillis()
                 var was401 = false
                 val err = try {
+                    // Request.Builder().url() throws on a malformed server URL; built inside
+                    // the try so that surfaces as an upload error (backoff + retry), never an
+                    // escape from this thread — it crash-looped the whole app once.
+                    val req = Request.Builder()
+                        .url(settings.ingestUrl)
+                        .header("Authorization", settings.authHeader)
+                        .post(body.toString().toRequestBody(JSON))
+                        .build()
                     Http.client.newCall(req).execute().use {
                         when {
                             it.isSuccessful -> null

@@ -199,7 +199,13 @@ class LocationService : Service() {
     /** Trigger a (single-flight, draining) flush and reset the size counter. */
     private fun flushNow() {
         pendingSinceFlush = 0
-        scope.launch { uploader.flush() }
+        // runCatching: this scope has no CoroutineExceptionHandler, so an uncaught throw
+        // here kills the process — and a sticky service makes that a crash LOOP that also
+        // takes the WebView down on every relaunch. An upload must never be able to do that.
+        scope.launch {
+            runCatching { uploader.flush() }
+                .onFailure { EventLog.warn("Upload flush failed: ${it.message ?: it.javaClass.simpleName}") }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

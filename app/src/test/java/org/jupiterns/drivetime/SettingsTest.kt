@@ -80,4 +80,31 @@ class SettingsTest {
         s.serverUrl = "https://example.com/"
         assertEquals("https://example.com", s.serverUrl)
     }
+
+    // A wrong server may fail to sync; it must never be able to crash the app. OkHttp's
+    // Request.Builder().url() throws on anything scheme-less/unparseable, so the pref is
+    // normalized to something callable (or to "" = standalone) on both write and read.
+    @Test fun serverUrl_defaultsSchemelessHostsToHttps() {
+        s.serverUrl = "drivetime.example.org"
+        assertEquals("https://drivetime.example.org", s.serverUrl)
+        s.serverUrl = "10.1.1.15:8200"
+        assertEquals("https://10.1.1.15:8200", s.serverUrl)
+        s.serverUrl = "http://10.1.1.15:8200"          // an explicit scheme is kept
+        assertEquals("http://10.1.1.15:8200", s.serverUrl)
+    }
+
+    @Test fun serverUrl_rejectsWhatOkHttpCannotCall() {
+        s.serverUrl = "not a url"
+        assertEquals("unparseable → standalone", "", s.serverUrl)
+        assertFalse(s.hasServer)
+    }
+
+    @Test fun serverUrl_getterHealsALegacyStoredRawValue() {
+        // An older build stored the user's input verbatim; the getter must still never
+        // hand a scheme-less value to a Request.Builder.
+        val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
+        ctx.getSharedPreferences("drivetime", android.content.Context.MODE_PRIVATE)
+            .edit().putString("server_url", "drivetime.example.org").commit()
+        assertEquals("https://drivetime.example.org", Settings(ctx).serverUrl)
+    }
 }

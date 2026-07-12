@@ -2,6 +2,7 @@ package org.jupiterns.drivetime
 
 import android.content.Context
 import android.util.Base64
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /** Server connection settings, backed by SharedPreferences. */
 class Settings(context: Context) {
@@ -9,10 +10,15 @@ class Settings(context: Context) {
 
     /** Server URL. **Empty by default → standalone/local mode** (STANDALONE.md A3): a fresh
      *  install runs entirely on-device against the bundled SPA + replica, no server required.
-     *  Setting a URL opts into server sync + the hosted dashboard. */
+     *  Setting a URL opts into server sync + the hosted dashboard.
+     *
+     *  Normalized on BOTH sides of the pref — the getter too, because a raw value stored by
+     *  an older build (e.g. a scheme-less "drivetime.example.org") must never reach OkHttp's
+     *  Request.Builder: it throws IllegalArgumentException, and from the sticky tracking
+     *  service that was a process-wide crash loop. */
     var serverUrl: String
-        get() = prefs.getString("server_url", "") ?: ""
-        set(v) = prefs.edit().putString("server_url", v.trimEnd('/')).apply()
+        get() = normalizeServerUrl(prefs.getString("server_url", ""))
+        set(v) = prefs.edit().putString("server_url", normalizeServerUrl(v)).apply()
 
     /** True when a server is configured (server mode); false = standalone/local mode. */
     val hasServer: Boolean
@@ -280,5 +286,16 @@ class Settings(context: Context) {
         const val MODE_DRIVING = "driving"
         const val MODE_LIGHT = "light"
         const val MODE_OFF = "off"
+
+        /** A user-entered server URL, made safe to call: trimmed, trailing slashes dropped,
+         *  a scheme-less host defaulted to https://, and anything OkHttp still can't parse
+         *  rejected to "" (= standalone) — a wrong server may fail to sync, but it must
+         *  never be able to crash the app. Pure, so it's unit-testable. */
+        fun normalizeServerUrl(raw: String?): String {
+            var v = raw?.trim().orEmpty().trimEnd('/')
+            if (v.isEmpty()) return ""
+            if (!v.startsWith("http://") && !v.startsWith("https://")) v = "https://$v"
+            return if (v.toHttpUrlOrNull() == null) "" else v
+        }
     }
 }
