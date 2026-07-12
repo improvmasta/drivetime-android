@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Expanded drive-notification content, drawn inside Notification.DecoratedCustomViewStyle.
-     A three-tile mini-dashboard — speed / miles / live elapsed — each tile a rounded
-     accent-wash chip with its own glyph, with the tier line above and the marker line (pin +
+     A three-tile mini-dashboard — speed / miles / live elapsed — each a plain column with its
+     own accent glyph, tabular numerals, the tier line above and the marker line (pin +
      "since #N" / "Marked #N") below. RemoteViews-legal widgets only; base text uses framework
      notification attrs, accents come from the day/night dt_ palette. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -35,7 +35,6 @@
             android:layout_marginEnd="6dp"
             android:orientation="vertical"
             android:gravity="center_horizontal"
-            android:background="@drawable/bg_notif_chip"
             android:padding="8dp">
 
             <ImageView
@@ -53,6 +52,7 @@
                 android:paddingTop="2dp"
                 android:textColor="?android:attr/textColorPrimary"
                 android:textStyle="bold"
+                android:fontFeatureSettings="tnum"
                 android:textSize="22sp" />
 
             <TextView
@@ -70,7 +70,6 @@
             android:layout_marginEnd="6dp"
             android:orientation="vertical"
             android:gravity="center_horizontal"
-            android:background="@drawable/bg_notif_chip"
             android:padding="8dp">
 
             <ImageView
@@ -88,6 +87,7 @@
                 android:paddingTop="2dp"
                 android:textColor="?android:attr/textColorPrimary"
                 android:textStyle="bold"
+                android:fontFeatureSettings="tnum"
                 android:textSize="22sp" />
 
             <TextView
@@ -104,7 +104,6 @@
             android:layout_weight="1"
             android:orientation="vertical"
             android:gravity="center_horizontal"
-            android:background="@drawable/bg_notif_chip"
             android:padding="8dp">
 
             <ImageView
@@ -123,6 +122,7 @@
                 android:singleLine="true"
                 android:textColor="?android:attr/textColorPrimary"
                 android:textStyle="bold"
+                android:fontFeatureSettings="tnum"
                 android:textSize="22sp" />
 
             <TextView

@@ -808,13 +808,12 @@ class LocationService : Service() {
 
         // A custom mini-dashboard (speed / miles / live elapsed) drawn inside the system's
         // DecoratedCustomViewStyle, which still renders the header, small icon, background and
-        // the Mark/Stop actions. The numbers have to survive the lock screen — the whole point.
+        // the Mark action. The numbers have to survive the lock screen — the whole point.
         b.setStyle(Notification.DecoratedCustomViewStyle())
             .setCustomContentView(driveRemoteViews(R.layout.notif_drive, expanded = false, flash = flash))
             .setCustomBigContentView(driveRemoteViews(R.layout.notif_drive_big, expanded = true, flash = flash))
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .addAction(action(R.drawable.ic_notif_driving, "Mark", servicePi(Control.ACTION_MARK, 1)))
-            .addAction(action(R.drawable.ic_notif_tracking, "Stop", servicePi(Control.ACTION_STOP, 2)))
         return b.build()
     }
 
@@ -847,15 +846,10 @@ class LocationService : Service() {
         } else {
             rv.setChronometer(R.id.n_chrono, base, null, true)
             rv.setTextViewText(R.id.n_title, tierText())
-            // The speed pill has a chip background now, so an empty string would still draw
-            // a stray pill — hide the view outright until the first fix carries a speed.
-            rv.setViewVisibility(
-                R.id.n_speed,
-                if (speed != null) android.view.View.VISIBLE else android.view.View.GONE
-            )
-            rv.setTextViewText(R.id.n_speed, if (speed != null) "$speed mph" else "")
-            val stats = flash ?: listOfNotNull("$miles mi", since).joinToString(" · ")
-            rv.setTextViewText(R.id.n_stats, "· $stats")
+            // One clean stats line — speed · miles — with the live chronometer trailing it in
+            // the layout; the flash ("Marked #3") briefly takes the whole line.
+            val stats = listOfNotNull(speed?.let { "$it mph" }, "$miles mi").joinToString(" · ")
+            rv.setTextViewText(R.id.n_stats, flash ?: stats)
         }
         return rv
     }
