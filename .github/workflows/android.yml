@@ -10,6 +10,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # contents: write — the release step below publishes the APK as a GitHub release,
+    # which is the app's primary (serverless) update channel.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -43,6 +47,26 @@ jobs:
           name: drivetime-debug-apk
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+      # The serverless update channel: the app polls
+      # releases/latest/download/version.json (Updater.RELEASES_BASE), so every main
+      # build ships as a release carrying the APK + the same manifest publish-apk.sh
+      # writes to a server's /dl.
+      - name: Publish GitHub release (update channel)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/debug/*.apk drivetime.apk
+          notes="$(git log -1 --pretty=%s)"
+          jq -n --argjson versionCode "${{ github.run_number }}" \
+                --arg versionName "0.1.${{ github.run_number }}" \
+                --arg apk "drivetime.apk" --arg notes "$notes" \
+                --arg publishedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                '{versionCode:$versionCode, versionName:$versionName, apk:$apk, notes:$notes, publishedAt:$publishedAt}' \
+                > version.json
+          gh release create "v0.1.${{ github.run_number }}" drivetime.apk version.json \
+            --title "0.1.${{ github.run_number }}" --notes "$notes"
 
       - name: Upload lint report
         if: always()

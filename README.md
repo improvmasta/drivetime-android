@@ -53,7 +53,8 @@ while you drive, and a "leave by" card when you're parked so you're never late.
 
 🔄 **Updates itself.**
 No app-store dance. When a new version lands, drivetime offers a one-tap update and keeps
-every setting and every trip.
+every setting and every trip. Updates come from this repo's public GitHub releases, so they
+reach you whether or not you ever configure a server.
 
 ---
 
@@ -72,8 +73,9 @@ time and move to a new phone in seconds.
 
 ## Get driving in under a minute
 
-1. **Install it** — download from `drivetime.jupiterns.org/dl/drivetime.apk`. (Approve the
-   install once; every update after that installs itself.)
+1. **Install it** — grab the latest APK from this repo's **Releases** page (or from
+   `drivetime.jupiterns.org/dl/drivetime.apk`). Approve the install once; every update
+   after that installs itself.
 2. **Tap Start.** That's the whole setup — it's now logging.
 3. **Optional:** tap **Car Bluetooth** to pair your stereo, add an **OBD dongle** for engine
    data, or turn on **sync** to back up your trips.

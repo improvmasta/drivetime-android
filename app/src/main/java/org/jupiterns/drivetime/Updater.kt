@@ -21,11 +21,13 @@ import java.util.concurrent.TimeUnit
  * a two-tap "Update" instead of a browser download + file hunt.
  *
  * How it hangs together:
- *  - The server publishes `GET {serverUrl}/dl/version.json` — `{versionCode, versionName,
- *    apk, notes}` — next to the APK (both under the public `/dl` path, no auth). The host
- *    helper `publish-apk.sh` writes it from the latest CI build (see the android README).
- *  - This build knows its own [BuildConfig.VERSION_CODE] (= the CI run number). If the
- *    server advertises a higher one, we prompt, download the APK to app-private external
+ *  - Every channel publishes the same manifest: `GET {base}/version.json` — `{versionCode,
+ *    versionName, apk, notes}` — next to the APK, no auth. The **primary channel is the
+ *    public GitHub release** (CI attaches both files to a release per main build), so a
+ *    serverless install still gets updates; a configured server's `/dl` (written by the
+ *    host helper `publish-apk.sh`) is the fallback when GitHub is unreachable.
+ *  - This build knows its own [BuildConfig.VERSION_CODE] (= the CI run number). If a
+ *    channel advertises a higher one, we prompt, download the APK to app-private external
  *    storage, and fire an `ACTION_VIEW` install intent via [FileProvider].
  *  - Every build is signed with the one committed key, so the install lands *in place* and
  *    keeps settings — the whole reason this is safe to automate.
@@ -35,8 +37,13 @@ import java.util.concurrent.TimeUnit
  */
 object Updater {
 
-    /** Parsed `version.json`. [apk] is a filename or URL resolved against `/dl/`. */
+    /** Parsed `version.json`. [apk] is a filename or URL resolved against its channel base. */
     data class Release(val versionCode: Int, val versionName: String, val apk: String, val notes: String?)
+
+    /** The keyless, always-on update channel: the repo is public, and `releases/latest/
+     *  download/<asset>` redirects to the newest non-prerelease release's asset. */
+    const val RELEASES_BASE =
+        "https://github.com/improvmasta/drivetime-android/releases/latest/download"
 
     /** Don't re-check on every foreground; a few hours is plenty for a sideload app. */
     private const val CHECK_INTERVAL_MS = 6L * 60 * 60_000L
@@ -65,29 +72,41 @@ object Updater {
     }.getOrNull()
 
     /** Absolute download URL for [r]'s APK — its `apk` field may already be absolute. */
-    private fun apkUrl(serverUrl: String, r: Release): String =
-        if (r.apk.startsWith("http")) r.apk else "$serverUrl/dl/${r.apk.trimStart('/')}"
+    private fun apkUrl(base: String, r: Release): String =
+        if (r.apk.startsWith("http")) r.apk else "$base/${r.apk.trimStart('/')}"
+
+    /** Channel bases to try, in order — pure, so it's unit-testable. GitHub releases come
+     *  first (they exist for every install, server or not); a configured server's `/dl` is
+     *  the fallback for when GitHub is unreachable. */
+    fun updateBases(serverUrl: String): List<String> =
+        if (serverUrl.isBlank()) listOf(RELEASES_BASE)
+        else listOf(RELEASES_BASE, "${serverUrl.trimEnd('/')}/dl")
 
     /** Foreground-triggered check. [interactive] = the user tapped "Check for updates", so
      *  we also report "up to date"/errors; the automatic path stays silent unless there's
-     *  actually an update. Throttled unless [force]. */
+     *  actually an update. Throttled unless interactive. */
     fun checkFromUi(activity: Activity, interactive: Boolean) {
         val settings = Settings(activity)
-        val serverUrl = settings.serverUrl
-        if (serverUrl.isBlank()) { if (interactive) toast(activity, "Set a server URL first"); return }
+        val bases = updateBases(settings.serverUrl)
         if (!interactive &&
             System.currentTimeMillis() - settings.lastUpdateCheckAt < CHECK_INTERVAL_MS) return
 
         Thread {
-            val release = runCatching { fetch(serverUrl) }.getOrNull()
+            var release: Release? = null
+            var base = bases.first()
+            for (b in bases) {
+                val r = runCatching { fetch(b) }.getOrNull()
+                if (r != null) { release = r; base = b; break }
+            }
             settings.lastUpdateCheckAt = System.currentTimeMillis()
             if (activity.isFinishing || activity.isDestroyed) return@Thread
+            val found = release
             activity.runOnUiThread {
                 when {
-                    release == null ->
-                        if (interactive) toast(activity, "Couldn't reach the update server")
-                    isNewer(BuildConfig.VERSION_CODE, release) ->
-                        promptInstall(activity, serverUrl, release)
+                    found == null ->
+                        if (interactive) toast(activity, "Couldn't reach the update channel")
+                    isNewer(BuildConfig.VERSION_CODE, found) ->
+                        promptInstall(activity, base, found)
                     interactive ->
                         toast(activity, "You're on the latest version (${BuildConfig.VERSION_NAME})")
                 }
@@ -95,14 +114,14 @@ object Updater {
         }.start()
     }
 
-    private fun fetch(serverUrl: String): Release? {
-        val req = Request.Builder().url("$serverUrl/dl/version.json").build()
+    private fun fetch(base: String): Release? {
+        val req = Request.Builder().url("$base/version.json").build()
         return http.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) null else parse(resp.body?.string().orEmpty())
         }
     }
 
-    private fun promptInstall(activity: Activity, serverUrl: String, r: Release) {
+    private fun promptInstall(activity: Activity, base: String, r: Release) {
         val body = buildString {
             append("Version ${r.versionName} is available (you have ${BuildConfig.VERSION_NAME}).")
             r.notes?.let { append("\n\n").append(it) }
@@ -110,12 +129,12 @@ object Updater {
         AlertDialog.Builder(activity)
             .setTitle("Update available")
             .setMessage(body)
-            .setPositiveButton("Update") { _, _ -> downloadAndInstall(activity, serverUrl, r) }
+            .setPositiveButton("Update") { _, _ -> downloadAndInstall(activity, base, r) }
             .setNegativeButton("Later", null)
             .show()
     }
 
-    private fun downloadAndInstall(activity: Activity, serverUrl: String, r: Release) {
+    private fun downloadAndInstall(activity: Activity, base: String, r: Release) {
         val progress = AlertDialog.Builder(activity)
             .setTitle("Downloading update")
             .setMessage("Starting…")
@@ -124,7 +143,7 @@ object Updater {
         progress.show()
 
         Thread {
-            val result = runCatching { download(activity, apkUrl(serverUrl, r)) { pct ->
+            val result = runCatching { download(activity, apkUrl(base, r)) { pct ->
                 if (!activity.isFinishing && !activity.isDestroyed) activity.runOnUiThread {
                     progress.setMessage(if (pct >= 0) "$pct%" else "Downloading…")
                 }

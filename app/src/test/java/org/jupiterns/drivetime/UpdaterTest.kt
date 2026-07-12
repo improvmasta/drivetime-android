@@ -46,4 +46,15 @@ class UpdaterTest {
         assertFalse(Updater.isNewer(10, r))  // same → no nag
         assertFalse(Updater.isNewer(11, r))  // installed ahead (local dev) → no downgrade
     }
+
+    @Test fun serverlessInstallChecksGithubOnly() {
+        assertEquals(listOf(Updater.RELEASES_BASE), Updater.updateBases(""))
+    }
+
+    @Test fun configuredServerIsTheFallbackChannel() {
+        val bases = Updater.updateBases("https://drive.example.com/")
+        assertEquals(2, bases.size)
+        assertEquals(Updater.RELEASES_BASE, bases[0])          // GitHub first, always
+        assertEquals("https://drive.example.com/dl", bases[1]) // trailing slash normalized
+    }
 }
