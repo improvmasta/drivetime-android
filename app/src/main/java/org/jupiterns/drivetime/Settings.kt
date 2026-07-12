@@ -24,6 +24,14 @@ class Settings(context: Context) {
     val hasServer: Boolean
         get() = serverUrl.isNotBlank()
 
+    /** Master switch for server sync (the SPA's Server card toggle): off disables a
+     *  configured server — the app runs standalone — WITHOUT clearing the URL/token,
+     *  so flipping it back on needs no re-pair. Gates [isConfigured], which is what
+     *  every server-facing path checks. */
+    var serverEnabled: Boolean
+        get() = prefs.getBoolean("server_enabled", true)
+        set(v) = prefs.edit().putBoolean("server_enabled", v).apply()
+
     /** The **device token** — the single server credential (AUTH.md). Paired once (scan the
      *  QR on the server's dashboard, or paste the code); sent as `Bearer <token>` on every
      *  API call. Replaces the old username/password login *and* the separate ingest token. */
@@ -346,10 +354,11 @@ class Settings(context: Context) {
             else -> ""
         }
 
-    /** A *usable* server is configured: a URL plus a credential (device token, or the
-     *  legacy username+password). Empty ⇒ standalone/local mode. */
+    /** A *usable* server is configured AND enabled: a URL plus a credential (device
+     *  token, or the legacy username+password), with [serverEnabled] on. False ⇒
+     *  standalone/local mode. */
     val isConfigured: Boolean
-        get() = serverUrl.isNotBlank() &&
+        get() = serverEnabled && serverUrl.isNotBlank() &&
             (deviceToken.isNotBlank() || (username.isNotBlank() && password.isNotBlank()))
 
     companion object {

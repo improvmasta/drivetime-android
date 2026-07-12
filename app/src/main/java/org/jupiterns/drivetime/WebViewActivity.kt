@@ -421,6 +421,9 @@ class WebViewActivity : AppCompatActivity() {
         if (!p.hasToken) { toast("That didn't contain a device token"); return }
         p.url?.let { settings.serverUrl = it }
         settings.deviceToken = p.token!!
+        // Pairing is the clearest "I want a server" signal — re-enable sync if it was
+        // toggled off, or the fresh pairing would look dead.
+        settings.serverEnabled = true
         // A device token supersedes any legacy username/password login on this device.
         settings.username = ""; settings.password = ""
         toast("Paired — testing connection…")
@@ -662,6 +665,7 @@ class WebViewActivity : AppCompatActivity() {
             JSONObject()
                 .put("serverUrl", settings.serverUrl)
                 .put("hasServer", settings.hasServer)
+                .put("server_enabled", settings.serverEnabled)
                 .put("isConfigured", settings.isConfigured)
                 .put("standalone", !settings.isConfigured)
                 .put("deviceTokenSet", settings.deviceToken.isNotBlank())
@@ -725,6 +729,7 @@ class WebViewActivity : AppCompatActivity() {
             ui.post {
                 when (key) {
                     "server_url" -> settings.serverUrl = value
+                    "server_enabled" -> settings.serverEnabled = value.toBooleanStrictOrNull() ?: settings.serverEnabled
                     "control_token" -> settings.controlToken = value
                     "updates_enabled" -> settings.updatesEnabled = value.toBooleanStrictOrNull() ?: settings.updatesEnabled
                     "backup_schedule" -> {
