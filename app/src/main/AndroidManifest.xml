@@ -73,8 +73,11 @@
             android:exported="false"
             android:label="Activity log" />
 
-        <!-- Google Drive OAuth redirect (BACKUP.md). Android-type OAuth clients redirect on
-             a custom scheme equal to the package name; DriveAuth.REDIRECT must match. -->
+        <!-- Google Drive OAuth redirect (BACKUP.md). Google requires the custom scheme to
+             be the REVERSED client id (a package-name scheme is rejected with
+             redirect_uri_mismatch), so this filter is client-specific: it matches
+             DriveAuth.redirectFor(Settings.DEFAULT_DRIVE_CLIENT_ID). A fork shipping its
+             own client id must update the scheme below to its own reversed id. -->
         <activity
             android:name=".OAuthRedirectActivity"
             android:exported="true"
@@ -85,7 +88,7 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="org.jupiterns.drivetime" android:path="/oauth2redirect" />
+                <data android:scheme="com.googleusercontent.apps.722912277751-82ls1e1guemrjkc3kbjq0pjlrnkhjgvu" android:path="/oauth2redirect" />
             </intent-filter>
         </activity>
 

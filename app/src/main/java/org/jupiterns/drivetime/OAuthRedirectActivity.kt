@@ -8,8 +8,8 @@ import android.os.Looper
 import android.widget.Toast
 
 /**
- * Catches the Google OAuth redirect (`org.jupiterns.drivetime:/oauth2redirect`, see
- * [DriveAuth.REDIRECT]), finishes the PKCE code exchange off the main thread, and bounces
+ * Catches the Google OAuth redirect (the reversed-client-id scheme, see
+ * [DriveAuth.redirectFor]), finishes the PKCE code exchange off the main thread, and bounces
  * straight back into the app. Invisible — plain [Activity] like ControlActivity, because
  * Theme.NoDisplay is not a Theme.AppCompat and AppCompatActivity would throw on it.
  */

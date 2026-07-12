@@ -27,10 +27,15 @@ import java.security.SecureRandom
 object DriveAuth {
     private const val SCOPE = "https://www.googleapis.com/auth/drive.file openid email"
 
-    /** Custom-scheme redirect — for Android-type clients Google requires the scheme to be
-     *  the app's package name, validated against the registered package + SHA-1. Must match
-     *  OAuthRedirectActivity's intent-filter. */
-    const val REDIRECT = "org.jupiterns.drivetime:/oauth2redirect"
+    /** The custom-scheme redirect for [clientId]. Google requires the scheme to be the
+     *  REVERSED client id (`com.googleusercontent.apps.<id>:/oauth2redirect`) — a
+     *  package-name scheme comes back as redirect_uri_mismatch. OAuthRedirectActivity
+     *  must carry a matching intent-filter (the built-in client's is in the manifest;
+     *  a fork with its own client id edits that filter too — BACKUP.md). */
+    fun redirectFor(clientId: String): String =
+        "com.googleusercontent.apps." +
+            clientId.removeSuffix(".apps.googleusercontent.com") +
+            ":/oauth2redirect"
 
     /** The verifier for the flow in flight. One flow at a time is plenty. */
     @Volatile private var verifier: String = ""
@@ -43,7 +48,7 @@ object DriveAuth {
             MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray(Charsets.US_ASCII)))
         return "https://accounts.google.com/o/oauth2/v2/auth" +
             "?client_id=" + Uri.encode(clientId) +
-            "&redirect_uri=" + Uri.encode(REDIRECT) +
+            "&redirect_uri=" + Uri.encode(redirectFor(clientId)) +
             "&response_type=code" +
             "&scope=" + Uri.encode(SCOPE) +
             "&code_challenge=" + challenge +
@@ -59,7 +64,7 @@ object DriveAuth {
             .add("grant_type", "authorization_code")
             .add("code", code)
             .add("client_id", settings.driveClientId)
-            .add("redirect_uri", REDIRECT)
+            .add("redirect_uri", redirectFor(settings.driveClientId))
             .add("code_verifier", verifier)
             .build()
         val req = Request.Builder().url("https://oauth2.googleapis.com/token").post(body).build()
