@@ -36,6 +36,7 @@ class BackupStoreTest {
         BackupStore.stagedFile(ctx).delete()
         File(ctx.filesDir, "web_fixes.jsonl").delete()
         File(ctx.filesDir, "web_markers.jsonl").delete()
+        File(ctx.filesDir, "web_vehicles.jsonl").delete()
     }
 
     // ---- naming + retention (pure) ----
@@ -102,6 +103,7 @@ class BackupStoreTest {
         BackupStore.endSnapshot(ctx, settings, 99L)
         WebFixBuffer.append(ctx, 40.0, -83.0, 100L, 5.0f)
         WebMarkerBuffer.append(ctx, "m-1", 100L, 40.0, -83.0)
+        WebVehicleBuffer.append(ctx, 100L, "AA:BB:CC:DD:EE:FF")
 
         val archive = ByteArrayOutputStream()
         BackupStore.writeArchive(ctx, settings, archive)
@@ -114,7 +116,7 @@ class BackupStoreTest {
         }
         assertEquals(
             setOf("manifest.json", "app.json.gz", "settings.json",
-                "pending_fixes.jsonl", "pending_markers.jsonl"),
+                "pending_fixes.jsonl", "pending_markers.jsonl", "pending_vehicles.jsonl"),
             entries)
 
         // …restored onto a clean install
@@ -122,6 +124,7 @@ class BackupStoreTest {
         val fresh = Settings(ctx)
         File(ctx.filesDir, "web_fixes.jsonl").delete()
         File(ctx.filesDir, "web_markers.jsonl").delete()
+        File(ctx.filesDir, "web_vehicles.jsonl").delete()
         BackupStore.stagedFile(ctx).delete()
 
         val r = BackupStore.restore(ctx, fresh, archive.toByteArray().inputStream())
@@ -136,6 +139,7 @@ class BackupStoreTest {
         // buffers adopted, so the SPA's normal drain repopulates the replica
         assertTrue(WebFixBuffer.pullSince(ctx, 0.0).contains("\"ts\":100"))
         assertTrue(WebMarkerBuffer.pullSince(ctx, 0.0).contains("m-1"))
+        assertTrue(WebVehicleBuffer.pullSince(ctx, 0.0).contains("AA:BB:CC:DD:EE:FF"))
         // app data staged byte-identical for the SPA to fetch and import
         assertEquals(
             "{\"kind\":\"drivetime-data\",\"stores\":{\"fixes\":[{\"ts\":1}]}}",
