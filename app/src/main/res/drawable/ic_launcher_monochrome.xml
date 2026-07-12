@@ -1,17 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Monochrome mark for Android 13+ themed icons. The system recolors this, so
-     the fill color here is only a placeholder. Road + D silhouette (the road's
-     dashes are dropped — they'd vanish into the road at a single tint). -->
+<!-- Monochrome mark for Android 13+ themed icons. The system recolors this, so the
+     fill color here is only a placeholder. A bold solid D matching the current icon
+     art's letterform (its road slash is dropped — at a single tint the band would
+     read as damage, not a road). Scaled 0.92 so the stem corners stay inside the
+     66/108 safe circle. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- road -->
-    <path android:fillColor="#FFFFFF" android:pathData="M6,104 L102,104 L59,48 L49,48 Z" />
-    <!-- D -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:fillType="evenOdd"
-        android:pathData="M38,34 L50,34 C62,34 70,42 70,54 C70,66 62,74 50,74 L38,74 Z M45,41 L50,41 C59,41 63,46 63,54 C63,62 59,67 50,67 L45,67 Z" />
+    <group
+        android:scaleX="0.92"
+        android:scaleY="0.92"
+        android:pivotX="54"
+        android:pivotY="54">
+        <path
+            android:fillColor="#FFFFFF"
+            android:fillType="evenOdd"
+            android:pathData="M32,26 L56,26 C72,26 82,38 82,54 C82,70 72,82 56,82 L32,82 Z M46,40 L55,40 C63,40 68,45 68,54 C68,63 63,68 55,68 L46,68 Z" />
+    </group>
 </vector>

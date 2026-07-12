@@ -82,7 +82,7 @@ class Watchdog(ctx: Context, params: WorkerParameters) : Worker(ctx, params) {
             ctx, 0, Intent(ctx, WebViewActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val n = NotificationCompat.Builder(ctx, HEALTH_CHANNEL)
-            .setSmallIcon(R.drawable.ic_notif_app)
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
             .setContentTitle("Drive tracking was interrupted")
             .setContentText("No GPS for ~${minutes} min — drives in that window are missing.")
             .setStyle(NotificationCompat.BigTextStyle().bigText(
