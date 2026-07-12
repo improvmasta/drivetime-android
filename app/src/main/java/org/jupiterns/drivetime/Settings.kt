@@ -321,6 +321,11 @@ class Settings(context: Context) {
     var backupDriveFolderId: String
         get() = prefs.getString("backup_drive_folder_id", "") ?: ""
         set(v) = prefs.edit().putString("backup_drive_folder_id", v).apply()
+    /** Cached id of the "Drivetime Exports" folder (one-off mileage exports); same
+     *  re-derive-on-404 lifecycle as the backups folder. */
+    var backupDriveExportFolderId: String
+        get() = prefs.getString("backup_drive_export_folder_id", "") ?: ""
+        set(v) = prefs.edit().putString("backup_drive_export_folder_id", v).apply()
 
     /** Last backup run: when, whether every destination succeeded, and a short summary. */
     var backupLastAt: Long

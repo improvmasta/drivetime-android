@@ -143,10 +143,24 @@ class DriveClient(private val settings: Settings) {
     private fun authed(b: Request.Builder) = b.header("Authorization", "Bearer ${token()}").build()
 
     /** The "Drivetime Backups" folder id — cached, found, or created. */
-    fun ensureFolder(): String {
-        settings.backupDriveFolderId.takeIf { it.isNotBlank() }?.let { return it }
+    fun ensureFolder(): String =
+        namedFolderId("Drivetime Backups", settings.backupDriveFolderId) {
+            settings.backupDriveFolderId = it
+        }
+
+    /** The "Drivetime Exports" folder id — where one-off exports (the mileage CSV /
+     *  Google Sheet) land, kept apart from the backup archives. */
+    fun ensureExportFolder(): String =
+        namedFolderId("Drivetime Exports", settings.backupDriveExportFolderId) {
+            settings.backupDriveExportFolderId = it
+        }
+
+    /** A named top-level folder's id — [cached], found by name, or created; [store]
+     *  persists whatever id was found or minted. */
+    private fun namedFolderId(name: String, cached: String, store: (String) -> Unit): String {
+        cached.takeIf { it.isNotBlank() }?.let { return it }
         val q = Uri.encode(
-            "name = 'Drivetime Backups' and mimeType = 'application/vnd.google-apps.folder' and trashed = false")
+            "name = '$name' and mimeType = 'application/vnd.google-apps.folder' and trashed = false")
         val list = Request.Builder()
             .url("https://www.googleapis.com/drive/v3/files?q=$q&fields=files(id,name)&pageSize=1")
             .get()
@@ -155,21 +169,21 @@ class DriveClient(private val settings: Settings) {
                 val files = JSONObject(rsp.body?.string() ?: "{}").optJSONArray("files")
                 if (files != null && files.length() > 0) {
                     val id = files.getJSONObject(0).optString("id")
-                    if (id.isNotBlank()) { settings.backupDriveFolderId = id; return id }
+                    if (id.isNotBlank()) { store(id); return id }
                 }
             } else if (rsp.code == 401) throw IOException("Drive auth failed")
         }
         val create = Request.Builder()
             .url("https://www.googleapis.com/drive/v3/files?fields=id")
             .post(JSONObject()
-                .put("name", "Drivetime Backups")
+                .put("name", name)
                 .put("mimeType", "application/vnd.google-apps.folder")
                 .toString().toRequestBody(json))
         return Http.client.newCall(authed(create)).execute().use { rsp ->
             if (!rsp.isSuccessful) throw IOException("Drive folder create HTTP ${rsp.code}")
             val id = JSONObject(rsp.body?.string() ?: "{}").optString("id")
             if (id.isBlank()) throw IOException("Drive folder create returned no id")
-            settings.backupDriveFolderId = id
+            store(id)
             id
         }
     }
@@ -177,12 +191,12 @@ class DriveClient(private val settings: Settings) {
     /** Resumable upload (init → single PUT). Multipart caps at 5 MB; archives run bigger. */
     fun upload(file: File, name: String) {
         var folder = ensureFolder()
-        var location = initUpload(folder, name, file.length())
+        var location = initUpload(folder, name, file.length(), BackupStore.ARCHIVE_MIME)
         if (location == null) {
             // Folder id can go stale (user deleted it on drive.google.com) — re-derive once.
             settings.backupDriveFolderId = ""
             folder = ensureFolder()
-            location = initUpload(folder, name, file.length())
+            location = initUpload(folder, name, file.length(), BackupStore.ARCHIVE_MIME)
                 ?: throw IOException("Drive upload init failed")
         }
         val put = Request.Builder()
@@ -194,12 +208,44 @@ class DriveClient(private val settings: Settings) {
         }
     }
 
-    /** The resumable-session URL, or null when the parent folder id was rejected. */
-    private fun initUpload(folderId: String, name: String, length: Long): String? {
+    /** Upload small in-memory content (a mileage export) into the Exports folder.
+     *  [convertToSheet] asks Drive to convert the CSV into a real Google Sheet on
+     *  arrival. Returns a link the user can open in a browser or the Sheets app. */
+    fun uploadExport(name: String, mime: String, bytes: ByteArray, convertToSheet: Boolean): String {
+        val target = if (convertToSheet) "application/vnd.google-apps.spreadsheet" else null
+        var folder = ensureExportFolder()
+        var location = initUpload(folder, name, bytes.size.toLong(), mime, target)
+        if (location == null) {
+            settings.backupDriveExportFolderId = ""
+            folder = ensureExportFolder()
+            location = initUpload(folder, name, bytes.size.toLong(), mime, target)
+                ?: throw IOException("Drive export init failed")
+        }
+        val put = Request.Builder()
+            .url(location)
+            .put(bytes.toRequestBody(mime.toMediaType()))
+            .build()
+        return Http.client.newCall(put).execute().use { rsp ->
+            if (!rsp.isSuccessful) throw IOException("Drive export upload HTTP ${rsp.code}")
+            val id = JSONObject(rsp.body?.string() ?: "{}").optString("id")
+            when {
+                id.isBlank() -> "https://drive.google.com"
+                convertToSheet -> "https://docs.google.com/spreadsheets/d/$id/edit"
+                else -> "https://drive.google.com/file/d/$id/view"
+            }
+        }
+    }
+
+    /** The resumable-session URL, or null when the parent folder id was rejected.
+     *  [contentMime] is what the bytes are; a non-null [targetMime] asks Drive to
+     *  convert on arrival (CSV → Google Sheet). */
+    private fun initUpload(folderId: String, name: String, length: Long,
+                           contentMime: String, targetMime: String? = null): String? {
         val meta = JSONObject().put("name", name).put("parents", JSONArray().put(folderId))
+        if (targetMime != null) meta.put("mimeType", targetMime)
         val req = Request.Builder()
             .url("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable")
-            .header("X-Upload-Content-Type", BackupStore.ARCHIVE_MIME)
+            .header("X-Upload-Content-Type", contentMime)
             .header("X-Upload-Content-Length", length.toString())
             .post(meta.toString().toRequestBody(json))
         return Http.client.newCall(authed(req)).execute().use { rsp ->

@@ -99,6 +99,9 @@ class WebViewActivity : AppCompatActivity() {
     private lateinit var folderLauncher: ActivityResultLauncher<Uri?>
     private lateinit var archiveExportLauncher: ActivityResultLauncher<String>
     private lateinit var restoreLauncher: ActivityResultLauncher<Array<String>>
+    // Mileage export "Save to…": the CSV waiting on the create-document picker.
+    private lateinit var csvSaveLauncher: ActivityResultLauncher<String>
+    @Volatile private var pendingSaveAs: ByteArray? = null
 
     // Last "Test connection" result, surfaced back to the SPA's Sync tab via getStatus().
     @Volatile private var lastTestMsg: String = ""
@@ -312,6 +315,13 @@ class WebViewActivity : AppCompatActivity() {
         restoreLauncher = registerForActivityResult(
             ActivityResultContracts.OpenDocument()
         ) { uri -> uri?.let { restoreFrom(it) } }
+        csvSaveLauncher = registerForActivityResult(
+            ActivityResultContracts.CreateDocument("text/csv")
+        ) { uri ->
+            val bytes = pendingSaveAs
+            pendingSaveAs = null
+            if (uri != null && bytes != null) writeExportTo(uri, bytes)
+        }
     }
 
     private fun startTracking() {
@@ -532,6 +542,66 @@ class WebViewActivity : AppCompatActivity() {
                     else -> toast("Imported ${result.settingsApplied} settings")
                 }
             }
+        }.start()
+    }
+
+    // ---- mileage export destinations ----
+
+    /** Write a "Save to…" export to the document the user just picked. */
+    private fun writeExportTo(uri: Uri, bytes: ByteArray) {
+        Thread {
+            val ok = runCatching {
+                contentResolver.openOutputStream(uri, "w")?.use { it.write(bytes) } != null
+            }.getOrDefault(false)
+            ui.post { if (ok) toast("Exported") else snack("Export failed — couldn't write the file") }
+            EventLog.info(if (ok) "Export saved to a picked file" else "Export to picked file failed")
+        }.start()
+    }
+
+    /** Hand a generated export to the system share sheet (email, messaging, cloud apps).
+     *  The file is staged under our FileProvider `exports/` root. */
+    private fun shareExport(name: String, mime: String, bytes: ByteArray) {
+        val intent = runCatching {
+            val dir = File(getExternalFilesDir(null), "exports").apply { mkdirs() }
+            val f = File(dir, name)
+            f.writeBytes(bytes)
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", f)
+            Intent(Intent.ACTION_SEND)
+                .setType(mime.ifBlank { "text/csv" })
+                .putExtra(Intent.EXTRA_STREAM, uri)
+                .putExtra(Intent.EXTRA_SUBJECT, name)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }.getOrNull()
+        if (intent == null) { snack("Couldn't prepare the file to share"); return }
+        runCatching { startActivity(Intent.createChooser(intent, "Share $name")) }
+            .onFailure { snack("Nothing available to share with") }
+    }
+
+    /** Upload an export to Google Drive — optionally converted to a real Google Sheet —
+     *  using the backup feature's Drive connection, then offer to open the result. */
+    private fun uploadExportToDrive(name: String, mime: String, bytes: ByteArray, asSheet: Boolean) {
+        toast(if (asSheet) "Creating Google Sheet…" else "Uploading to Google Drive…")
+        Thread {
+            val link = runCatching { DriveClient(settings).uploadExport(name, mime, bytes, asSheet) }
+            ui.post {
+                link.fold({ url ->
+                    Snackbar.make(b.root,
+                        if (asSheet) "Google Sheet created" else "Uploaded to Google Drive",
+                        Snackbar.LENGTH_LONG)
+                        .setAction("Open") {
+                            runCatching {
+                                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                            }
+                        }
+                        .show()
+                }, { e ->
+                    snack("Drive export failed: ${e.message ?: "error"}")
+                })
+            }
+            link.fold(
+                { EventLog.info("Export uploaded to Drive: $name (sheet=$asSheet)") },
+                { EventLog.warn("Drive export failed: ${it.message}") })
         }.start()
     }
 
@@ -901,6 +971,7 @@ class WebViewActivity : AppCompatActivity() {
             settings.backupDriveAccessToken = ""
             settings.backupDriveAccount = ""
             settings.backupDriveFolderId = ""
+            settings.backupDriveExportFolderId = ""
             EventLog.info("Google Drive disconnected")
             ui.post { toast("Google Drive disconnected") }
         }
@@ -979,6 +1050,35 @@ class WebViewActivity : AppCompatActivity() {
                     Toast.LENGTH_LONG).show()
             }
             EventLog.info(if (ok) "Saved export: $safe" else "Export save failed: $safe")
+        }
+
+        /** "Save to…": export via the system create-document picker, so the user picks
+         *  the location and final name. The pending bytes wait on the picker result. */
+        @JavascriptInterface
+        fun saveFileAs(name: String, mime: String, content: String) {
+            val safe = if (name.isBlank()) "drivetime.csv" else name.substringAfterLast('/')
+            pendingSaveAs = content.toByteArray(Charsets.UTF_8)
+            ui.post { csvSaveLauncher.launch(safe) }
+        }
+
+        /** Share an export through the system share sheet (email, messaging, any app). */
+        @JavascriptInterface
+        fun shareFile(name: String, mime: String, content: String) {
+            val safe = if (name.isBlank()) "drivetime.csv" else name.substringAfterLast('/')
+            val bytes = content.toByteArray(Charsets.UTF_8)
+            ui.post { shareExport(safe, mime, bytes) }
+        }
+
+        /** Upload an export to Google Drive; [asSheet] converts the CSV into a real
+         *  Google Sheet. False when Drive isn't connected — the SPA shows its connect
+         *  hint instead of a doomed upload. */
+        @JavascriptInterface
+        fun exportToDrive(name: String, mime: String, content: String, asSheet: Boolean): Boolean {
+            if (settings.backupDriveRefreshToken.isBlank()) return false
+            val safe = if (name.isBlank()) "drivetime.csv" else name.substringAfterLast('/')
+            val bytes = content.toByteArray(Charsets.UTF_8)
+            ui.post { uploadExportToDrive(safe, mime.ifBlank { "text/csv" }, bytes, asSheet) }
+            return true
         }
 
         /** Open the native event log (diagnostics — service starts/stops, OBD, uploads). */

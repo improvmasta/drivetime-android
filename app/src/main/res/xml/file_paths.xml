@@ -5,4 +5,6 @@
     <external-files-path name="updates" path="updates/" />
     <!-- `reports/` holds the diagnostic text file the Report-a-problem email attaches. -->
     <external-files-path name="reports" path="reports/" />
+    <!-- `exports/` stages a generated export (the mileage CSV) for the share sheet. -->
+    <external-files-path name="exports" path="exports/" />
 </paths>
