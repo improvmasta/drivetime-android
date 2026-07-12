@@ -260,6 +260,71 @@ class Settings(context: Context) {
         get() = prefs.getLong("last_update_check_at", 0L)
         set(v) = prefs.edit().putLong("last_update_check_at", v).apply()
 
+    // ---- backup & restore (BACKUP.md) ----
+
+    /** Automatic backup cadence: "off" | "daily" | "weekly" | "drive" (after each drive). */
+    var backupSchedule: String
+        get() = prefs.getString("backup_schedule", "off") ?: "off"
+        set(v) = prefs.edit().putString("backup_schedule",
+            if (v in BACKUP_SCHEDULES) v else "off").apply()
+
+    /** Archives to keep per destination — the retention window; oldest pruned. */
+    var backupKeep: Int
+        get() = prefs.getInt("backup_keep", 7)
+        set(v) = prefs.edit().putInt("backup_keep", v.coerceIn(1, 100)).apply()
+
+    /** SAF tree URI of the picked backup folder ("" = none). The permission grant is
+     *  per-device, so this deliberately does NOT ride along in SettingsExport. */
+    var backupFolderUri: String
+        get() = prefs.getString("backup_folder_uri", "") ?: ""
+        set(v) = prefs.edit().putString("backup_folder_uri", v).apply()
+    var backupFolderName: String
+        get() = prefs.getString("backup_folder_name", "") ?: ""
+        set(v) = prefs.edit().putString("backup_folder_name", v).apply()
+
+    /** OAuth client ID from the user's own Google Cloud project (BACKUP.md → Drive setup).
+     *  The app ships no Google credential of its own — backups go phone → user's Drive. */
+    var backupDriveClientId: String
+        get() = prefs.getString("backup_drive_client_id", "") ?: ""
+        set(v) = prefs.edit().putString("backup_drive_client_id", v.trim()).apply()
+
+    /** Long-lived Drive credential; non-blank = connected. */
+    var backupDriveRefreshToken: String
+        get() = prefs.getString("backup_drive_refresh_token", "") ?: ""
+        set(v) = prefs.edit().putString("backup_drive_refresh_token", v).apply()
+    var backupDriveAccessToken: String
+        get() = prefs.getString("backup_drive_access_token", "") ?: ""
+        set(v) = prefs.edit().putString("backup_drive_access_token", v).apply()
+    /** Epoch-ms the access token dies (refreshed a bit early). */
+    var backupDriveTokenExpiry: Long
+        get() = prefs.getLong("backup_drive_token_expiry", 0L)
+        set(v) = prefs.edit().putLong("backup_drive_token_expiry", v).apply()
+    /** The connected account's email, for the Settings card. */
+    var backupDriveAccount: String
+        get() = prefs.getString("backup_drive_account", "") ?: ""
+        set(v) = prefs.edit().putString("backup_drive_account", v).apply()
+    /** Cached id of the "Drivetime Backups" folder; re-derived if it 404s. */
+    var backupDriveFolderId: String
+        get() = prefs.getString("backup_drive_folder_id", "") ?: ""
+        set(v) = prefs.edit().putString("backup_drive_folder_id", v).apply()
+
+    /** Last backup run: when, whether every destination succeeded, and a short summary. */
+    var backupLastAt: Long
+        get() = prefs.getLong("backup_last_at", 0L)
+        set(v) = prefs.edit().putLong("backup_last_at", v).apply()
+    var backupLastOk: Boolean
+        get() = prefs.getBoolean("backup_last_ok", false)
+        set(v) = prefs.edit().putBoolean("backup_last_ok", v).apply()
+    var backupLastResult: String
+        get() = prefs.getString("backup_last_result", "") ?: ""
+        set(v) = prefs.edit().putString("backup_last_result", v).apply()
+
+    /** Epoch-ms the SPA last pushed its data snapshot over the bridge — the freshness of
+     *  the app-data half of any archive a background worker builds. */
+    var backupSnapshotAt: Long
+        get() = prefs.getLong("backup_snapshot_at", 0L)
+        set(v) = prefs.edit().putLong("backup_snapshot_at", v).apply()
+
     val ingestUrl: String
         get() = "$serverUrl/api/ingest"
 
@@ -282,6 +347,8 @@ class Settings(context: Context) {
             (deviceToken.isNotBlank() || (username.isNotBlank() && password.isNotBlank()))
 
     companion object {
+        val BACKUP_SCHEDULES = setOf("off", "daily", "weekly", "drive")
+
         const val MODE_AUTO = "auto"
         const val MODE_DRIVING = "driving"
         const val MODE_LIGHT = "light"

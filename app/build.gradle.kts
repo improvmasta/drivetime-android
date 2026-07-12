@@ -81,6 +81,8 @@ dependencies {
     implementation("androidx.webkit:webkit:1.11.0")
     implementation("androidx.car.app:app:1.4.0")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
+    // Backup destination folder (BACKUP.md): background writes into a persisted SAF tree.
+    implementation("androidx.documentfile:documentfile:1.0.1")
     // QR pairing (AUTH.md): scan the server's device-token QR. Self-contained scanner
     // Activity, no Play Services / camera-permission plumbing of our own.
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")

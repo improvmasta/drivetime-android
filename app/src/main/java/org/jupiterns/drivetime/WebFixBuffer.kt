@@ -25,6 +25,7 @@ object WebFixBuffer {
     private const val TRIM_EVERY = 500            // amortize the rewrite: trim every N appends
     private val LOCK = Any()
     private var appendsSinceTrim = 0
+    private var appendFailing = false
 
     private fun file(context: Context) = File(context.filesDir, FILE)
 
@@ -44,12 +45,24 @@ object WebFixBuffer {
         }
         synchronized(LOCK) {
             val f = file(context)
+            // Standalone, this buffer IS the drive pipeline — a silently failing append
+            // (full disk) means drives just stop appearing. Log the incident edges only,
+            // never per fix.
             runCatching { f.appendText(o.toString() + "\n") }
+                .onFailure {
+                    if (!appendFailing) { appendFailing = true; EventLog.warn("Fix buffer append failed: ${it.message}") }
+                }
+                .onSuccess {
+                    if (appendFailing) { appendFailing = false; EventLog.info("Fix buffer append recovered") }
+                }
             if (++appendsSinceTrim >= TRIM_EVERY) {
                 appendsSinceTrim = 0
                 val lines = f.readLinesOrEmpty()
                 val trimmed = trimOldest(lines, MAX_FIXES)
-                if (trimmed.size < lines.size) runCatching { f.writeText(trimmed.joinToString("\n", postfix = "\n")) }
+                if (trimmed.size < lines.size) {
+                    EventLog.debug("Fix buffer trimmed ${lines.size - trimmed.size} oldest fixes (cap $MAX_FIXES)")
+                    runCatching { f.writeText(trimmed.joinToString("\n", postfix = "\n")) }
+                }
             }
         }
     }
@@ -57,6 +70,24 @@ object WebFixBuffer {
     /** JSON array (string) of every buffered fix newer than [sinceTs], for the SPA to append. */
     fun pullSince(context: Context, sinceTs: Double): String =
         synchronized(LOCK) { selectSince(file(context).readLinesOrEmpty(), sinceTs) }
+
+    /** Stream the whole buffer into [out] under the appender's lock, so a backup archive
+     *  never carries a torn last line (BackupStore.writeArchive). */
+    fun copyTo(context: Context, out: java.io.OutputStream) {
+        synchronized(LOCK) {
+            val f = file(context)
+            if (f.exists()) f.inputStream().use { it.copyTo(out) }
+        }
+    }
+
+    /** Replace the buffer wholesale — a restore adopts the archive's fixes so the SPA's
+     *  drain (idempotent on ts) can repopulate its replica from them. */
+    fun replaceAll(context: Context, input: java.io.InputStream) {
+        synchronized(LOCK) {
+            runCatching { file(context).outputStream().use { input.copyTo(it) } }
+                .onFailure { EventLog.warn("Fix buffer restore failed: ${it.message}") }
+        }
+    }
 
     private fun File.readLinesOrEmpty(): List<String> =
         if (exists()) runCatching { readLines() }.getOrDefault(emptyList()) else emptyList()

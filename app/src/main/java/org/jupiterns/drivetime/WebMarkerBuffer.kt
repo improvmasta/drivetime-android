@@ -68,6 +68,22 @@ object WebMarkerBuffer {
     fun latestTs(context: Context): Long? =
         synchronized(LOCK) { file(context).readLinesOrEmpty().mapNotNull { tsOf(it) }.maxOrNull() }
 
+    /** Stream the whole buffer into [out] under the appender's lock (backup archives). */
+    fun copyTo(context: Context, out: java.io.OutputStream) {
+        synchronized(LOCK) {
+            val f = file(context)
+            if (f.exists()) f.inputStream().use { it.copyTo(out) }
+        }
+    }
+
+    /** Replace the buffer wholesale (restore). */
+    fun replaceAll(context: Context, input: java.io.InputStream) {
+        synchronized(LOCK) {
+            runCatching { file(context).outputStream().use { input.copyTo(it) } }
+                .onFailure { EventLog.warn("Marker buffer restore failed: ${it.message}") }
+        }
+    }
+
     private fun File.readLinesOrEmpty(): List<String> =
         if (exists()) runCatching { readLines() }.getOrDefault(emptyList()) else emptyList()
 

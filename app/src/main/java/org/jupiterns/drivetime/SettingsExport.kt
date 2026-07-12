@@ -45,6 +45,14 @@ object SettingsExport {
         o.put("obd_name", s.obdName)
         o.put("tracking_mode", s.trackingMode)
         o.put("control_token", s.controlToken)
+        // Backup config rides along so a restored phone keeps backing itself up. The folder
+        // URI stays out (its permission grant is per-device — re-pick it); the Drive refresh
+        // token IS portable, so Drive backups resume with no re-consent.
+        o.put("backup_schedule", s.backupSchedule)
+        o.put("backup_keep", s.backupKeep)
+        o.put("backup_drive_client_id", s.backupDriveClientId)
+        o.put("backup_drive_refresh_token", s.backupDriveRefreshToken)
+        o.put("backup_drive_account", s.backupDriveAccount)
         return o
     }
 
@@ -83,7 +91,8 @@ object SettingsExport {
             val v = o.optBoolean("alerts_enabled", s.alertsEnabled)
             s.alertsEnabled = v
             // On-device alerts now — no worker to schedule; drop any legacy server poll.
-            AlertWorker.cancel(context)
+            // Guarded: a restore can run before WorkManager is initialized (BackupStore).
+            runCatching { AlertWorker.cancel(context) }
             applied++
         }
         if (o.has("car_bt_mac")) { s.carBtMac = o.optString("car_bt_mac"); applied++ }
@@ -94,6 +103,18 @@ object SettingsExport {
             ControlParse.parseMode(o.optString("tracking_mode"))?.let { s.trackingMode = it; applied++ }
         }
         if (o.has("control_token")) { s.controlToken = o.optString("control_token"); applied++ }
+        var backupChanged = false
+        if (o.has("backup_schedule")) { s.backupSchedule = o.optString("backup_schedule"); backupChanged = true; applied++ }
+        if (o.has("backup_keep")) { s.backupKeep = o.optInt("backup_keep", s.backupKeep); applied++ }
+        if (o.has("backup_drive_client_id")) { s.backupDriveClientId = o.optString("backup_drive_client_id"); applied++ }
+        if (o.has("backup_drive_refresh_token")) {
+            s.backupDriveRefreshToken = o.optString("backup_drive_refresh_token")
+            s.backupDriveAccessToken = ""       // stale by definition; refreshed on first use
+            s.backupDriveFolderId = ""          // re-derived under whatever account this is
+            applied++
+        }
+        if (o.has("backup_drive_account")) { s.backupDriveAccount = o.optString("backup_drive_account"); applied++ }
+        if (backupChanged) runCatching { BackupWorker.reschedule(context, s) }
         return applied
     }
 }

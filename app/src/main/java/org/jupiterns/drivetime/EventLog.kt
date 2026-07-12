@@ -14,11 +14,13 @@ import java.io.File
  * stays cheap.
  */
 object EventLog {
-    enum class Level { INFO, WARN, ERROR }
+    /** DEBUG is the diagnostics tier: captured and included in problem reports, but
+     *  hidden from the in-app Log screen so the visible trail stays coarse/readable. */
+    enum class Level { DEBUG, INFO, WARN, ERROR }
     data class Entry(val ts: Long, val level: Level, val msg: String)
 
     private const val FILE = "events.log"
-    private const val MAX = 400
+    private const val MAX = 800
     private val LOCK = Any()
     private val buf = ArrayDeque<Entry>()
     @Volatile private var file: File? = null
@@ -33,8 +35,10 @@ object EventLog {
         }
     }
 
+    fun debug(msg: String) = add(Level.DEBUG, msg)
     fun info(msg: String) = add(Level.INFO, msg)
     fun warn(msg: String) = add(Level.WARN, msg)
+    fun error(msg: String) = add(Level.ERROR, msg)
 
     fun add(level: Level, msg: String) {
         synchronized(LOCK) {

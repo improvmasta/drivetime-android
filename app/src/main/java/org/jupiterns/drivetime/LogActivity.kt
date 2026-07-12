@@ -48,7 +48,9 @@ class LogActivity : AppCompatActivity() {
     }
 
     private fun render() {
-        val entries = EventLog.recent()
+        // DEBUG entries are diagnostics for problem reports — the on-screen trail stays
+        // coarse. Share (below) still includes them, so a shared log is the full picture.
+        val entries = EventLog.recent().filter { it.level != EventLog.Level.DEBUG }
         b.logText.text = if (entries.isEmpty()) "No activity logged yet."
         else entries.joinToString("\n") { e ->
             val sym = when (e.level) {

@@ -295,7 +295,12 @@ class LocationService : Service() {
      */
     private fun markDriveStart(tier: DriveDetector.Tier): Long {
         if (tier != DriveDetector.Tier.DRIVING) {
-            if (settings.driveStartedAt != 0L) settings.driveStartedAt = 0L
+            if (settings.driveStartedAt != 0L) {
+                settings.driveStartedAt = 0L
+                // A drive just ended: on the "after each drive" backup schedule, queue an
+                // archive shortly (debounced inside — a quick errand resume re-arms it).
+                BackupWorker.afterDrive(this, settings)
+            }
             resetDriveTotals()
             return 0L
         }

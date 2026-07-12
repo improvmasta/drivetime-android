@@ -16,8 +16,10 @@ import android.widget.Toast
 import android.os.Handler
 import android.os.Looper
 import android.view.View
+import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
+import android.webkit.WebChromeClient
 import android.webkit.URLUtil
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -31,6 +33,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
+import androidx.documentfile.provider.DocumentFile
 import androidx.webkit.ServiceWorkerClientCompat
 import androidx.webkit.ServiceWorkerControllerCompat
 import androidx.webkit.WebSettingsCompat
@@ -45,6 +49,13 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import org.jupiterns.drivetime.databinding.ActivityWebBinding
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+/** Where Settings → "Report a problem" sends the diagnostic bundle (no server required). */
+private const val REPORT_EMAIL = "lindsay@jupiterns.org"
 
 /**
  * The hybrid shell — this is the launcher AND the app's one native surface. It hosts the
@@ -84,6 +95,10 @@ class WebViewActivity : AppCompatActivity() {
     private lateinit var exportLauncher: ActivityResultLauncher<String>
     private lateinit var importLauncher: ActivityResultLauncher<Array<String>>
     private lateinit var scanLauncher: ActivityResultLauncher<ScanOptions>
+    // Backup & restore (BACKUP.md): destination folder, one-off archive save, restore pick.
+    private lateinit var folderLauncher: ActivityResultLauncher<Uri?>
+    private lateinit var archiveExportLauncher: ActivityResultLauncher<String>
+    private lateinit var restoreLauncher: ActivityResultLauncher<Array<String>>
 
     // Last "Test connection" result, surfaced back to the SPA's Sync tab via getStatus().
     @Volatile private var lastTestMsg: String = ""
@@ -95,6 +110,10 @@ class WebViewActivity : AppCompatActivity() {
     private val assetLoader by lazy {
         WebViewAssetLoader.Builder()
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            // Restore staging (BACKUP.md): a backup's app-data JSON is served to the SPA at
+            // /restore/staged.json — a 40 MB document can't ride a bridge return value.
+            .addPathHandler("/restore/", WebViewAssetLoader.InternalStoragePathHandler(
+                this, BackupStore.restoreDir(this)))
             .build()
     }
 
@@ -174,7 +193,24 @@ class WebViewActivity : AppCompatActivity() {
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                 // Only the top-level dashboard failing to load warrants the cover; a stray
                 // sub-resource (a map tile offline) must not blank the whole app.
-                if (request.isForMainFrame && !loadedOnce) showOffline()
+                if (request.isForMainFrame) {
+                    EventLog.warn("Web main-frame load error: ${error.errorCode} ${error.description}")
+                    if (!loadedOnce) showOffline()
+                }
+            }
+        }
+
+        // The SPA's console errors are invisible on a phone — capture them into the activity
+        // log so a Report-a-problem email carries the web side of a failure too. Errors are
+        // WARN (shown in the Log screen); everything else is ignored to keep the trail coarse.
+        web.webChromeClient = object : WebChromeClient() {
+            override fun onConsoleMessage(msg: ConsoleMessage): Boolean {
+                if (msg.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
+                    val src = msg.sourceId()?.substringAfterLast('/') ?: ""
+                    val text = msg.message()?.take(300) ?: ""
+                    EventLog.warn("web console: $text ($src:${msg.lineNumber()})")
+                }
+                return false // let it reach logcat too
             }
         }
 
@@ -267,6 +303,15 @@ class WebViewActivity : AppCompatActivity() {
         scanLauncher = registerForActivityResult(ScanContract()) { result ->
             result?.contents?.let { applyPairing(it) }
         }
+        folderLauncher = registerForActivityResult(
+            ActivityResultContracts.OpenDocumentTree()
+        ) { uri -> uri?.let { adoptBackupFolder(it) } }
+        archiveExportLauncher = registerForActivityResult(
+            ActivityResultContracts.CreateDocument(BackupStore.ARCHIVE_MIME)
+        ) { uri -> uri?.let { exportArchiveTo(it) } }
+        restoreLauncher = registerForActivityResult(
+            ActivityResultContracts.OpenDocument()
+        ) { uri -> uri?.let { restoreFrom(it) } }
     }
 
     private fun startTracking() {
@@ -430,6 +475,126 @@ class WebViewActivity : AppCompatActivity() {
         toast("Imported $applied settings")
     }
 
+    // ---- full-data backup & restore (BACKUP.md) ----
+
+    /** Keep the picked folder across reboots; one persisted grant is plenty, so a
+     *  previous folder's grant is released. */
+    private fun adoptBackupFolder(uri: Uri) {
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        val took = runCatching { contentResolver.takePersistableUriPermission(uri, flags) }
+        if (took.isFailure) { snack("Couldn't keep access to that folder — pick another"); return }
+        val old = settings.backupFolderUri
+        if (old.isNotBlank() && old != uri.toString()) {
+            runCatching { contentResolver.releasePersistableUriPermission(Uri.parse(old), flags) }
+        }
+        settings.backupFolderUri = uri.toString()
+        settings.backupFolderName = runCatching {
+            DocumentFile.fromTreeUri(this, uri)?.name ?: ""
+        }.getOrDefault("")
+        EventLog.info("Backup folder set: ${settings.backupFolderName.ifBlank { uri.lastPathSegment ?: "?" }}")
+        toast("Backup folder set")
+    }
+
+    /** One-off "Save to file…": stream a fresh archive to the user-picked document. */
+    private fun exportArchiveTo(uri: Uri) {
+        Thread {
+            val ok = runCatching {
+                contentResolver.openOutputStream(uri, "w")
+                    ?.let { BackupStore.writeArchive(this, settings, it); true } ?: false
+            }.getOrElse { EventLog.warn("Backup export failed: ${it.message}"); false }
+            ui.post { if (ok) toast("Backup saved") else snack("Backup export failed") }
+            if (ok) EventLog.info("Backup exported to a picked file")
+        }.start()
+    }
+
+    /** Restore a picked file — full archive, bare data snapshot, or legacy settings JSON;
+     *  BackupStore sniffs the bytes. Native state applies here; staged app data is handed
+     *  to the SPA, which imports it and reloads itself. */
+    private fun restoreFrom(uri: Uri) {
+        toast("Restoring…")
+        Thread {
+            val result = runCatching {
+                contentResolver.openInputStream(uri)?.use { BackupStore.restore(this, settings, it) }
+                    ?: BackupStore.RestoreResult("unknown", 0, false, "couldn't open the file")
+            }.getOrElse { BackupStore.RestoreResult("unknown", 0, false, it.message ?: "read error") }
+            ui.post {
+                when {
+                    result.error != null -> snack("Restore failed: ${result.error}")
+                    result.stagedAppData -> {
+                        b.webview.evaluateJavascript(
+                            "(typeof window.__dtRestoreStaged==='function') && window.__dtRestoreStaged()",
+                            null)
+                        snack("Restoring your data…")
+                    }
+                    else -> toast("Imported ${result.settingsApplied} settings")
+                }
+            }
+        }.start()
+    }
+
+    /** Kick the Drive OAuth consent flow in the system browser (redirect returns via
+     *  [OAuthRedirectActivity]). */
+    private fun startDriveAuth() {
+        val cid = settings.backupDriveClientId
+        if (cid.isBlank()) { snack("Paste your OAuth client ID first (Google Drive setup)"); return }
+        val url = DriveAuth.beginAuthUrl(cid)
+        runCatching {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }.onFailure { snack("No browser available for Google sign-in") }
+    }
+
+    // ---- problem report ----
+
+    /** Build the diagnostic bundle — app/device info, a secrets-free settings summary, the
+     *  permission checklist, and the FULL activity log (DEBUG included) — into
+     *  `reports/drivetime-report.txt`, then open a chooser for an email pre-addressed to
+     *  [REPORT_EMAIL]. Nothing sends until the user hits Send in their own mail app. */
+    private fun sendProblemReport(note: String) {
+        val fmt = SimpleDateFormat("MM-dd HH:mm:ss", Locale.US)
+        val report = buildString {
+            append("drivetime problem report\n")
+            append("App: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})\n")
+            append("Device: ${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})\n")
+            append("Server configured: ${settings.isConfigured}\n")
+            append("Tracking mode: ${settings.trackingMode}\n")
+            append("Battery exempt: ${Battery.isExempt(this@WebViewActivity)}\n")
+            for (c in Permissions.checklist(this@WebViewActivity, settings)) {
+                append("Permission — ${c.label}: ${if (c.granted) "granted" else "MISSING"}\n")
+            }
+            if (note.isNotBlank()) append("\nUser note: $note\n")
+            append("\n--- activity log (newest first, diagnostics included) ---\n")
+            for (e in EventLog.recent()) {
+                append("${fmt.format(Date(e.ts))} [${e.level}] ${e.msg}\n")
+            }
+        }
+        val subject = "drivetime problem report (v${BuildConfig.VERSION_NAME})"
+        val intent = runCatching {
+            val dir = File(getExternalFilesDir(null), "reports").apply { mkdirs() }
+            val f = File(dir, "drivetime-report.txt")
+            f.writeText(report)
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", f)
+            Intent(Intent.ACTION_SEND)
+                .setType("text/plain")
+                .putExtra(Intent.EXTRA_EMAIL, arrayOf(REPORT_EMAIL))
+                .putExtra(Intent.EXTRA_SUBJECT, subject)
+                .putExtra(Intent.EXTRA_TEXT,
+                    if (note.isNotBlank()) note
+                    else "(describe what went wrong here — the diagnostic log is attached)")
+                .putExtra(Intent.EXTRA_STREAM, uri)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }.getOrElse {
+            // Couldn't write the attachment (no external storage?) — inline a trimmed
+            // report in the body instead; a long email beats no report.
+            Intent(Intent.ACTION_SEND)
+                .setType("text/plain")
+                .putExtra(Intent.EXTRA_EMAIL, arrayOf(REPORT_EMAIL))
+                .putExtra(Intent.EXTRA_SUBJECT, subject)
+                .putExtra(Intent.EXTRA_TEXT, report.take(50_000))
+        }
+        runCatching { startActivity(Intent.createChooser(intent, "Send problem report")) }
+            .onFailure { snack("No email app available") }
+    }
+
     // ---- JS bridge ----
 
     /**
@@ -562,6 +727,12 @@ class WebViewActivity : AppCompatActivity() {
                     "server_url" -> settings.serverUrl = value
                     "control_token" -> settings.controlToken = value
                     "updates_enabled" -> settings.updatesEnabled = value.toBooleanStrictOrNull() ?: settings.updatesEnabled
+                    "backup_schedule" -> {
+                        settings.backupSchedule = value
+                        BackupWorker.reschedule(this@WebViewActivity, settings)
+                    }
+                    "backup_keep" -> settings.backupKeep = value.toIntOrNull() ?: settings.backupKeep
+                    "backup_drive_client_id" -> settings.backupDriveClientId = value
                     else -> Control.set(this@WebViewActivity, key, value, "user")
                 }
             }
@@ -661,6 +832,112 @@ class WebViewActivity : AppCompatActivity() {
         @JavascriptInterface
         fun importBackup() { ui.post { importLauncher.launch(arrayOf("application/json", "*/*")) } }
 
+        // ---- full-data backup & restore (BACKUP.md) ----
+
+        /** The SPA streams its data snapshot over these three (begin → chunk* → end);
+         *  chunked because one bridge string holding the whole history risks an OOM. */
+        @JavascriptInterface
+        fun backupSnapshotBegin(): Boolean = BackupStore.beginSnapshot(this@WebViewActivity)
+
+        @JavascriptInterface
+        fun backupSnapshotChunk(chunk: String): Boolean = BackupStore.appendChunk(chunk)
+
+        @JavascriptInterface
+        fun backupSnapshotEnd(createdAtMs: Double): Boolean =
+            BackupStore.endSnapshot(this@WebViewActivity, settings, createdAtMs.toLong())
+
+        /** Backup config + last-run status for the Settings card. `supported` tells the SPA
+         *  this shell speaks the full-data protocol at all. */
+        @JavascriptInterface
+        fun getBackupStatus(): String = runCatching {
+            JSONObject()
+                .put("supported", true)
+                .put("schedule", settings.backupSchedule)
+                .put("keep", settings.backupKeep)
+                .put("folderSet", settings.backupFolderUri.isNotBlank())
+                .put("folderName", settings.backupFolderName)
+                .put("driveClientIdSet", settings.backupDriveClientId.isNotBlank())
+                .put("driveConnected", settings.backupDriveRefreshToken.isNotBlank())
+                .put("driveAccount", settings.backupDriveAccount)
+                .put("lastBackupAt", settings.backupLastAt)
+                .put("lastBackupOk", settings.backupLastOk)
+                .put("lastBackupResult", settings.backupLastResult)
+                .put("snapshotAt", settings.backupSnapshotAt)
+                .toString()
+        }.getOrDefault("{}")
+
+        /** Pick (or change) the backup destination folder via the system tree picker. */
+        @JavascriptInterface
+        fun pickBackupFolder() { ui.post { folderLauncher.launch(null) } }
+
+        /** Forget the picked folder — releases the grant, deletes nothing. */
+        @JavascriptInterface
+        fun clearBackupFolder() {
+            val old = settings.backupFolderUri
+            settings.backupFolderUri = ""
+            settings.backupFolderName = ""
+            if (old.isNotBlank()) runCatching {
+                contentResolver.releasePersistableUriPermission(
+                    Uri.parse(old),
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            }
+            ui.post { toast("Backup folder forgotten") }
+        }
+
+        /** Start the Google Drive consent flow (needs the pasted client ID). */
+        @JavascriptInterface
+        fun connectDrive() { ui.post { startDriveAuth() } }
+
+        /** Drop the Drive tokens; the files already uploaded stay in the user's Drive. */
+        @JavascriptInterface
+        fun disconnectDrive() {
+            settings.backupDriveRefreshToken = ""
+            settings.backupDriveAccessToken = ""
+            settings.backupDriveAccount = ""
+            settings.backupDriveFolderId = ""
+            EventLog.info("Google Drive disconnected")
+            ui.post { toast("Google Drive disconnected") }
+        }
+
+        /** Back up to the configured destination(s) right now (the SPA has just pushed a
+         *  fresh snapshot). Result surfaces via [getBackupStatus]. */
+        @JavascriptInterface
+        fun backupNow() {
+            ui.post {
+                if (settings.backupFolderUri.isBlank() && settings.backupDriveRefreshToken.isBlank()) {
+                    snack("Pick a backup folder or connect Google Drive first")
+                } else {
+                    BackupWorker.runNow(this@WebViewActivity)
+                    toast("Backing up…")
+                }
+            }
+        }
+
+        /** One-off archive to a user-picked file (system save dialog). */
+        @JavascriptInterface
+        fun exportBackupFile() {
+            ui.post { archiveExportLauncher.launch(BackupStore.archiveName(System.currentTimeMillis())) }
+        }
+
+        /** Pick a backup file and restore it (archive / data snapshot / legacy settings). */
+        @JavascriptInterface
+        fun restoreBackup() {
+            ui.post {
+                restoreLauncher.launch(arrayOf(
+                    "application/zip", "application/json", "application/gzip",
+                    "application/octet-stream", "*/*"))
+            }
+        }
+
+        /** The SPA finished (or failed) importing staged restore data; it reloads itself
+         *  on success, so we only clean up and surface a failure. */
+        @JavascriptInterface
+        fun restoreStagedDone(ok: Boolean, detail: String) {
+            BackupStore.clearStaged(this@WebViewActivity)
+            EventLog.info(if (ok) "Data restore imported ($detail)" else "Data restore failed: $detail")
+            if (!ok) ui.post { snack("Restore failed: $detail") }
+        }
+
         /** Save a text file (e.g. the mileage CSV export) to the device's public Downloads.
          *  The SPA calls this because a WebView can't download a `blob:` URL. */
         @JavascriptInterface
@@ -735,6 +1012,26 @@ class WebViewActivity : AppCompatActivity() {
                 .put("updated_at", s.updatedAt)
                 .toString()
         }.getOrDefault("{}")
+
+        /** SPA-side diagnostics (uncaught JS errors, unhandled rejections) land in the same
+         *  activity log a problem report attaches. ERROR/WARN show in the Log screen;
+         *  anything else files as DEBUG so the visible trail stays coarse. */
+        @JavascriptInterface
+        fun logEvent(level: String, msg: String) {
+            val lvl = when (level.uppercase(Locale.US)) {
+                "ERROR" -> EventLog.Level.ERROR
+                "WARN" -> EventLog.Level.WARN
+                else -> EventLog.Level.DEBUG
+            }
+            EventLog.add(lvl, msg.take(600))
+        }
+
+        /** Settings → Report a problem: compose a pre-addressed email carrying the full
+         *  diagnostic bundle. The user reviews and sends it themselves. */
+        @JavascriptInterface
+        fun reportProblem(note: String) {
+            ui.post { sendProblemReport(note) }
+        }
     }
 
     // ---- overlay states ----

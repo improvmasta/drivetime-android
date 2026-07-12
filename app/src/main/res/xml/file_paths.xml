@@ -3,4 +3,6 @@
      APK the in-app updater hands to the system package installer. -->
 <paths>
     <external-files-path name="updates" path="updates/" />
+    <!-- `reports/` holds the diagnostic text file the Report-a-problem email attaches. -->
+    <external-files-path name="reports" path="reports/" />
 </paths>

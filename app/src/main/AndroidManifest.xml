@@ -34,6 +34,7 @@
     <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="false" />
 
     <application
+        android:name=".DrivetimeApp"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -71,6 +72,22 @@
             android:name=".LogActivity"
             android:exported="false"
             android:label="Activity log" />
+
+        <!-- Google Drive OAuth redirect (BACKUP.md). Android-type OAuth clients redirect on
+             a custom scheme equal to the package name; DriveAuth.REDIRECT must match. -->
+        <activity
+            android:name=".OAuthRedirectActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="org.jupiterns.drivetime" android:path="/oauth2redirect" />
+            </intent-filter>
+        </activity>
 
         <service
             android:name=".LocationService"
