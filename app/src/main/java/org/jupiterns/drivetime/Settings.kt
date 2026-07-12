@@ -236,6 +236,12 @@ class Settings(context: Context) {
         get() = prefs.getLong("kill_acknowledged_at", 0L)
         set(v) = prefs.edit().putLong("kill_acknowledged_at", v).apply()
 
+    /** The [lastKillDetectedAt] value the watchdog last posted a notification for, so a
+     *  kill notifies exactly once — the periodic job re-running must not re-nag. */
+    var lastKillNotifiedAt: Long
+        get() = prefs.getLong("last_kill_notified_at", 0L)
+        set(v) = prefs.edit().putLong("last_kill_notified_at", v).apply()
+
     /** Auto-check the server for a newer APK when the app comes to the foreground
      *  (throttled). Off = only the manual "Check for updates" button checks. */
     var updatesEnabled: Boolean
