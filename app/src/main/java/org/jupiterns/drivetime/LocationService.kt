@@ -94,6 +94,8 @@ class LocationService : Service() {
     private var pendingSinceFlush = 0             // fixes enqueued since the last flush trigger
     private var lastPersistedFixAt = 0L           // throttle Settings writes for the kill detector
     private var lastPersistedMeters = 0.0         // last driveMeters mirrored to durable Settings
+    private var notifSig: String? = null          // signature of the last-drawn drive card (redraw coalescing)
+    @Volatile private var flashUntil = 0L         // hold the "Marked #N" flash; suppress per-fix redraws until then
 
     private val connectivity by lazy { getSystemService(ConnectivityManager::class.java) }
     /** Flush as soon as a usable network returns, so a dead-zone backlog clears
@@ -201,11 +203,17 @@ class LocationService : Service() {
     private fun startUploadLoop() {
         scope.launch {
             while (isActive) {
-                val sec = if (currentTier == DriveDetector.Tier.DRIVING)
-                    settings.drivingUploadIntervalSec.coerceAtLeast(1)
-                else settings.uploadIntervalSec.coerceAtLeast(5)
+                // No server paired (standalone) → don't wake to flush a queue that nothing
+                // drains; a slow idle tick still notices a server appearing (Phase 5 audit).
+                // charge/connectivity/batch triggers keep an eventual server install prompt.
+                val sec = when {
+                    !settings.isConfigured -> STANDALONE_IDLE_SEC
+                    currentTier == DriveDetector.Tier.DRIVING ->
+                        settings.drivingUploadIntervalSec.coerceAtLeast(1)
+                    else -> settings.uploadIntervalSec.coerceAtLeast(5)
+                }
                 delay(sec * 1000L)
-                flushNow()
+                if (settings.isConfigured) flushNow()
             }
         }
     }
@@ -310,6 +318,7 @@ class LocationService : Service() {
     private fun markDriveStart(tier: DriveDetector.Tier): Long {
         if (tier != DriveDetector.Tier.DRIVING) {
             if (settings.driveStartedAt != 0L) {
+                stampBatteryUsed(settings.driveStartedAt)   // before the start mark is cleared
                 settings.driveStartedAt = 0L
                 // A drive just ended: on the "after each drive" backup schedule, queue an
                 // archive shortly (debounced inside — a quick errand resume re-arms it).
@@ -326,8 +335,27 @@ class LocationService : Service() {
         } else {
             settings.driveStartedAt = now
             resetDriveTotals()   // a NEW drive: its miles and markers start at zero
+            // Snapshot the battery at the drive's start so drive end can report what it cost.
+            settings.driveBatteryStart = Battery.levelPct(this) ?: -1
         }
         return if (resume) existing else now
+    }
+
+    /**
+     * At drive end, stamp one "battery used" event for the drive that started at [startedAtMs]:
+     * the start reading ([Settings.driveBatteryStart], captured when the drive began and durable
+     * across a mid-drive service restart) and the reading now. The SPA drains it into the
+     * per-drive `trip_battery` overlay and shows it on the drive-detail view, so battery
+     * improvements are visible and regressions catchable (Phase 5 — measure it).
+     */
+    private fun stampBatteryUsed(startedAtMs: Long) {
+        val start = settings.driveBatteryStart
+        settings.driveBatteryStart = -1
+        if (start !in 0..100) return
+        val end = Battery.levelPct(this) ?: return
+        runCatching { WebBatteryBuffer.append(this, startedAtMs / 1000, start, end) }
+        val used = start - end
+        if (used > 0) EventLog.info("Drive used $used% battery ($start→$end)")
     }
 
     /**
@@ -430,11 +458,11 @@ class LocationService : Service() {
         detector.onSpeed(speed, System.currentTimeMillis())
         reevaluate()
         if (currentTier == DriveDetector.Tier.DRIVING) adaptSampling(loc)
-        // Redraw the drive card on each recorded fix (~1 Hz while driving), not on a timer:
-        // Android rate-limits notify() well above that, and the chronometer covers the gaps.
-        // Idle fixes redraw too — cheap, and it's what makes a just-flipped `notif_driving_only`
-        // take effect without waiting for the next tier change.
-        if (currentTier != DriveDetector.Tier.OFF) updateNotification()
+        // Coalesce the drive-card redraw: only re-post when a value the card actually shows has
+        // changed (speed int, miles at 0.1, marker count, tier). The elapsed Chronometer ticks
+        // natively without a redraw, so a per-fix (~1 Hz) notify() would be pure battery cost for
+        // an identical card — this is the cheapest real win of Phase 5.
+        maybeUpdateNotification()
     }
 
     /**
@@ -700,6 +728,33 @@ class LocationService : Service() {
     private fun updateNotification(flash: String? = null) {
         val mgr = getSystemService(NotificationManager::class.java)
         runCatching { mgr.notify(NOTIF_ID, buildNotification(flash)) }
+        // A plain (non-flash) draw reflects the current values — remember them so the coalesced
+        // per-fix path can skip an identical redraw. A flash draws transient text over the same
+        // values, so it must not update the signature (the post-flash draw restores it).
+        if (flash == null) notifSig = notifSignature()
+    }
+
+    /**
+     * Redraw the ongoing notification only if what the driver can see has changed. The elapsed
+     * time is a self-ticking [Chronometer], so an unchanged card would redraw for nothing; and
+     * while a "Marked #N" flash is up we deliberately hold it (a per-fix redraw used to stomp it
+     * within a second). Non-fix paths (tier flips, marks) still call [updateNotification] directly.
+     */
+    private fun maybeUpdateNotification() {
+        if (currentTier == DriveDetector.Tier.OFF) return
+        if (System.currentTimeMillis() < flashUntil) return
+        if (notifSignature() == notifSig) return
+        updateNotification()
+    }
+
+    /** The visible content of the ongoing notification as a comparable string: everything the
+     *  card shows EXCEPT the natively-ticking elapsed time. Two fixes with the same signature
+     *  produce the same card, so the second needs no notify(). */
+    private fun notifSignature(): String {
+        if (!driving()) return "idle:${tierText()}:${activeChannel()}"
+        val speed = LiveState.speedMph ?: -1
+        val miles10 = Math.round(LiveState.driveMeters * 0.000621371 * 10)
+        return "drive:$speed:$miles10:${LiveState.markerCount}:${tierText()}"
     }
 
     private fun tierText(): String = when (currentTier) {
@@ -907,9 +962,11 @@ class LocationService : Service() {
     /** Show [text] in place of the stats line, then fall back. With the phone locked this is
      *  the only feedback the driver gets, so it has to land. */
     private fun flashNotification(text: String) {
+        flashUntil = System.currentTimeMillis() + FLASH_MS   // hold it against the coalesced redraw
         updateNotification(flash = text)
         scope.launch {
             delay(FLASH_MS)
+            flashUntil = 0L
             updateNotification()
         }
     }
@@ -980,6 +1037,11 @@ class LocationService : Service() {
         // Upload batching: flush early once this many fixes have queued since the last
         // flush, so dense driving doesn't hold more than ~a minute between periodic ticks.
         private const val BATCH_FIXES = 25
+
+        // Standalone (no server paired): the upload loop's idle re-check cadence. Nothing to
+        // flush, so wake rarely — a server pairing is noticed within this window, and charge /
+        // connectivity / batch triggers still fire immediately once one exists.
+        private const val STANDALONE_IDLE_SEC = 300
 
         // Throttle for persisting "last fix" to Settings (cheap but not free; we only
         // need this fresh to the order of a minute for the OEM kill detector).

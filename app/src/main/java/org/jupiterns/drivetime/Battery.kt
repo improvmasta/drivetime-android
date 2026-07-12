@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.BatteryManager
 import android.os.PowerManager
 import android.provider.Settings
 
@@ -18,6 +19,14 @@ object Battery {
     fun isExempt(ctx: Context): Boolean {
         val pm = ctx.getSystemService(Context.POWER_SERVICE) as PowerManager
         return pm.isIgnoringBatteryOptimizations(ctx.packageName)
+    }
+
+    /** Current battery charge as a whole percent (0–100), or null when unavailable. Used to
+     *  record how much a drive cost the battery ([LocationService] stamps start/end). */
+    fun levelPct(ctx: Context): Int? {
+        val bm = ctx.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager ?: return null
+        val pct = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        return if (pct in 0..100) pct else null
     }
 
     /** System dialog to whitelist the app from battery optimization. */

@@ -696,6 +696,13 @@ class WebViewActivity : AppCompatActivity() {
         @JavascriptInterface
         fun pullVehicles(sinceTs: Double): String = WebVehicleBuffer.pullSince(this@WebViewActivity, sinceTs)
 
+        /** JSON array of per-drive "battery used" events (start/end %) the logger stamped at
+         *  drive end, at or after [sinceTs] (Phase 5). The SPA resolves each to the drive that
+         *  began at its ts and writes the local `trip_battery` overlay — a phone-local diagnostic,
+         *  never synced. Re-delivery is idempotent (keyed by the drive). */
+        @JavascriptInterface
+        fun pullBattery(sinceTs: Double): String = WebBatteryBuffer.pullSince(this@WebViewActivity, sinceTs)
+
         /**
          * Stamp a marker from the SPA's own Mark button, through the SAME service path the
          * notification and Android Auto use. One writer: otherwise an in-app mark would land

@@ -254,6 +254,13 @@ class Settings(context: Context) {
         get() = prefs.getFloat("drive_meters", 0f)
         set(v) = prefs.edit().putFloat("drive_meters", v).apply()
 
+    /** Battery charge (0–100) captured when the current drive began; -1 when not driving or
+     *  unknown. Durable like [driveStartedAt]/[driveMeters] so a service restart mid-drive can
+     *  still stamp an honest "battery used" at drive end (the end reading minus this start). */
+    var driveBatteryStart: Int
+        get() = prefs.getInt("drive_battery_start", -1)
+        set(v) = prefs.edit().putInt("drive_battery_start", v).apply()
+
     /** Wall-clock (ms) of the most recent suspected OEM-kill — set by the watchdog
      *  when it restarts the service after a suspicious gap, so the dashboard can name
      *  the manufacturer-specific setting. Zero = no incident recorded. */
