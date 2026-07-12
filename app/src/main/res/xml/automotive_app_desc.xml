@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android Auto discovery descriptor. The Auto host only lists apps whose manifest points
+     a com.google.android.gms.car.application meta-data at a descriptor declaring what kind
+     of car app this is; "template" = Car App Library templated app. Without this file the
+     app never appears on the head unit at all, even with unknown sources enabled. -->
+<automotiveApp>
+    <uses name="template" />
+</automotiveApp>

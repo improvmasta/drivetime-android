@@ -750,7 +750,8 @@ class LocationService : Service() {
             this, 0, Intent(this, WebViewActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val n = Notification.Builder(this, ALERT_CHANNEL)
-            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setSmallIcon(R.drawable.ic_notif_driving)
+            .setColor(getColor(R.color.status_red))
             .setContentTitle("Check engine: $code")
             .setContentText("Your vehicle reported a diagnostic trouble code.")
             .setContentIntent(open)
@@ -795,6 +796,9 @@ class LocationService : Service() {
             .setContentIntent(open)
             // A per-fix redraw (~1 Hz while driving) must never buzz or re-alert.
             .setOnlyAlertOnce(true)
+            // Brand accent: tints the small icon, header and action titles so the card reads
+            // as drivetime at a glance instead of grey system text. Resolves day/night.
+            .setColor(getColor(R.color.dt_accent))
 
         if (!driving()) {
             return b.setContentTitle("drivetime").setContentText(tierText()).build()
@@ -830,10 +834,23 @@ class LocationService : Service() {
             rv.setTextViewText(R.id.n_tier, tierText())
             rv.setTextViewText(R.id.n_speed_val, if (speed != null) "$speed" else "—")
             rv.setTextViewText(R.id.n_miles_val, miles)
-            rv.setTextViewText(R.id.n_since, flash ?: since ?: "")
+            // The pin row only earns its glyph when there is something to say — an empty
+            // line under the tiles with a dangling pin looks broken.
+            val sinceLine = flash ?: since
+            rv.setViewVisibility(
+                R.id.n_since_row,
+                if (sinceLine != null) android.view.View.VISIBLE else android.view.View.GONE
+            )
+            rv.setTextViewText(R.id.n_since, sinceLine ?: "")
         } else {
             rv.setChronometer(R.id.n_chrono, base, null, true)
             rv.setTextViewText(R.id.n_title, tierText())
+            // The speed pill has a chip background now, so an empty string would still draw
+            // a stray pill — hide the view outright until the first fix carries a speed.
+            rv.setViewVisibility(
+                R.id.n_speed,
+                if (speed != null) android.view.View.VISIBLE else android.view.View.GONE
+            )
             rv.setTextViewText(R.id.n_speed, if (speed != null) "$speed mph" else "")
             val stats = flash ?: listOfNotNull("$miles mi", since).joinToString(" · ")
             rv.setTextViewText(R.id.n_stats, "· $stats")

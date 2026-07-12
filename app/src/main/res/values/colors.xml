@@ -26,4 +26,7 @@
 
     <!-- warning-banner tint: warn at ~12% alpha (= SPA warn-soft light) -->
     <color name="dt_warn_soft">#1F8A6A10</color>
+
+    <!-- notification stat-tile wash: accent at ~10% alpha, over the light shade -->
+    <color name="dt_notif_chip">#1A1668A0</color>
 </resources>

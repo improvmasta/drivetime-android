@@ -23,7 +23,7 @@ Master product roadmap lives in `drivetime/ROADMAP.md`; this is the client half.
   upload with an on-disk **offline queue** (`Uploader`); Settings (server, login, interval).
 - [built] **Phase B** — custom **ELM327** Bluetooth-SPP client; RPM/load/coolant/throttle/
   MAF/fuel/voltage + DTCs merged onto each fix; dongle picker.
-- [built] **Phase C** — **Android Auto** pane (Car App Library): live stats logging / leave-by idle.
+- [built] **Phase C** — **Android Auto** (Car App Library): grid dashboard while driving (speed/miles/elapsed/marks + OBD tiles) with Mark/Stop on the action strip, leave-by pane idle. Discovery fixed: the host needs the `com.google.android.gms.car.application` → `automotive_app_desc.xml` meta-data *and* the `app-projected` artifact, or the app never appears on the head unit.
 - [built] **Phase D** — **AlertWorker** (15-min WorkManager poll of `/api/alerts`) → notifications.
 - [built] **Tiered tracking + layered drive detection** — always-on **Light** background logging that ramps to dense **Driving** via `DriveDetector` (car-BT → OBD-connect → speed cascade, *not* activity-recognition). Routine/shortcut can force a tier. *(Supersedes the activity-recognition `TripDetector`, retired because its slow-traffic car/bike guess was the unreliable part.)*
 - [built] **Routine control** — `START/STOP/TOGGLE` intents (`ControlActivity`/`ControlReceiver`, `org.jupiterns.drivetime.action.*`).

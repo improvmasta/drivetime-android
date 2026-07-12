@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Rounded accent-wash chip behind the notification's stat tiles and speed pill.
+     dt_notif_chip is a low-alpha accent, defined per-theme so it reads on both the light
+     and dark notification shade. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="10dp" />
+    <solid android:color="@color/dt_notif_chip" />
+</shape>

@@ -48,8 +48,9 @@ battery voltage, and trouble codes — merged right onto your route. A maintenan
 writes itself.
 
 🚙 **Rides on your dashboard.**
-drivetime speaks **Android Auto** — live speed, RPM, coolant, and battery on the car screen
-while you drive, and a "leave by" card when you're parked so you're never late.
+drivetime speaks **Android Auto** — a glanceable grid dashboard (speed, miles, elapsed,
+markers, plus RPM and battery with a dongle) with one-tap **Mark** and **Stop** while you
+drive, and a "leave by" card when you're parked so you're never late.
 
 🔄 **Updates itself.**
 No app-store dance. When a new version lands, drivetime offers a one-tap update and keeps

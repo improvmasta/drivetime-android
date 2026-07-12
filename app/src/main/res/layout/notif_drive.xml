@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Collapsed drive-notification content, drawn inside Notification.DecoratedCustomViewStyle
-     (the system supplies the header, small icon, background and action buttons). Two compact
-     lines: tier/signal + speed, then a live elapsed chronometer + the miles/marker stats.
-     Only RemoteViews-legal widgets (LinearLayout / TextView / Chronometer); text colours use
-     framework notification attrs so contrast stays correct in both light and dark shades. -->
+     (the system supplies the header, small icon, background and action buttons). Line one is
+     tier + a rounded accent speed pill; line two is a clock glyph, the live chronometer and
+     the miles/marker stats. Only RemoteViews-legal widgets (LinearLayout / TextView /
+     ImageView / Chronometer); base text uses framework notification attrs so contrast stays
+     correct in both light and dark shades, accents come from the day/night dt_ palette. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
@@ -15,6 +16,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
+        android:gravity="center_vertical"
         android:baselineAligned="false">
 
         <TextView
@@ -33,18 +35,32 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="8dp"
+            android:background="@drawable/bg_notif_chip"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:paddingTop="2dp"
+            android:paddingBottom="2dp"
             android:singleLine="true"
-            android:textColor="?android:attr/textColorPrimary"
+            android:textColor="@color/dt_accent"
             android:textStyle="bold"
-            android:textSize="15sp" />
+            android:textSize="13sp" />
     </LinearLayout>
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
+        android:gravity="center_vertical"
         android:baselineAligned="false"
-        android:paddingTop="1dp">
+        android:paddingTop="3dp">
+
+        <ImageView
+            android:layout_width="13dp"
+            android:layout_height="13dp"
+            android:layout_marginEnd="4dp"
+            android:src="@drawable/ic_stat_time"
+            android:tint="@color/dt_accent"
+            android:importantForAccessibility="no" />
 
         <Chronometer
             android:id="@+id/n_chrono"

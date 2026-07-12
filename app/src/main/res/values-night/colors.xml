@@ -25,4 +25,7 @@
 
     <!-- warn at ~14% alpha (= SPA warn-soft dark) -->
     <color name="dt_warn_soft">#24FFB340</color>
+
+    <!-- notification stat-tile wash: accent at ~15% alpha, over the dark shade -->
+    <color name="dt_notif_chip">#2656C8FF</color>
 </resources>

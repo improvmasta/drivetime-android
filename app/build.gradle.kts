@@ -80,6 +80,9 @@ dependencies {
     // WebView hybrid shell: ServiceWorkerController + algorithmic-darkening feature checks.
     implementation("androidx.webkit:webkit:1.11.0")
     implementation("androidx.car.app:app:1.4.0")
+    // Android Auto projection support — required alongside the core artifact for the
+    // phone-projected (head unit) host; without it Auto won't bind the CarAppService.
+    implementation("androidx.car.app:app-projected:1.4.0")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     // Backup destination folder (BACKUP.md): background writes into a persisted SAF tree.
     implementation("androidx.documentfile:documentfile:1.0.1")

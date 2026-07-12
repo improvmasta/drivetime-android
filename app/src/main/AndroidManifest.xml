@@ -46,6 +46,13 @@
             android:name="androidx.car.app.minCarApiLevel"
             android:value="1" />
 
+        <!-- REQUIRED for Android Auto to discover the app: the Auto host enumerates apps by
+             this meta-data, not by the CarAppService alone. Its absence is why the app never
+             showed up on the head unit. -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
+
         <!-- Launcher = the hybrid shell that hosts the SPA (the app *is* the web app). -->
         <activity
             android:name=".WebViewActivity"

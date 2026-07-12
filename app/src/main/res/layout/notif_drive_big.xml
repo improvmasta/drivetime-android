@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Expanded drive-notification content, drawn inside Notification.DecoratedCustomViewStyle.
-     A three-tile mini-dashboard: speed / miles / live elapsed chronometer, with tier-signal
-     above and the marker line below. RemoteViews-legal widgets only. -->
+     A three-tile mini-dashboard — speed / miles / live elapsed — each tile a rounded
+     accent-wash chip with its own glyph, with the tier line above and the marker line (pin +
+     "since #N" / "Marked #N") below. RemoteViews-legal widgets only; base text uses framework
+     notification attrs, accents come from the day/night dt_ palette. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
@@ -29,12 +31,24 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:orientation="vertical">
+            android:layout_marginEnd="6dp"
+            android:orientation="vertical"
+            android:gravity="center_horizontal"
+            android:background="@drawable/bg_notif_chip"
+            android:padding="8dp">
+
+            <ImageView
+                android:layout_width="15dp"
+                android:layout_height="15dp"
+                android:src="@drawable/ic_stat_speed"
+                android:tint="@color/dt_accent"
+                android:importantForAccessibility="no" />
 
             <TextView
                 android:id="@+id/n_speed_val"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:paddingTop="2dp"
                 android:textColor="?android:attr/textColorPrimary"
                 android:textStyle="bold"
                 android:textSize="22sp" />
@@ -51,12 +65,24 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:orientation="vertical">
+            android:layout_marginEnd="6dp"
+            android:orientation="vertical"
+            android:gravity="center_horizontal"
+            android:background="@drawable/bg_notif_chip"
+            android:padding="8dp">
+
+            <ImageView
+                android:layout_width="15dp"
+                android:layout_height="15dp"
+                android:src="@drawable/ic_stat_distance"
+                android:tint="@color/dt_accent"
+                android:importantForAccessibility="no" />
 
             <TextView
                 android:id="@+id/n_miles_val"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:paddingTop="2dp"
                 android:textColor="?android:attr/textColorPrimary"
                 android:textStyle="bold"
                 android:textSize="22sp" />
@@ -73,12 +99,23 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:orientation="vertical">
+            android:orientation="vertical"
+            android:gravity="center_horizontal"
+            android:background="@drawable/bg_notif_chip"
+            android:padding="8dp">
+
+            <ImageView
+                android:layout_width="15dp"
+                android:layout_height="15dp"
+                android:src="@drawable/ic_stat_time"
+                android:tint="@color/dt_accent"
+                android:importantForAccessibility="no" />
 
             <Chronometer
                 android:id="@+id/n_chrono_big"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:paddingTop="2dp"
                 android:singleLine="true"
                 android:textColor="?android:attr/textColorPrimary"
                 android:textStyle="bold"
@@ -93,13 +130,30 @@
         </LinearLayout>
     </LinearLayout>
 
-    <TextView
-        android:id="@+id/n_since"
+    <LinearLayout
+        android:id="@+id/n_since_row"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:singleLine="true"
-        android:ellipsize="end"
-        android:textColor="?android:attr/textColorSecondary"
-        android:textSize="13sp"
-        android:paddingTop="6dp" />
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingTop="6dp">
+
+        <ImageView
+            android:layout_width="13dp"
+            android:layout_height="13dp"
+            android:layout_marginEnd="4dp"
+            android:src="@drawable/ic_stat_marker"
+            android:tint="@color/dt_accent"
+            android:importantForAccessibility="no" />
+
+        <TextView
+            android:id="@+id/n_since"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:singleLine="true"
+            android:ellipsize="end"
+            android:textColor="?android:attr/textColorSecondary"
+            android:textSize="13sp" />
+    </LinearLayout>
 </LinearLayout>
