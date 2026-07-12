@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The drivetime D as a status-bar small icon: the launcher-monochrome D silhouette
+     (road dropped — it turns to mud at 24dp), rescaled from that art's 108 viewport
+     into the 24dp small-icon slot. White is the alpha mask; the system tints it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <group
+        android:scaleX="0.5"
+        android:scaleY="0.5"
+        android:translateX="-15"
+        android:translateY="-15">
+        <path
+            android:fillColor="#FFFFFF"
+            android:fillType="evenOdd"
+            android:pathData="M38,34 L50,34 C62,34 70,42 70,54 C70,66 62,74 50,74 L38,74 Z M45,41 L50,41 C59,41 63,46 63,54 C63,62 59,67 50,67 L45,67 Z" />
+    </group>
+</vector>

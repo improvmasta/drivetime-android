@@ -690,12 +690,6 @@ class LocationService : Service() {
         DriveDetector.Tier.OFF -> "Off"
     }
 
-    /** Car glyph while a drive is in progress, crosshair otherwise — the status bar says
-     *  which state we're in by its shape, without the shade having to be pulled down. */
-    private fun tierIcon(): Int =
-        if (currentTier == DriveDetector.Tier.DRIVING) R.drawable.ic_notif_driving
-        else R.drawable.ic_notif_tracking
-
     private fun driving(): Boolean = currentTier == DriveDetector.Tier.DRIVING
 
     /**
@@ -750,7 +744,7 @@ class LocationService : Service() {
             this, 0, Intent(this, WebViewActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val n = Notification.Builder(this, ALERT_CHANNEL)
-            .setSmallIcon(R.drawable.ic_notif_driving)
+            .setSmallIcon(R.drawable.ic_notif_app)
             .setColor(getColor(R.color.status_red))
             .setContentTitle("Check engine: $code")
             .setContentText("Your vehicle reported a diagnostic trouble code.")
@@ -790,8 +784,10 @@ class LocationService : Service() {
             this, 0, Intent(this, WebViewActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        // The brand D is the status-bar icon in every state — the app icon is what the
+        // user looks for in the shade; the tier lives in the notification text/tiles.
         val b = Notification.Builder(this, activeChannel())
-            .setSmallIcon(tierIcon())
+            .setSmallIcon(R.drawable.ic_notif_app)
             .setOngoing(true)
             .setContentIntent(open)
             // A per-fix redraw (~1 Hz while driving) must never buzz or re-alert.

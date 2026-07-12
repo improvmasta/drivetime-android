@@ -59,7 +59,7 @@ class AlertWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params) 
 
     private fun notify(id: Int, title: String, body: String) {
         val n = NotificationCompat.Builder(applicationContext, CHANNEL)
-            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setSmallIcon(R.drawable.ic_notif_app)
             .setContentTitle(title).setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setAutoCancel(true).build()

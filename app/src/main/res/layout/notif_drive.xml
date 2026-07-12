@@ -6,6 +6,7 @@
      ImageView / Chronometer); base text uses framework notification attrs so contrast stays
      correct in both light and dark shades, accents come from the day/night dt_ palette. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
@@ -60,6 +61,7 @@
             android:layout_marginEnd="4dp"
             android:src="@drawable/ic_stat_time"
             android:tint="@color/dt_accent"
+            tools:ignore="UseAppTint"
             android:importantForAccessibility="no" />
 
         <Chronometer

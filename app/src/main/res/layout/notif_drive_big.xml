@@ -5,6 +5,7 @@
      "since #N" / "Marked #N") below. RemoteViews-legal widgets only; base text uses framework
      notification attrs, accents come from the day/night dt_ palette. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
@@ -42,6 +43,7 @@
                 android:layout_height="15dp"
                 android:src="@drawable/ic_stat_speed"
                 android:tint="@color/dt_accent"
+                tools:ignore="UseAppTint"
                 android:importantForAccessibility="no" />
 
             <TextView
@@ -76,6 +78,7 @@
                 android:layout_height="15dp"
                 android:src="@drawable/ic_stat_distance"
                 android:tint="@color/dt_accent"
+                tools:ignore="UseAppTint"
                 android:importantForAccessibility="no" />
 
             <TextView
@@ -109,6 +112,7 @@
                 android:layout_height="15dp"
                 android:src="@drawable/ic_stat_time"
                 android:tint="@color/dt_accent"
+                tools:ignore="UseAppTint"
                 android:importantForAccessibility="no" />
 
             <Chronometer
@@ -144,6 +148,7 @@
             android:layout_marginEnd="4dp"
             android:src="@drawable/ic_stat_marker"
             android:tint="@color/dt_accent"
+                tools:ignore="UseAppTint"
             android:importantForAccessibility="no" />
 
         <TextView
