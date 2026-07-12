@@ -282,11 +282,17 @@ class Settings(context: Context) {
         get() = prefs.getString("backup_folder_name", "") ?: ""
         set(v) = prefs.edit().putString("backup_folder_name", v).apply()
 
-    /** OAuth client ID from the user's own Google Cloud project (BACKUP.md → Drive setup).
-     *  The app ships no Google credential of its own — backups go phone → user's Drive. */
+    /** A user-pasted OAuth client ID — the override for forks built with a different
+     *  signing key (BACKUP.md → Drive setup). Normal installs use the built-in
+     *  [DEFAULT_DRIVE_CLIENT_ID] and never see this. */
     var backupDriveClientId: String
         get() = prefs.getString("backup_drive_client_id", "") ?: ""
         set(v) = prefs.edit().putString("backup_drive_client_id", v.trim()).apply()
+
+    /** The effective Drive OAuth client: the pasted override, else the built-in one.
+     *  Blank means Drive backups need setup (the Settings card explains). */
+    val driveClientId: String
+        get() = backupDriveClientId.ifBlank { DEFAULT_DRIVE_CLIENT_ID }
 
     /** Long-lived Drive credential; non-blank = connected. */
     var backupDriveRefreshToken: String
@@ -348,6 +354,15 @@ class Settings(context: Context) {
 
     companion object {
         val BACKUP_SCHEDULES = setOf("off", "daily", "weekly", "drive")
+
+        /** Built-in Google Drive OAuth client (BACKUP.md). A client ID is a public app
+         *  identifier, not a secret — safe to commit. It's an Android-type client keyed to
+         *  this package + the committed signing key's SHA-1, so ONE id is valid for every
+         *  install and a tester's whole Drive setup is Connect → pick account. Blank until
+         *  the client is minted; a fork with its own signing key pastes its own id instead
+         *  (backupDriveClientId override). */
+        const val DEFAULT_DRIVE_CLIENT_ID =
+            "722912277751-82ls1e1guemrjkc3kbjq0pjlrnkhjgvu.apps.googleusercontent.com"
 
         const val MODE_AUTO = "auto"
         const val MODE_DRIVING = "driving"

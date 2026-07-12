@@ -535,7 +535,7 @@ class WebViewActivity : AppCompatActivity() {
     /** Kick the Drive OAuth consent flow in the system browser (redirect returns via
      *  [OAuthRedirectActivity]). */
     private fun startDriveAuth() {
-        val cid = settings.backupDriveClientId
+        val cid = settings.driveClientId
         if (cid.isBlank()) { snack("Paste your OAuth client ID first (Google Drive setup)"); return }
         val url = DriveAuth.beginAuthUrl(cid)
         runCatching {
@@ -856,7 +856,8 @@ class WebViewActivity : AppCompatActivity() {
                 .put("keep", settings.backupKeep)
                 .put("folderSet", settings.backupFolderUri.isNotBlank())
                 .put("folderName", settings.backupFolderName)
-                .put("driveClientIdSet", settings.backupDriveClientId.isNotBlank())
+                .put("driveClientIdSet", settings.driveClientId.isNotBlank())
+                .put("driveDefaultClient", Settings.DEFAULT_DRIVE_CLIENT_ID.isNotBlank())
                 .put("driveConnected", settings.backupDriveRefreshToken.isNotBlank())
                 .put("driveAccount", settings.backupDriveAccount)
                 .put("lastBackupAt", settings.backupLastAt)

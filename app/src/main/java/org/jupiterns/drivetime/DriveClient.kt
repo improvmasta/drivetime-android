@@ -58,7 +58,7 @@ object DriveAuth {
         val body = FormBody.Builder()
             .add("grant_type", "authorization_code")
             .add("code", code)
-            .add("client_id", settings.backupDriveClientId)
+            .add("client_id", settings.driveClientId)
             .add("redirect_uri", REDIRECT)
             .add("code_verifier", verifier)
             .build()
@@ -114,7 +114,7 @@ class DriveClient(private val settings: Settings) {
         val body = FormBody.Builder()
             .add("grant_type", "refresh_token")
             .add("refresh_token", refresh)
-            .add("client_id", settings.backupDriveClientId)
+            .add("client_id", settings.driveClientId)
             .build()
         val req = Request.Builder().url("https://oauth2.googleapis.com/token").post(body).build()
         return Http.client.newCall(req).execute().use { rsp ->
