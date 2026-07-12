@@ -139,6 +139,23 @@ class Settings(context: Context) {
         get() = prefs.getString("car_bt_name", "") ?: ""
         set(v) = prefs.edit().putString("car_bt_name", v).apply()
 
+    /** Multi-vehicle (Phase 4): the FULL set of car Bluetooth MACs that mean "driving" — one
+     *  per registered vehicle. Stored newline-separated (a MAC never contains a newline). The
+     *  legacy single [carBtMac] is folded in on read so an existing install keeps working and
+     *  never loses its car; the SPA's vehicles registry is the authority that writes this set. */
+    var carBtMacs: Set<String>
+        get() {
+            val raw = prefs.getString("car_bt_macs", "") ?: ""
+            val set = raw.split("\n").map { it.trim().uppercase() }.filter { it.isNotEmpty() }.toMutableSet()
+            val legacy = carBtMac.trim().uppercase()
+            if (legacy.isNotEmpty()) set.add(legacy)
+            return set
+        }
+        set(v) {
+            val cleaned = v.map { it.trim().uppercase() }.filter { it.isNotEmpty() }
+            prefs.edit().putString("car_bt_macs", cleaned.joinToString("\n")).apply()
+        }
+
     /** End a trip after this many minutes stationary, as a backstop for a missed
      *  activity-recognition "exited vehicle". 0 disables; only used with autoTrip. */
     var stationaryStopMin: Int

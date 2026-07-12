@@ -689,6 +689,13 @@ class WebViewActivity : AppCompatActivity() {
         @JavascriptInterface
         fun pullMarkers(sinceTs: Double): String = WebMarkerBuffer.pullSince(this@WebViewActivity, sinceTs)
 
+        /** JSON array of vehicle events (car BT connected, or OBD read a VIN) at or after
+         *  [sinceTs] (Phase 4). The SPA resolves each to the drive spanning its ts and to a
+         *  registered vehicle by key, then writes the trip_vehicle overlay — idempotent, so a
+         *  cursor overlap re-delivering an event is harmless. */
+        @JavascriptInterface
+        fun pullVehicles(sinceTs: Double): String = WebVehicleBuffer.pullSince(this@WebViewActivity, sinceTs)
+
         /**
          * Stamp a marker from the SPA's own Mark button, through the SAME service path the
          * notification and Android Auto use. One writer: otherwise an in-app mark would land
@@ -876,8 +883,31 @@ class WebViewActivity : AppCompatActivity() {
                     "obd" -> btPicker.pick("Select OBD dongle",
                         onPick = { mac, name -> settings.obdMac = mac; settings.obdName = name },
                         onClear = { settings.obdMac = ""; settings.obdName = "" })
+                    // Multi-vehicle (Phase 4): the SPA's Vehicles editor owns the registry, so a
+                    // pick here just hands the chosen MAC + name back to the open editor via a
+                    // JS callback; there is nothing native to clear.
+                    "vehicle" -> btPicker.pick("Select vehicle Bluetooth",
+                        onPick = { mac, name ->
+                            val js = "window.__dtVehicleBtPicked && window.__dtVehicleBtPicked(" +
+                                JSONObject.quote(mac) + "," + JSONObject.quote(name) + ")"
+                            ui.post { b.webview.evaluateJavascript(js, null) }
+                        },
+                        onClear = {})
                 }
             }
+        }
+
+        /** The SPA's vehicles registry pushes the UNION of every vehicle's Bluetooth MACs here
+         *  (Phase 4), so the logger's [btReceiver] treats any registered car's BT as a driving
+         *  signal — not just the legacy single [Settings.carBtMac], which the getter still folds
+         *  in. [json] is a JSON array of MAC strings; a parse failure leaves the set unchanged. */
+        @JavascriptInterface
+        fun setVehicleBtMacs(json: String) {
+            runCatching {
+                val arr = org.json.JSONArray(json)
+                val macs = (0 until arr.length()).map { arr.getString(it) }.toSet()
+                settings.carBtMacs = macs
+            }.onFailure { EventLog.warn("setVehicleBtMacs failed: ${it.message}") }
         }
 
         /** Launch the QR pairing scanner (Sync tab). */

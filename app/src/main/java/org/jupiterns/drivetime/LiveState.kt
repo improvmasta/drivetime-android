@@ -44,10 +44,16 @@ object LiveState {
     @Volatile var markerCount = 0
     @Volatile var lastMarkerTs: Long? = null
 
+    /** Which vehicle the current drive is on (Phase 4): the connected car's Bluetooth MAC,
+     *  upgraded to the VIN once OBD reads it. Null when unknown. The SPA resolves this key to a
+     *  registered vehicle; the durable association is the WebVehicleBuffer event stream, this is
+     *  just the live hint. */
+    @Volatile var vehicleKey: String? = null
+
     fun clear() {
         tier = null; driveReason = null; onsetState = null
         speedMph = null; obdConnected = false; rpm = null; throttle = null; coolantC = null; voltage = null
         driveStartedAt = 0L; lat = null; lon = null
-        driveMeters = 0.0; markerCount = 0; lastMarkerTs = null
+        driveMeters = 0.0; markerCount = 0; lastMarkerTs = null; vehicleKey = null
     }
 }

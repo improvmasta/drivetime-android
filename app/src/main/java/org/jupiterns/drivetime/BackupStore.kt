@@ -138,6 +138,10 @@ object BackupStore {
             zip.putNextEntry(ZipEntry("pending_markers.jsonl"))
             WebMarkerBuffer.copyTo(context, zip)
             zip.closeEntry()
+
+            zip.putNextEntry(ZipEntry("pending_vehicles.jsonl"))
+            WebVehicleBuffer.copyTo(context, zip)
+            zip.closeEntry()
         }
     }
 
@@ -192,6 +196,7 @@ object BackupStore {
                     "app.json" -> { stage(context, zip); staged = true }
                     "pending_fixes.jsonl" -> WebFixBuffer.replaceAll(context, zip)
                     "pending_markers.jsonl" -> WebMarkerBuffer.replaceAll(context, zip)
+                    "pending_vehicles.jsonl" -> WebVehicleBuffer.replaceAll(context, zip)
                 }
             }
         }

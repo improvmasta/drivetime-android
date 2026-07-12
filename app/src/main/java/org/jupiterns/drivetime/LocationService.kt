@@ -131,11 +131,25 @@ class LocationService : Service() {
     private val btReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context, intent: Intent) {
             val dev = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE) ?: return
-            val car = settings.carBtMac
-            if (car.isBlank() || dev.address != car) return
-            detector.carConnected = intent.action == BluetoothDevice.ACTION_ACL_CONNECTED
+            // Multi-vehicle (Phase 4): any registered car MAC means "driving". Match the whole
+            // set, not just the legacy single MAC, and record WHICH car connected.
+            val mac = dev.address?.uppercase() ?: return
+            if (mac !in settings.carBtMacs) return
+            val connected = intent.action == BluetoothDevice.ACTION_ACL_CONNECTED
+            detector.carConnected = connected
+            if (connected) stampVehicle(mac)  // the drive's vehicle key (upgraded to VIN by OBD)
             reevaluate()
         }
+    }
+
+    /** Record which vehicle the current drive is on and append a durable event the SPA drains
+     *  (Phase 4). Only stamps when the key actually changes, so a reconnect flutter doesn't
+     *  spam the buffer. [key] is a BT MAC or, once OBD reads it, a VIN. */
+    private fun stampVehicle(key: String) {
+        if (key.isBlank() || key == LiveState.vehicleKey) return
+        LiveState.vehicleKey = key
+        val nowSec = System.currentTimeMillis() / 1000
+        runCatching { WebVehicleBuffer.append(this, nowSec, key) }
     }
 
     override fun onCreate() {
@@ -478,6 +492,10 @@ class LocationService : Service() {
                     detector.obdConnected = true
                     LiveState.obdConnected = true
                     EventLog.info("OBD connected")
+                    // Multi-vehicle (Phase 4): a read VIN is the strongest vehicle identity —
+                    // upgrade the drive's key from the BT MAC to the VIN so the SPA can register
+                    // a new car automatically and stamp the drive with it.
+                    client.vin?.takeIf { it.isNotBlank() }?.let { stampVehicle(it) }
                     runCatching { client.diagnostic().forEach { EventLog.info("OBD $it") } }
                     main.post { reevaluate(); StateBroadcaster.emit(this@LocationService, "obd") }
                     var ticks = 0

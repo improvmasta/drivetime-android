@@ -47,7 +47,9 @@ class Elm327Client {
     /** mode-01 PIDs this car answers (2-hex, e.g. "5E"), from the 0100/20/40/60 support
      *  bitmasks. Empty = discovery failed → [supports] treats everything as supported. */
     private val supported = linkedSetOf<String>()
-    private var vin: String? = null
+    // Public getter (the service reads it to stamp which vehicle a drive is on), private setter.
+    var vin: String? = null
+        private set
     // slow-mover cadence: temps/voltages/levels barely change, so we poll the PIDs
     // flagged slow every SLOW_EVERY samples and reuse the cached reading between.
     private var slowTick = 0
