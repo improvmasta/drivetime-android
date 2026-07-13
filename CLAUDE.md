@@ -127,6 +127,14 @@ cosmetic:
 | In-app updater | on (`BuildConfig.UPDATER_ENABLED=true`) | **compiled out** |
 | `REQUEST_INSTALL_PACKAGES` | declared (`src/github/AndroidManifest.xml`) | **absent** |
 | Updates reach users via | GitHub Releases → `Updater` | Google Play |
+| CI on push to `main` | publishes the GitHub release | uploads the AAB to **internal testing** |
+
+**A push to `main` now reaches Play testers, not just sideloaders.** CI uploads the AAB to the
+**internal** track automatically (`PLAY_SERVICE_ACCOUNT_JSON` secret; the step is skipped, not
+failed, when it's absent, and never runs on a pull request — this repo is public and a fork
+must not reach the credential). Play refuses a versionCode it has already accepted, so the
+monotonic CI run number behind `versionCode` is load-bearing, not a convenience. To stop
+shipping to testers on every commit, change the track or gate the step on `workflow_dispatch`.
 
 The updater is removed from Play builds because Play's **Device and Network Abuse** policy
 forbids an app updating itself by any route other than Play, and `REQUEST_INSTALL_PACKAGES`

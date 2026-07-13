@@ -87,6 +87,43 @@ jobs:
           gh release create "v0.1.${{ github.run_number }}" drivetime.apk version.json \
             --title "0.1.${{ github.run_number }}" --notes "$notes"
 
+      # --- Play channel: push the AAB straight to the internal testing track ---
+      # Gated on push-to-main exactly like the release above, and NEVER on pull_request: this
+      # repo is public, and a fork's PR must not get within reach of the publisher credential.
+      # Skipped (not failed) when the secret is absent, so a fork — or this repo before the
+      # secret was set — still builds green.
+      #
+      # Play rejects a versionCode it has already seen, so the monotonic CI run number that
+      # feeds versionCode (app/build.gradle.kts) is load-bearing here, not a convenience.
+      # The `secrets` context is NOT available in a step-level `if`, so the presence of the
+      # credential is resolved here into a plain output the next step can branch on. It also
+      # writes the release note Play shows testers (the commit subject, capped at Play's 500).
+      - name: Stage Play release
+        id: play
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          PLAY_SA: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          mkdir -p distribution/whatsnew
+          git log -1 --pretty=%s | cut -c1-500 > distribution/whatsnew/whatsnew-en-US
+          if [ -n "$PLAY_SA" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::PLAY_SERVICE_ACCOUNT_JSON is not set — skipping the Play upload."
+          fi
+
+      - name: Upload to Play (internal testing)
+        if: steps.play.outputs.ready == 'true'
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: org.jupiterns.drivetime
+          releaseFiles: app/build/outputs/bundle/playRelease/*.aab
+          track: internal
+          status: completed
+          whatsNewDirectory: distribution/whatsnew
+
       - name: Upload lint report
         if: always()
         uses: actions/upload-artifact@v4
