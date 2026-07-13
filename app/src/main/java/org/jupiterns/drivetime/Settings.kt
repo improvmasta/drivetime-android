@@ -456,13 +456,19 @@ class Settings(context: Context) {
         val BACKUP_SCHEDULES = setOf("off", "daily", "weekly", "drive")
 
         /** Built-in Google Drive OAuth client (BACKUP.md). A client ID is a public app
-         *  identifier, not a secret — safe to commit. It's an Android-type client keyed to
-         *  this package + the committed signing key's SHA-1, so ONE id is valid for every
-         *  install and a tester's whole Drive setup is Connect → pick account. Blank until
-         *  the client is minted; a fork with its own signing key pastes its own id instead
-         *  (backupDriveClientId override). */
-        const val DEFAULT_DRIVE_CLIENT_ID =
-            "722912277751-82ls1e1guemrjkc3kbjq0pjlrnkhjgvu.apps.googleusercontent.com"
+         *  identifier, not a secret — safe to commit — so a tester's whole Drive setup is
+         *  Connect → pick account.
+         *
+         *  **Per channel, not per app.** A Google Android client is bound to package +
+         *  signing-cert SHA-1, and the two channels have different signatures: sideload is
+         *  signed with the committed key, while Play re-signs with its own app signing key.
+         *  One id therefore cannot serve both — a Play install presenting the sideload
+         *  client is refused, and Drive backup dies with nothing the user can see. The id
+         *  comes from the flavor (app/build.gradle.kts → driveClient), which also derives
+         *  the manifest's redirect scheme from it so the two can't drift.
+         *
+         *  A fork with its own signing key still pastes its own id (backupDriveClientId). */
+        val DEFAULT_DRIVE_CLIENT_ID: String = BuildConfig.DRIVE_CLIENT_ID
 
         const val MODE_AUTO = "auto"
         const val MODE_DRIVING = "driving"

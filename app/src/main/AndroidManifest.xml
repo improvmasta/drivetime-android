@@ -77,9 +77,11 @@
 
         <!-- Google Drive OAuth redirect (BACKUP.md). Google requires the custom scheme to
              be the REVERSED client id (a package-name scheme is rejected with
-             redirect_uri_mismatch), so this filter is client-specific: it matches
-             DriveAuth.redirectFor(Settings.DEFAULT_DRIVE_CLIENT_ID). A fork shipping its
-             own client id must update the scheme below to its own reversed id. -->
+             redirect_uri_mismatch), so this filter is client-SPECIFIC — and each channel has
+             its own client, because a Google Android client is bound to a signing SHA-1 and
+             Play re-signs with its own key. ${driveRedirectScheme} is therefore a per-flavor
+             placeholder derived from that flavor's client id (build.gradle.kts → driveClient);
+             the two are set together so the scheme can never drift from the id it must match. -->
         <activity
             android:name=".OAuthRedirectActivity"
             android:exported="true"
@@ -95,7 +97,7 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="com.googleusercontent.apps.722912277751-82ls1e1guemrjkc3kbjq0pjlrnkhjgvu" android:path="/oauth2redirect" />
+                <data android:scheme="${driveRedirectScheme}" android:path="/oauth2redirect" />
             </intent-filter>
         </activity>
 

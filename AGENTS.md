@@ -125,8 +125,11 @@ all) and has been public, so treat it as burned: it is fine as the sideload key 
 Consequence: a Play install and a sideload install have **different signatures** and cannot
 upgrade into each other — moving a phone between channels is uninstall → reinstall, which
 **wipes every drive on the device**. Back up (Settings → Sync & Backup) first, always. Also
-register the Play app-signing SHA-1 on the Google Drive OAuth client (`drivetime/BACKUP.md`)
-or Drive backup silently dies for Play installs.
+the Drive OAuth client is **per channel**: it is bound to a signing SHA-1, so `play` and
+`github` each carry their own client id, set with the manifest redirect scheme it must match by
+`driveClient(...)` in `app/build.gradle.kts` (`drivetime/BACKUP.md`). Registering a second
+client in the Cloud console without wiring its id into the flavor changes nothing — Drive
+backup still silently dies for Play installs.
 
 We ship targetSdk 35 with `windowOptOutEdgeToEdgeEnforcement`; **Play requires 36 from
 2026-08-31**, and at 36 that opt-out is ignored — the roots need real inset padding first.

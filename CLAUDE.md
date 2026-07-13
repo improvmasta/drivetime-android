@@ -152,10 +152,16 @@ option. So:
    every drive on the device. Anyone making that jump — you included — must run
    **Settings → Sync & Backup → Back up now** first and restore afterward. There is no
    in-place path, and finding this out after inviting 12 people is the expensive way.
-3. **Re-register Drive OAuth.** The Google Drive OAuth client is bound to a signing key's
-   SHA-1 (`drivetime/BACKUP.md`). Play's app signing key has a *different* SHA-1 (Play
-   Console shows it) — add an Android OAuth client for it, keeping the existing one for
-   sideload builds, or Drive backup silently dies for every Play install.
+3. **Drive OAuth is per channel — two clients, not one.** A Google Android client is bound to
+   a signing-cert SHA-1 (`drivetime/BACKUP.md`), and Play's app signing key has a different
+   one, so a Play install presenting the sideload client is refused and Drive backup dies with
+   no user-visible error. Minting a second client in the Cloud console is **not enough on its
+   own**: a new client means a new id, and Google's installed-app redirect is the *reversed
+   client id*, so the manifest's `OAuthRedirectActivity` scheme has to change with it. Both
+   halves are therefore set from one place — `driveClient(...)` in `app/build.gradle.kts` sets
+   `BuildConfig.DRIVE_CLIENT_ID` **and** derives the `${driveRedirectScheme}` manifest
+   placeholder from it. Change a client id there and the scheme follows; hardcode either one
+   and the callback silently never comes home.
 
 Play also needs, before it will accept a release: a **privacy policy URL** (mandatory — the
 app handles location), a completed **Data safety** form, and a **background-location

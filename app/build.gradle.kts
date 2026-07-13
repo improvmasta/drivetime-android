@@ -3,6 +3,19 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+/**
+ * Bind a flavor to its Google Drive OAuth client (BACKUP.md). Sets BOTH halves from the one
+ * id, because they must never drift: the app authenticates as DRIVE_CLIENT_ID, and Google's
+ * installed-app redirect is that same id REVERSED (DriveClient.redirectFor) — which the
+ * OAuthRedirectActivity intent-filter has to match, or the callback never comes home and the
+ * consent screen dead-ends in the browser.
+ */
+fun com.android.build.api.dsl.ApplicationProductFlavor.driveClient(clientId: String) {
+    buildConfigField("String", "DRIVE_CLIENT_ID", "\"$clientId\"")
+    manifestPlaceholders["driveRedirectScheme"] =
+        "com.googleusercontent.apps." + clientId.removeSuffix(".apps.googleusercontent.com")
+}
+
 android {
     namespace = "org.jupiterns.drivetime"
     compileSdk = 36
@@ -55,15 +68,26 @@ android {
     // with its own app signing key, so a Play install and a sideload install have DIFFERENT
     // signatures and cannot upgrade into each other: switching channels means uninstall →
     // reinstall, which wipes on-device data. Back up first (CLAUDE.md → Distribution).
+    //
+    // That signature split also forks the Drive OAuth client (BACKUP.md): a Google Android
+    // client is bound to package + signing-cert SHA-1, and Play's app signing key has a
+    // different SHA-1 than our committed one — so a Play install authenticating as the
+    // sideload client is rejected, and Drive backup dies with no user-visible error. Each
+    // channel therefore carries its OWN client id. The redirect scheme must move with it:
+    // Google's installed-app redirect is the REVERSED client id (DriveClient.redirectFor),
+    // so the manifest's OAuthRedirectActivity scheme is a per-flavor placeholder. Change a
+    // client id here and its scheme changes with it, automatically.
     flavorDimensions += "channel"
     productFlavors {
         create("github") {
             dimension = "channel"
             buildConfigField("boolean", "UPDATER_ENABLED", "true")
+            driveClient("722912277751-82ls1e1guemrjkc3kbjq0pjlrnkhjgvu.apps.googleusercontent.com")
         }
         create("play") {
             dimension = "channel"
             buildConfigField("boolean", "UPDATER_ENABLED", "false")
+            driveClient("722912277751-7g4l57drsgijokbd9itfdn8o9qo5t4co.apps.googleusercontent.com")
         }
     }
 
