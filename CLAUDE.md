@@ -194,10 +194,17 @@ full review) hands the app to testers immediately, while the **closed** track ru
 in the background. Revisit an organization account before monetizing — a personal account
 publishes your full legal address once you charge money. See `PLAY.md`.
 
-## No local compiler
+## No local compiler — and never try to render the app yourself
 
-There is **no JDK or Android SDK on the dev host** — CI is the only Kotlin compiler, so a
-syntax error costs a full CI round-trip. Read Kotlin edits carefully before pushing; two that
+There is **no JDK or Android SDK on the dev host**, no emulator, and no device here. Do not
+try to build, launch, screenshot, or otherwise *look at* the app — not with an emulator, not
+by serving `app/src/main/assets/web` in a headless browser. The UI only exists once it's a
+real app on a real phone (the WebView's `DrivetimeNative` bridge is what makes the native
+Settings/HUD render at all), so an attempt at it costs time and produces a picture of
+something the user never sees. **Lindsay looks at the phone; you verify by building, testing,
+and reading.** Say what changed and let him look.
+
+CI is the only Kotlin compiler, so a syntax error costs a full CI round-trip. Read Kotlin edits carefully before pushing; two that
 have bitten us: `*/` inside a comment closes the block early, and a bare `return` in a function
 declared to return `Boolean` won't compile.
 
