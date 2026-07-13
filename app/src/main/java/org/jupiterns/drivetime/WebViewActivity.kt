@@ -825,8 +825,15 @@ class WebViewActivity : AppCompatActivity() {
                 // Play builds have no self-updater at all (policy), so the SPA hides the
                 // whole "check for updates" affordance rather than offering a dead button.
                 .put("updates_supported", BuildConfig.UPDATER_ENABLED)
+                // The legacy standalone car/OBD devices. Nothing in the SPA *configures* these
+                // any more — the vehicle that owns the device does — but they're reported so the
+                // registry can adopt a pre-registry install's devices into a real vehicle
+                // exactly once (vehicles.js adoptLegacyDevices), instead of stranding them in a
+                // settings screen that no longer shows them.
                 .put("carBtName", settings.carBtName)
+                .put("carBtMac", settings.carBtMac)
                 .put("obdName", settings.obdName)
+                .put("obdMac", settings.obdMac)
                 .put("versionName", BuildConfig.VERSION_NAME)
                 .put("versionCode", BuildConfig.VERSION_CODE)
                 .toString()
@@ -1016,7 +1023,17 @@ class WebViewActivity : AppCompatActivity() {
             return r
         }
 
-        /** Open the Bluetooth device picker for "car" or "obd" (Devices tab). */
+        /**
+         * Open the Bluetooth device picker.
+         *
+         * The vehicle registry owns every car device now, so the two live kinds — "vehicle" (a
+         * car's stereo/head unit) and "vehicle-obd" (that car's OBD dongle) — write nothing
+         * natively: they hand the chosen MAC + name back to whichever editor is open (Settings'
+         * vehicle sheet, or the first-run wizard's car step) through a JS callback, and the SPA
+         * saves it on the vehicle. The legacy "car"/"obd" kinds still set the old standalone
+         * settings; nothing in the SPA calls them any more, and they go when the fallback in
+         * [Settings.obdTarget] does.
+         */
         @JavascriptInterface
         fun pickBluetooth(kind: String) {
             ui.post {
@@ -1027,18 +1044,21 @@ class WebViewActivity : AppCompatActivity() {
                     "obd" -> btPicker.pick("Select OBD dongle",
                         onPick = { mac, name -> settings.obdMac = mac; settings.obdName = name },
                         onClear = { settings.obdMac = ""; settings.obdName = "" })
-                    // Multi-vehicle (Phase 4): the SPA's Vehicles editor owns the registry, so a
-                    // pick here just hands the chosen MAC + name back to the open editor via a
-                    // JS callback; there is nothing native to clear.
-                    "vehicle" -> btPicker.pick("Select vehicle Bluetooth",
-                        onPick = { mac, name ->
-                            val js = "window.__dtVehicleBtPicked && window.__dtVehicleBtPicked(" +
-                                JSONObject.quote(mac) + "," + JSONObject.quote(name) + ")"
-                            ui.post { b.webview.evaluateJavascript(js, null) }
-                        },
+                    "vehicle" -> btPicker.pick("Select car Bluetooth",
+                        onPick = { mac, name -> pickedBack("__dtVehicleBtPicked", mac, name) },
+                        onClear = {})
+                    "vehicle-obd" -> btPicker.pick("Select OBD adapter",
+                        onPick = { mac, name -> pickedBack("__dtVehicleObdPicked", mac, name) },
                         onClear = {})
                 }
             }
+        }
+
+        /** Hand a picked device back to the SPA editor waiting on it. */
+        private fun pickedBack(fn: String, mac: String, name: String) {
+            val js = "window.$fn && window.$fn(" +
+                JSONObject.quote(mac) + "," + JSONObject.quote(name) + ")"
+            ui.post { b.webview.evaluateJavascript(js, null) }
         }
 
         /** The SPA's vehicles registry pushes the UNION of every vehicle's Bluetooth MACs here
@@ -1052,6 +1072,27 @@ class WebViewActivity : AppCompatActivity() {
                 val macs = (0 until arr.length()).map { arr.getString(it) }.toSet()
                 settings.carBtMacs = macs
             }.onFailure { EventLog.warn("setVehicleBtMacs failed: ${it.message}") }
+        }
+
+        /** The SPA's vehicles registry pushes the cars here — each with its OBD adapter (blank if
+         *  it has none) and the car Bluetooth that identifies it — so the OBD loop can dial the
+         *  adapter of the car you are actually in instead of assuming a one-car household
+         *  ([Settings.obdTarget]). [json] is `[{obd, name, bt:[mac,…]}, …]`, one entry per
+         *  vehicle; adapter-less cars are included on purpose, because knowing a car has no
+         *  dongle is what stops the logger probing for one. An empty array clears the bindings,
+         *  dropping back to the legacy [Settings.obdMac]. A parse failure changes nothing. */
+        @JavascriptInterface
+        fun setVehicleObd(json: String) {
+            runCatching {
+                val arr = org.json.JSONArray(json)
+                settings.vehicleObd = (0 until arr.length()).map { i ->
+                    val o = arr.getJSONObject(i)
+                    val bts = o.optJSONArray("bt")
+                    val list: List<String> = if (bts == null) emptyList()
+                        else (0 until bts.length()).map { bts.getString(it) }
+                    Settings.ObdBinding(o.optString("obd").trim(), o.optString("name"), list)
+                }
+            }.onFailure { EventLog.warn("setVehicleObd failed: ${it.message}") }
         }
 
         /** Hold the screen awake while the live-drive HUD asks for it (its "Keep screen on"

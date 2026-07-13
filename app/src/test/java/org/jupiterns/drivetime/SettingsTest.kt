@@ -107,4 +107,68 @@ class SettingsTest {
             .edit().putString("server_url", "drivetime.example.org").commit()
         assertEquals("https://drivetime.example.org", Settings(ctx).serverUrl)
     }
+
+    // ---- per-vehicle OBD adapters (multi-car) --------------------------------------------
+    //
+    // The dongle is bolted into ONE car. Once there are two cars, "which adapter do I dial?"
+    // has a right answer and several wrong ones, and the wrong ones are quiet: redialling an
+    // adapter that is sitting in the other car looks exactly like a dongle that won't connect.
+
+    private val KIA_BT = "AA:BB:CC:11:22:33"
+    private val VAN_BT = "DD:EE:FF:44:55:66"
+    private val DONGLE = "11:22:33:AA:BB:CC"
+
+    @Test fun obdTarget_emptyRegistryFallsBackToTheLegacySetting() {
+        // An install that configured its dongle before vehicles existed must keep reading it.
+        s.obdMac = DONGLE
+        assertEquals(DONGLE, s.obdTarget(null))
+        assertEquals(DONGLE, s.obdTarget(KIA_BT))
+    }
+
+    @Test fun obdTarget_dialsTheAdapterOfTheCarWeAreIn() {
+        val other = "99:88:77:66:55:44"
+        s.vehicleObd = listOf(
+            Settings.ObdBinding(DONGLE, "OBDII", listOf(KIA_BT)),
+            Settings.ObdBinding(other, "Spare", listOf(VAN_BT)),
+        )
+        assertEquals("the Kia's Bluetooth ⇒ the Kia's adapter", DONGLE, s.obdTarget(KIA_BT))
+        assertEquals("the van's Bluetooth ⇒ the van's adapter", other, s.obdTarget(VAN_BT))
+    }
+
+    @Test fun obdTarget_aCarWithNoAdapterIsNotProbedAtAll() {
+        // The van is registered and has no dongle. Knowing that is the whole point of listing
+        // adapter-less cars: without it we'd redial the Kia's adapter for the entire drive.
+        s.obdMac = DONGLE // legacy value present, and must NOT resurrect itself here
+        s.vehicleObd = listOf(
+            Settings.ObdBinding(DONGLE, "OBDII", listOf(KIA_BT)),
+            Settings.ObdBinding("", "", listOf(VAN_BT)),
+        )
+        assertEquals("driving the van ⇒ nothing to dial", "", s.obdTarget(VAN_BT))
+        assertEquals("driving the Kia ⇒ its adapter", DONGLE, s.obdTarget(KIA_BT))
+    }
+
+    @Test fun obdTarget_noCarIdentifiedGuessesTheOnlyAdapter() {
+        s.vehicleObd = listOf(
+            Settings.ObdBinding("", "", listOf(VAN_BT)),
+            Settings.ObdBinding(DONGLE, "OBDII", listOf(KIA_BT)),
+        )
+        assertEquals("no BT connected ⇒ try the one adapter we know", DONGLE, s.obdTarget(null))
+    }
+
+    @Test fun obdTarget_isCaseInsensitiveOnTheMac() {
+        s.vehicleObd = listOf(Settings.ObdBinding(DONGLE, "OBDII", listOf(KIA_BT)))
+        assertEquals(DONGLE, s.obdTarget(KIA_BT.lowercase()))
+    }
+
+    @Test fun vehicleObd_roundTripsAndDropsEmptyEntries() {
+        s.vehicleObd = listOf(
+            Settings.ObdBinding(DONGLE, "OBD|II", listOf(KIA_BT, VAN_BT)),
+            Settings.ObdBinding("", "", emptyList()), // no adapter AND no Bluetooth ⇒ tells us nothing
+        )
+        val back = s.vehicleObd
+        assertEquals("the empty entry is dropped", 1, back.size)
+        assertEquals(DONGLE, back[0].mac)
+        assertEquals("a | in the name can't corrupt the record", "OBD II", back[0].name)
+        assertEquals(listOf(KIA_BT, VAN_BT), back[0].carBtMacs)
+    }
 }

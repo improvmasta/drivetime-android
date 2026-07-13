@@ -59,6 +59,12 @@ object LiveState {
      *  just the live hint. */
     @Volatile var vehicleKey: String? = null
 
+    /** The car Bluetooth MAC currently connected, or null. Distinct from [vehicleKey], which
+     *  gets UPGRADED to the VIN once OBD reads it — this one stays a MAC, because it is what
+     *  answers "which car am I in?" while we're still deciding which OBD adapter to dial
+     *  (`Settings.obdTarget`). Survives a drive's end; cleared when the car disconnects. */
+    @Volatile var carBtMac: String? = null
+
     fun clear() {
         tier = null; driveReason = null; onsetState = null
         speedMph = null; moving = false; stoppedSince = 0L

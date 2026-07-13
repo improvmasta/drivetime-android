@@ -139,6 +139,10 @@ class LocationService : Service() {
             if (mac !in settings.carBtMacs) return
             val connected = intent.action == BluetoothDevice.ACTION_ACL_CONNECTED
             detector.carConnected = connected
+            // Which car we're in — the OBD loop reads this to pick THAT car's adapter
+            // (Settings.obdTarget). Kept as a MAC even after stampVehicle upgrades the drive's
+            // vehicle key to the VIN.
+            LiveState.carBtMac = if (connected) mac else null
             if (connected) stampVehicle(mac)  // the drive's vehicle key (upgraded to VIN by OBD)
             reevaluate()
         }
@@ -146,12 +150,14 @@ class LocationService : Service() {
 
     /** Record which vehicle the current drive is on and append a durable event the SPA drains
      *  (Phase 4). Only stamps when the key actually changes, so a reconnect flutter doesn't
-     *  spam the buffer. [key] is a BT MAC or, once OBD reads it, a VIN. */
-    private fun stampVehicle(key: String) {
+     *  spam the buffer. [key] is a BT MAC or, once OBD reads it, a VIN — and on a VIN stamp
+     *  [obdMac] names the adapter that read it, so the SPA can follow a dongle moved to a
+     *  different car. */
+    private fun stampVehicle(key: String, obdMac: String? = null) {
         if (key.isBlank() || key == LiveState.vehicleKey) return
         LiveState.vehicleKey = key
         val nowSec = System.currentTimeMillis() / 1000
-        runCatching { WebVehicleBuffer.append(this, nowSec, key) }
+        runCatching { WebVehicleBuffer.append(this, nowSec, key, obdMac) }
     }
 
     override fun onCreate() {
@@ -573,7 +579,11 @@ class LocationService : Service() {
             // wedged state; after a few fast retries we force a cold reset (see below).
             var wedgedStreak = 0
             while (isActive) {
-                val mac = settings.obdMac
+                // The adapter belonging to the car we're actually in (by its connected car BT),
+                // falling back to the sole registered one — or, on an install that predates the
+                // vehicle registry, the legacy single OBD setting. Re-read every pass, so
+                // getting into the other car re-targets without a restart.
+                val mac = settings.obdTarget(LiveState.carBtMac)
                 if (mac.isBlank() || !shouldProbeObd()) { delay(OBD_IDLE_MS); continue }
                 var connected = false
                 try {
@@ -588,9 +598,11 @@ class LocationService : Service() {
                     LiveState.obdConnected = true
                     EventLog.info("OBD connected")
                     // Multi-vehicle (Phase 4): a read VIN is the strongest vehicle identity —
-                    // upgrade the drive's key from the BT MAC to the VIN so the SPA can register
-                    // a new car automatically and stamp the drive with it.
-                    client.vin?.takeIf { it.isNotBlank() }?.let { stampVehicle(it) }
+                    // upgrade the drive's key from the BT MAC to the VIN so the SPA can stamp the
+                    // drive with the right car (and register one if this VIN is genuinely new).
+                    // The adapter's own MAC rides along, so moving the dongle to another car
+                    // moves the adapter in the registry too, instead of stranding it on the old one.
+                    client.vin?.takeIf { it.isNotBlank() }?.let { stampVehicle(it, mac) }
                     runCatching { client.diagnostic().forEach { EventLog.info("OBD $it") } }
                     main.post { reevaluate(); StateBroadcaster.emit(this@LocationService, "obd") }
                     var ticks = 0

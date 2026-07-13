@@ -26,12 +26,20 @@ object WebVehicleBuffer {
 
     private fun file(context: Context) = File(context.filesDir, FILE)
 
-    /** Append one vehicle event. [key] is a BT MAC (or a VIN); [epochSec] is when it applied. */
-    fun append(context: Context, epochSec: Long, key: String) {
+    /**
+     * Append one vehicle event. [key] is a BT MAC (or a VIN); [epochSec] is when it applied.
+     *
+     * [obdMac] rides along on a VIN event: it is the adapter that READ that VIN, and it's what
+     * lets the SPA follow a dongle moved from one car to another. Without it, unplugging the
+     * reader from the truck and plugging it into the van leaves the registry insisting the
+     * adapter still belongs to the truck. Null on a Bluetooth event (nothing read a VIN).
+     */
+    fun append(context: Context, epochSec: Long, key: String, obdMac: String? = null) {
         val o = JSONObject()
             .put("ts", epochSec)
             .put("kind", "vehicle")
             .put("key", key)
+        if (!obdMac.isNullOrBlank()) o.put("obd", obdMac.uppercase())
         synchronized(LOCK) {
             val f = file(context)
             runCatching { f.appendText(o.toString() + "\n") }

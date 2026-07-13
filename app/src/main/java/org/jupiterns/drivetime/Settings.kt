@@ -167,13 +167,75 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("logging_enabled", false)
         set(v) = prefs.edit().putBoolean("logging_enabled", v).apply()
 
-    /** Paired OBD-II (ELM327) dongle, if configured. */
+    /** Paired OBD-II (ELM327) dongle — the LEGACY single-adapter setting, from when the app
+     *  assumed a one-car household. Still honoured as the fallback (see [obdTarget]) so an
+     *  install that predates the vehicle registry, or one with no registered vehicle, keeps
+     *  reading its dongle. New configuration goes on the vehicle that owns the adapter. */
     var obdMac: String
         get() = prefs.getString("obd_mac", "") ?: ""
         set(v) = prefs.edit().putString("obd_mac", v).apply()
     var obdName: String
         get() = prefs.getString("obd_name", "") ?: ""
         set(v) = prefs.edit().putString("obd_name", v).apply()
+
+    /** The registered vehicles, as the logger needs to see them: each car's OBD adapter (blank
+     *  if it has none) and the car Bluetooth MACs that identify it. Pushed wholesale by the
+     *  SPA's vehicles registry (`setVehicleObd`), which is the authority.
+     *
+     *  A dongle is bolted into a particular car, so it belongs to that car — which matters the
+     *  moment there are two: the logger must dial the adapter of the car you are actually in.
+     *  Cars WITHOUT an adapter are listed too, and that is not redundant — knowing "the car I'm
+     *  in has no dongle" is what lets [obdTarget] decline to probe at all.
+     *
+     *      OBDMAC|Name|BTMAC,BTMAC      (one per line; a MAC contains none of | , or newline)
+     *
+     *  This deliberately does NOT write [obdMac] — that legacy value stays untouched as the
+     *  fallback, so an install whose adapter was configured before vehicles existed loses
+     *  nothing. */
+    var vehicleObd: List<ObdBinding>
+        get() = (prefs.getString("vehicle_obd", "") ?: "").split("\n")
+            .mapNotNull { line ->
+                val parts = line.split("|")
+                if (parts.size < 3) return@mapNotNull null
+                val mac = parts[0].trim().uppercase()
+                val bts = parts[2].split(",").map { it.trim().uppercase() }.filter { it.isNotEmpty() }
+                // A car with neither an adapter nor a Bluetooth tells us nothing.
+                if (mac.isEmpty() && bts.isEmpty()) return@mapNotNull null
+                ObdBinding(mac, parts[1].trim(), bts)
+            }
+        set(v) {
+            val raw = v.filter { it.mac.isNotBlank() || it.carBtMacs.isNotEmpty() }.joinToString("\n") {
+                "${it.mac.uppercase()}|${it.name.replace("|", " ")}|${it.carBtMacs.joinToString(",")}"
+            }
+            prefs.edit().putString("vehicle_obd", raw).apply()
+        }
+
+    /**
+     * Which OBD adapter to dial right now, given the car Bluetooth currently connected
+     * ([carMac], null if none). Blank = don't probe.
+     *
+     * The car we're demonstrably in wins, and it wins even when the answer is "this car has no
+     * dongle" — that's the point of listing adapter-less cars. Otherwise driving the second car
+     * would have the logger endlessly redialling the first car's adapter, which isn't there.
+     *
+     * With no car identified we fall back to the only adapter registered (the obvious guess in a
+     * one-dongle household; a wrong guess merely fails to connect and re-resolves the moment a
+     * car's Bluetooth comes up). An empty registry falls back to the legacy [obdMac], so an
+     * install that predates vehicles keeps reading its dongle.
+     */
+    fun obdTarget(carMac: String?): String {
+        val bindings = vehicleObd
+        if (bindings.isEmpty()) return obdMac
+        val m = carMac?.trim()?.uppercase()
+        if (!m.isNullOrEmpty()) {
+            bindings.firstOrNull { m in it.carBtMacs }?.let { return it.mac }
+        }
+        return bindings.firstOrNull { it.mac.isNotEmpty() }?.mac ?: ""
+    }
+
+    /** One vehicle as the logger sees it: its OBD adapter (blank if none) and the car Bluetooth
+     *  MACs that identify it. */
+    data class ObdBinding(val mac: String, val name: String, val carBtMacs: List<String>)
 
     /** Auto start/stop logging on driving (activity-recognition IN_VEHICLE). */
     var autoTrip: Boolean
