@@ -64,11 +64,23 @@ from D&B (allow ~30 days) → organization account → transfer the app.
 
 ---
 
-## 2 · Code — done, pending CI verification
+## 2 · Code — done, CI green
 
-All of this is written but **not yet compiled** (no JDK on the dev host; CI is the only
-Kotlin compiler). Push a branch to validate: CI builds both flavors on a pull request, and
-the release step is gated on `main`, so nothing reaches users.
+Verified on the `play-store` branch ([PR #2](https://github.com/improvmasta/drivetime-android/pull/2)):
+tests + lint pass and CI produces **both** artifacts — `drivetime-debug-apk` and
+`drivetime-play-aab`. The release step is gated on `main`, so nothing has reached users; the
+PR is **not merged**, because merging publishes a GitHub release to sideload users.
+
+Two things the branch caught, neither of them the Play work itself:
+
+- **Robolectric moves with targetSdk.** It resolves its `android-all` jar from *targetSdk*, so
+  4.13 (no SDK 35 jar) failed all six Robolectric tests with `initializationError` the moment
+  34 → 35 landed. Now on **4.16.1**, which carries 35 *and* 36 — so the August bump won't
+  re-break it.
+- **Lint rejected the Drive OAuth redirect** (`AppLinkUrlError`: a filter with a path needs a
+  host). Google's installed-app redirect is scheme + path with **no** host; adding one changes
+  the `redirect_uri` and every Drive sign-in comes back `redirect_uri_mismatch`. Suppressed on
+  that one filter — the manifest was right and the check was wrong.
 
 - [x] **`play` build flavor** with the in-app updater **compiled out**
       (`BuildConfig.UPDATER_ENABLED=false`) and `REQUEST_INSTALL_PACKAGES` moved to
@@ -85,7 +97,7 @@ the release step is gated on `main`, so nothing reaches users.
       configuration.
 - [x] **CI builds both channels**: `assembleGithubDebug` → APK + GitHub release as before,
       `bundlePlayRelease` → the AAB, as a separate artifact.
-- [ ] **Push a branch and confirm CI is green.**
+- [x] **Push a branch and confirm CI is green.** Green on `play-store`; both artifacts built.
 
 ### Deliberately deferred: targetSdk 36 — hard deadline **2026-08-31**
 Play requires 36 for new apps *and updates* from that date. Targeting 36 also makes
@@ -100,11 +112,14 @@ the app on a device. Miss this date and your updates stop being accepted.
 
 ## 3 · Things Play will not let you skip
 
-- [ ] **Privacy policy at a public URL.** Mandatory — the app handles location. Nothing else
-      can proceed without it. `drivetime.jupiterns.org/privacy` is the obvious home (the
-      backend already serves static content). Honest and easy to write: standalone, the app
-      collects nothing; a paired server is the user's own; Google Drive backup goes to the
-      user's own Drive.
+- [x] **Privacy policy at a public URL** — live at
+      **https://drivetime.jupiterns.org/privacy**. Served from the backend
+      (`backend/static/privacy.html` + a route in `spa.py`), *not* from the SPA bundle, so it
+      stays out of the APK and — the part that matters — is in `security.PUBLIC_PATHS`, i.e.
+      readable by a Play reviewer who has no credential on the box. It covers background
+      location as the core function, the three ways data can leave the phone (a server *you*
+      run, *your own* Drive, files you export), no ads/analytics/sale, the Google API Services
+      Limited Use disclosure, and uninstall-deletes-everything.
 - [ ] **Data safety form.** Declare location as collected-but-not-shared (optional, user can
       delete), encrypted in transit. The local-first design makes this genuinely benign.
 - [ ] **Background-location permission declaration** + a **prominent-disclosure demo video**.
@@ -135,11 +150,12 @@ the app on a device. Miss this date and your updates stop being accepted.
 ## 5 · Order of operations
 
 1. Register the **personal** account on the `jupiterns.org` Workspace email (§1). $25, no
-   D-U-N-S, no waiting.
-2. Push a branch; confirm CI builds the AAB (§2).
-3. Write and publish the privacy policy (§3) — it blocks everything else.
-4. Create the app in Play Console; **let Play generate the app signing key**; upload the AAB
-   to **internal testing**.
+   D-U-N-S, no waiting. **← the only thing now blocking internal testing; it's yours to do.**
+2. ~~Push a branch; confirm CI builds the AAB (§2).~~ **Done** — green on `play-store`.
+3. ~~Write and publish the privacy policy (§3).~~ **Done** — https://drivetime.jupiterns.org/privacy
+4. Merge `play-store` to `main` (this also publishes an APK to sideload users), then take the
+   AAB from CI. Create the app in Play Console; **let Play generate the app signing key**;
+   upload the AAB to **internal testing**.
 5. Register Play's app-signing SHA-1 on the Google Drive OAuth client, or Drive backup dies
    silently for every Play install (`drivetime/BACKUP.md`).
 6. **Back up your phone, then uninstall the sideload build and install from Play.** Confirm
