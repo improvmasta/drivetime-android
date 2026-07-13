@@ -79,9 +79,9 @@ class DriveDetectorTest {
         val d = DriveDetector(settings())
         d.onSpeed(10f, 0L)
         assertEquals(DriveDetector.Tier.DRIVING, d.tier())
-        d.onSpeed(0.5f, 60_000L)
+        d.onSpeed(0.5f, 60_000L)                             // the stop begins HERE
         assertEquals(DriveDetector.Tier.DRIVING, d.tier())
-        d.onSpeed(0.5f, 320_000L)                            // past STOP_MS (5 min)
+        d.onSpeed(0.5f, 380_000L)                            // 5+ min AFTER the stop began
         assertEquals(DriveDetector.Tier.LIGHT, d.tier())
     }
 
@@ -203,9 +203,9 @@ class DriveDetectorTest {
         d.obdConnected = true
         d.onSpeed(10f, 0L)                                   // arrive somewhere
         assertEquals(DriveDetector.Tier.DRIVING, d.tier())
-        d.onSpeed(0f, 60_000L)                               // engine off, sitting — a real stop
+        d.onSpeed(0f, 60_000L)                               // engine off, sitting — the stop begins
         assertEquals(DriveDetector.Tier.DRIVING, d.tier())   // held: could be a pump or a light
-        d.onSpeed(0f, 320_000L)                              // past STOP_MS, dongle STILL connected
+        d.onSpeed(0f, 370_000L)                              // 5+ min into the stop, dongle STILL connected
         assertEquals(DriveDetector.Tier.LIGHT, d.tier())     // parked wins over the connection
         assertTrue(d.isParked)
         assertFalse(d.isMoving)
@@ -216,7 +216,8 @@ class DriveDetectorTest {
         d.carConnected = true
         d.onSpeed(10f, 0L)
         assertEquals(DriveDetector.Tier.DRIVING, d.tier())
-        d.onSpeed(0f, 320_000L)                              // head unit on accessory power
+        d.onSpeed(0f, 10_000L)                               // head unit on accessory power
+        d.onSpeed(0f, 320_000L)                              // 5+ min into the stop, BT still connected
         assertEquals(DriveDetector.Tier.LIGHT, d.tier())
     }
 

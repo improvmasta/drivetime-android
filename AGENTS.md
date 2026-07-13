@@ -37,8 +37,21 @@ support server.
 ramps to dense **Driving** via `DriveDetector` — car-Bluetooth → OBD-connect → sustained-speed
 cascade, plus a significant-motion **onset** path that wakes a parked phone fast. Within
 Driving it samples adaptively (dense while moving, `idleIntervalSec` at red lights). Tier exit
-is the detector's job, not a stationary trip-end. *(The old activity-recognition `TripDetector`
-is retired — opt-in behind `auto_trip`, not armed by default.)*
+is the detector's job, not a stationary trip-end — but the *connection* signals are **bounded by
+a `parked` latch**, and that bound is load-bearing. An OBD-II port is permanently powered and a
+head unit can sit on accessory power, so `obdConnected`/`carConnected` stay true with the ignition
+off; when they held DRIVING unconditionally, a parked car pinned the dense tier for hours (dense
+GPS in a parking lot, phantom drives out of GPS drift, and an app insisting you were driving while
+you sat still). Connection signals are for *starting fast*, not for deciding you never stopped.
+
+Three things the detector keeps deliberately separate — collapsing them is what caused that bug:
+**`isMoving`** (are the wheels turning right now — the drive's green/red signal light, what the UI
+shows), **`tier`** (how fast to sample; holds through a red light, ends at `parked`), and the
+**drive session** (`markDriveStart`, which still ends when the tier leaves DRIVING). `STOP_MS` is
+one 5-minute constant for every latch, the same 5 minutes `segment.js` calls a park, so the live
+app, the drive log and segmentation agree on what a stop is. OBD `rpm > 0` (`engineRunning`) is the
+only thing that extends the hold — idling with the engine on is not parked. *(The old
+activity-recognition `TripDetector` is retired — opt-in behind `auto_trip`, not armed by default.)*
 
 **Fixes are durable.** `Uploader` writes an on-disk queue that is atomic, size-capped (16 MB,
 drop-oldest), and ordered; only lines the server actually acked are deleted; failures back off
