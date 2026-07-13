@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "org.jupiterns.drivetime"
-    compileSdk = 34
+    compileSdk = 36
 
     // A fixed signing key, committed (app/signing/) so every build — CI and local —
     // shares one signature. Android only installs an update *in place* (keeping app
@@ -26,11 +26,45 @@ android {
     defaultConfig {
         applicationId = "org.jupiterns.drivetime"
         minSdk = 26
-        targetSdk = 34
+        // Play's floor: 34 is already too low to upload. 35 is accepted today; API 36
+        // becomes mandatory for new apps AND updates on 2026-08-31.
+        //
+        // Deliberately 35 and not 36 yet: targeting 35 opts into ENFORCED edge-to-edge but
+        // still honours `windowOptOutEdgeToEdgeEnforcement` (themes.xml), which we use.
+        // At targetSdk 36 that escape hatch is ignored and the WebView would draw under
+        // the status bar — a layout change nobody can verify without a device. So: ship to
+        // testers on 35 now, then bump to 36 + real inset handling before the deadline,
+        // with the app on a real phone. See CLAUDE.md → Next up.
+        targetSdk = 35
         // Monotonic versionCode from the CI run number so every CI build is an upgrade
         // over the last; local builds fall back to 1. versionName mirrors it.
         versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
         versionName = "0.1." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
+    }
+
+    // Two distribution channels from one source tree.
+    //
+    //   github — the sideload/self-update channel this app was born on. Keeps the in-app
+    //            Updater and REQUEST_INSTALL_PACKAGES (declared in src/github's manifest).
+    //   play   — Google Play. The updater is COMPILED OUT, because Play's Device and
+    //            Network Abuse policy forbids an app updating itself by any route other
+    //            than Play, and REQUEST_INSTALL_PACKAGES may not be used for self-updates.
+    //            Shipping the updater here is not a lint nit; it is a removal.
+    //
+    // Same applicationId on purpose — one app, two ways of getting it. But Play re-signs
+    // with its own app signing key, so a Play install and a sideload install have DIFFERENT
+    // signatures and cannot upgrade into each other: switching channels means uninstall →
+    // reinstall, which wipes on-device data. Back up first (CLAUDE.md → Distribution).
+    flavorDimensions += "channel"
+    productFlavors {
+        create("github") {
+            dimension = "channel"
+            buildConfigField("boolean", "UPDATER_ENABLED", "true")
+        }
+        create("play") {
+            dimension = "channel"
+            buildConfigField("boolean", "UPDATER_ENABLED", "false")
+        }
     }
 
     buildFeatures {

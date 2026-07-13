@@ -6,8 +6,10 @@ which mode to use, and how to react when state changes. The app's job is to be
 a clean instrument: every meaningful action is reachable as a shortcut or an
 intent, and every state change emits a broadcast you can subscribe to.
 
-The same cheat-sheet appears in the app under **Settings → Automation**, so a
-routine author never has to leave the phone.
+The same cheat-sheet appears in the app under **Settings → Advanced → Automation**,
+so a routine author never has to leave the phone. A unit test (`AutomationHelpTest`)
+holds that in-app sheet to `Control.SET_KEYS`, so the key list below can be trusted
+to be complete — if a key exists, it's documented.
 
 ---
 
@@ -70,8 +72,8 @@ a key. Keys + value formats:
 | `driving_upload_interval_sec`    | positive int                               | DRIVING flush cadence (~10s default)   |
 | `drive_by_speed`                 | `true` `false` `1` `0` `yes` `no` `on` `off` | Speed backstop on/off               |
 | `stationary_stop_min`            | 0+                                         | Auto-trip backstop minutes             |
-| `auto_trip`                      | bool                                       | Activity-recognition auto-trip         |
-| `alerts_enabled`                 | bool                                       | Server alert polling                   |
+| `auto_trip`                      | bool                                       | Legacy activity-recognition auto-trip — **off by default and best left off** (its slow-traffic car/bike guess is exactly the misclassification `DriveDetector` exists to avoid) |
+| `alerts_enabled`                 | bool                                       | **Check-engine notifications** — the dongle's trouble codes. On-device; nothing is polled from a server |
 | `notif_driving_only`             | bool                                       | Collapse the notification when idle    |
 | `motion_onset`                   | bool                                       | Significant-motion fast-start path     |
 | `onset_probe_interval_sec`       | positive int                               | Probationary GPS cadence after a wake  |
@@ -82,6 +84,12 @@ a key. Keys + value formats:
 Unknown keys log a warning to **Activity log** and are silently ignored — your
 routine can safely send a SET it's not sure the app version supports without
 breaking the rest of the recipe.
+
+The event-notification toggles (`notify_drive_complete`, `notify_gas_stop`,
+`notify_digest`, `notify_tracking_health`) and the sync/backup keys
+(`backup_schedule`, `server_url`, …) are **not** in `SET_KEYS` — for now they are
+in-app settings only. A routine that needs them can still ship a whole settings
+file (§6).
 
 If `controlToken` is set in Settings, every `SET` and `QUERY` must include a
 matching `token` extra. `START` / `STOP` / `TOGGLE` / mode-actions ignore the
@@ -148,12 +156,19 @@ am broadcast -a org.jupiterns.drivetime.action.QUERY
 
 ---
 
-## 6 · Backup / restore via JSON
+## 6 · Settings as JSON — the routine preset format
 
-Settings → Backup → **Export** writes every editable setting (plus credentials,
-the control token, and your paired devices) to a JSON file whose keys match the
-SET names in §3. The same file can be imported on a new phone, or shipped by a
-routine as a one-shot preset.
+Two different things are called "backup" in this app; this section is about the
+small one.
+
+* **Settings → Sync & Backup → Backup & Restore** is the *full-data* backup —
+  every drive, tag, place, and vehicle, snapshotted to Google Drive or a folder on
+  a schedule. That's the one that saves you when you lose the phone; see
+  `drivetime/BACKUP.md`.
+* **Settings → Advanced → Export settings** is what matters to a routine author: it
+  writes every editable setting (plus credentials, the control token, and your
+  paired devices) to a JSON file whose keys match the SET names in §3. Import it on
+  a new phone, or keep several around as one-shot presets.
 
 ```json
 {

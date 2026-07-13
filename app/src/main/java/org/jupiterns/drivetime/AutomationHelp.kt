@@ -3,8 +3,9 @@ package org.jupiterns.drivetime
 /**
  * In-app cheat-sheet for the routine / shortcut surface — shown verbatim in the
  * Settings "AUTOMATION" section so wiring a Samsung Modes & Routines / Tasker /
- * HA recipe doesn't require flipping to the README. Single source of truth: the
- * fixture under app/src/test verifies AUTOMATION.md and this string stay in sync.
+ * HA recipe doesn't require flipping to the README. AutomationHelpTest holds this
+ * string to [Control.SET_KEYS], so a key can't ship undocumented; AUTOMATION.md is
+ * the long-form version of the same surface and is kept in sync by hand.
  */
 object AutomationHelp {
     fun cheatSheet(): String = """

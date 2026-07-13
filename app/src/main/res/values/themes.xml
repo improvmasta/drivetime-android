@@ -1,8 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <!-- Palette wired to the SPA tokens (@color/dt_* resolve light/dark via DayNight), so
          the native Tracker chrome matches the WebView dashboard it floats over. -->
     <style name="Theme.Drivetime" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- targetSdk 35 opts into enforced edge-to-edge; opt back out, because the shell
+             is one full-bleed WebView with no native insets handling — without this the
+             SPA's app bar slides under the clock and its tab bar under the gesture pill.
+             TEMPORARY: this attribute is IGNORED once we target 36 (mandatory 2026-08-31),
+             so the real fix (pad the root by the system-bar + IME insets) has to land
+             before that bump, not with it. -->
+        <item name="android:windowOptOutEdgeToEdgeEnforcement" tools:targetApi="35">true</item>
         <item name="colorPrimary">@color/dt_accent</item>
         <item name="colorOnPrimary">@color/dt_accent_contrast</item>
         <item name="colorPrimaryContainer">@color/dt_accent</item>

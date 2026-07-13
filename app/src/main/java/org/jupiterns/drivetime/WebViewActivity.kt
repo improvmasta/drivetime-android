@@ -301,7 +301,11 @@ class WebViewActivity : AppCompatActivity() {
         // session to keep alive), so a resume just retries the load if it never came up.
         if (!loadedOnce) loadDashboard()
         // Offer a newer build if one's been published (throttled; silent when up to date).
-        if (settings.updatesEnabled) Updater.checkFromUi(this, interactive = false)
+        // Never on a Play build — Play is the update channel there, and self-updating is a
+        // policy violation, not a preference (BuildConfig.UPDATER_ENABLED).
+        if (BuildConfig.UPDATER_ENABLED && settings.updatesEnabled) {
+            Updater.checkFromUi(this, interactive = false)
+        }
     }
 
 
@@ -817,6 +821,9 @@ class WebViewActivity : AppCompatActivity() {
                 .put("digest_time", settings.digestTime)
                 .put("control_token", settings.controlToken)
                 .put("updates_enabled", settings.updatesEnabled)
+                // Play builds have no self-updater at all (policy), so the SPA hides the
+                // whole "check for updates" affordance rather than offering a dead button.
+                .put("updates_supported", BuildConfig.UPDATER_ENABLED)
                 .put("carBtName", settings.carBtName)
                 .put("obdName", settings.obdName)
                 .put("versionName", BuildConfig.VERSION_NAME)
@@ -1062,6 +1069,13 @@ class WebViewActivity : AppCompatActivity() {
         /** Interactive check-for-update (More tab). */
         @JavascriptInterface
         fun checkForUpdate() {
+            if (!BuildConfig.UPDATER_ENABLED) {
+                // The SPA hides the control on a Play build (updates_supported=false), so
+                // this is only reachable from a stale WebView snapshot. Say the true thing
+                // rather than silently doing nothing.
+                ui.post { toast("Updates for this build come from Google Play") }
+                return
+            }
             ui.post { toast("Checking for updates…"); Updater.checkFromUi(this@WebViewActivity, interactive = true) }
         }
 

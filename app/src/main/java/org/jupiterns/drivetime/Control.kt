@@ -113,7 +113,7 @@ object Control {
             return settings.trackingMode
         }
 
-        // Mode-changing actions: always open (per ROADMAP — START/STOP must work even
+        // Mode-changing actions: always open (per AUTOMATION.md — START/STOP must work even
         // when SET is locked).
         val mode = when (action) {
             ACTION_START, ACTION_MODE_AUTO -> Settings.MODE_AUTO
