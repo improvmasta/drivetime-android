@@ -206,6 +206,54 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("notif_driving_only", false)
         set(v) = prefs.edit().putBoolean("notif_driving_only", v).apply()
 
+    // ---- event notifications (NOTIFICATIONS.md P3) — all default OFF ----
+
+    /** Post a system notification when a drive seals still untagged ("drive completed —
+     *  tag it"). Fires 16 min after drive end via [DriveCompleteWorker]. */
+    var notifyDriveComplete: Boolean
+        get() = prefs.getBoolean("notify_drive_complete", false)
+        set(v) = prefs.edit().putBoolean("notify_drive_complete", v).apply()
+
+    /** Post a system notification when two legs look like one drive split by a quick
+     *  gas/errand stop (the native drive-end heuristic in [LocationService]). */
+    var notifyGasStop: Boolean
+        get() = prefs.getBoolean("notify_gas_stop", false)
+        set(v) = prefs.edit().putBoolean("notify_gas_stop", v).apply()
+
+    /** Post a weekly digest of drives still needing a tag ([DigestWorker]), at [digestDay] /
+     *  [digestTime]. Silent when there's nothing to report. */
+    var notifyDigest: Boolean
+        get() = prefs.getBoolean("notify_digest", false)
+        set(v) = prefs.edit().putBoolean("notify_digest", v).apply()
+
+    /** Day the weekly digest fires, in the SPA's `Date.getDay()` numbering (0 = Sunday …
+     *  6 = Saturday). Default Monday — the week's drives are in, the week ahead isn't. */
+    var digestDay: Int
+        get() = prefs.getInt("digest_day", DigestSchedule.DEFAULT_DAY)
+        set(v) = prefs.edit()
+            .putInt("digest_day", if (v in 0..6) v else DigestSchedule.DEFAULT_DAY).apply()
+
+    /** Local time the weekly digest fires, "HH:mm" (default 18:00). */
+    var digestTime: String
+        get() = prefs.getString("digest_time", DigestSchedule.DEFAULT_TIME)
+            ?: DigestSchedule.DEFAULT_TIME
+        set(v) = prefs.edit().putString("digest_time", DigestSchedule.normalizeTime(v)).apply()
+
+    /** The current drive's start position as "lat,lon" ("" = unknown), stamped when the
+     *  drive begins. Durable like [driveStartedAt] so a mid-drive service restart keeps it;
+     *  read at drive end by the gas-stop heuristic. */
+    var driveStartPos: String
+        get() = prefs.getString("drive_start_pos", "") ?: ""
+        set(v) = prefs.edit().putString("drive_start_pos", v).apply()
+
+    /** The last completed REAL drive's boundary summary —
+     *  "startMs,endMs,startLat,startLon,endLat,endLon" ("" = none) — read at the NEXT
+     *  drive's end by the gas-stop heuristic (was that stop just a fuel stop?). Durable so
+     *  the pair check survives a service restart between the two legs. */
+    var prevDriveSummary: String
+        get() = prefs.getString("prev_drive_summary", "") ?: ""
+        set(v) = prefs.edit().putString("prev_drive_summary", v).apply()
+
     /** Optional shared secret gating *parameter-setting* control intents (SET, QUERY).
      *  Blank → open (the default; this is a private app on the user's own phone). When
      *  set, a routine must include `token=<this>` in its intent extras or the action is

@@ -43,6 +43,10 @@ class BootReceiver : BroadcastReceiver() {
         Control.resumeAfterReboot(context)
         // Reboot clears these registrations; re-arm whatever the user had enabled.
         if (s.autoTrip) runCatching { TripDetector.enable(context) }
+        // WorkManager restores its own pending work after a reboot, so this is a backstop —
+        // and it re-anchors the digest on the wall clock, which an update (MY_PACKAGE_REPLACED)
+        // landing between two fires would otherwise leave pointing at a stale slot.
+        runCatching { DigestWorker.reschedule(context, s) }
         // Check-engine alerts are on-device now; retire any legacy server-poll worker.
         AlertWorker.cancel(context)
     }

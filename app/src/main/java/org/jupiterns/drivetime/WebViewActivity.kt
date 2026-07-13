@@ -77,6 +77,12 @@ private const val REPORT_EMAIL = "lindsay@jupiterns.org"
  */
 class WebViewActivity : AppCompatActivity() {
 
+    companion object {
+        /** Intent extra carrying an SPA route ("/drive/L1720000000") — how a tapped event
+         *  notification deep-links into the app (NOTIFICATIONS.md P3). */
+        const val EXTRA_ROUTE = "dt_route"
+    }
+
     private lateinit var b: ActivityWebBinding
     private lateinit var settings: Settings
     private val uploader by lazy { Uploader(this, settings) }
@@ -112,6 +118,11 @@ class WebViewActivity : AppCompatActivity() {
     // Last "Test connection" result, surfaced back to the SPA's Sync tab via getStatus().
     @Volatile private var lastTestMsg: String = ""
     @Volatile private var lastTestKind: String = ""   // "good" | "bad" | "warn" | ""
+
+    // Deep-link route waiting for the SPA (NOTIFICATIONS.md P3): stashed from the launch
+    // intent (cold start) or an onNewIntent the page wasn't ready for; the SPA pulls it via
+    // consumePendingRoute() once mounted. Volatile: UI thread writes, JS-bridge thread reads.
+    @Volatile private var pendingRoute: String? = null
 
     // Serves the APK-bundled SPA (assets/web/…) at https://appassets.androidplatform.net/
     // assets/web/ — a secure origin, so the SPA's service worker + IndexedDB replica work
@@ -262,7 +273,23 @@ class WebViewActivity : AppCompatActivity() {
             }
         })
 
+        // A notification tap on a cold start: stash the route; the SPA pulls it once mounted.
+        pendingRoute = intent?.getStringExtra(EXTRA_ROUTE)
+
         loadDashboard()
+    }
+
+    /** A notification tap while the activity exists (launchMode="singleTask"): hand the
+     *  route straight to the running SPA, or stash it if the page isn't ready yet. */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val route = intent.getStringExtra(EXTRA_ROUTE) ?: return
+        val js = "(typeof window.__dtNavigate==='function') " +
+            "? (window.__dtNavigate(${JSONObject.quote(route)}), true) : false"
+        b.webview.evaluateJavascript(js) { res ->
+            if (res != "true") pendingRoute = route
+        }
     }
 
     override fun onResume() {
@@ -782,6 +809,11 @@ class WebViewActivity : AppCompatActivity() {
                 .put("auto_trip", settings.autoTrip)
                 .put("alerts_enabled", settings.alertsEnabled)
                 .put("notif_driving_only", settings.notifDrivingOnly)
+                .put("notify_drive_complete", settings.notifyDriveComplete)
+                .put("notify_gas_stop", settings.notifyGasStop)
+                .put("notify_digest", settings.notifyDigest)
+                .put("digest_day", settings.digestDay)
+                .put("digest_time", settings.digestTime)
                 .put("control_token", settings.controlToken)
                 .put("updates_enabled", settings.updatesEnabled)
                 .put("carBtName", settings.carBtName)
@@ -839,6 +871,26 @@ class WebViewActivity : AppCompatActivity() {
                     }
                     "backup_keep" -> settings.backupKeep = value.toIntOrNull() ?: settings.backupKeep
                     "backup_drive_client_id" -> settings.backupDriveClientId = value
+                    // Event notifications (NOTIFICATIONS.md P3): UI-only keys, not in
+                    // Control.SET_KEYS for v1.
+                    "notify_drive_complete" -> settings.notifyDriveComplete =
+                        value.toBooleanStrictOrNull() ?: settings.notifyDriveComplete
+                    "notify_gas_stop" -> settings.notifyGasStop =
+                        value.toBooleanStrictOrNull() ?: settings.notifyGasStop
+                    // The digest keys own a scheduled worker, so each write re-arms it (the
+                    // backup_schedule precedent above).
+                    "notify_digest" -> {
+                        settings.notifyDigest = value.toBooleanStrictOrNull() ?: settings.notifyDigest
+                        DigestWorker.reschedule(this@WebViewActivity, settings)
+                    }
+                    "digest_day" -> {
+                        settings.digestDay = value.toIntOrNull() ?: settings.digestDay
+                        DigestWorker.reschedule(this@WebViewActivity, settings)
+                    }
+                    "digest_time" -> {
+                        settings.digestTime = value
+                        DigestWorker.reschedule(this@WebViewActivity, settings)
+                    }
                     else -> Control.set(this@WebViewActivity, key, value, "user")
                 }
             }
@@ -895,6 +947,38 @@ class WebViewActivity : AppCompatActivity() {
         /** Stop nagging about the last suspected OEM kill (Tracking tab dismiss). */
         @JavascriptInterface
         fun dismissKillWarning() { settings.killAcknowledgedAt = System.currentTimeMillis() }
+
+        // ---- event notifications + deep-linking (NOTIFICATIONS.md P3) ----
+
+        /** Post one event notification through [Notify] — same gate native firing uses
+         *  (kind toggle + permission), so a new SPA-driven kind is one bridge call. */
+        @JavascriptInterface
+        fun postNotification(kind: String, id: String, title: String, body: String, route: String): Boolean =
+            Notify.post(this@WebViewActivity, kind, id, title, body, route)
+
+        /** Cancel a posted event notification by its (kind, id). */
+        @JavascriptInterface
+        fun cancelNotification(kind: String, id: String) {
+            Notify.cancel(this@WebViewActivity, kind, id)
+        }
+
+        /** The SPA's pending-attention snapshot, pushed once per sync tick:
+         *  `{tagPrompts:[{start_ts,label,miles}], gasPairs:[right_ts], untagged, suggested}`.
+         *  Native stores it (informing [DriveCompleteWorker] and the P4 digest) and retracts
+         *  any posted notification whose item is no longer pending. */
+        @JavascriptInterface
+        fun setPendingAttention(json: String) {
+            Notify.setPendingAttention(this@WebViewActivity, json)
+        }
+
+        /** Cold-start deep-link pull: the route a tapped notification carried, once ("" when
+         *  none). The SPA calls this on mount; a warm tap goes straight to __dtNavigate. */
+        @JavascriptInterface
+        fun consumePendingRoute(): String {
+            val r = pendingRoute ?: ""
+            pendingRoute = null
+            return r
+        }
 
         /** Open the Bluetooth device picker for "car" or "obd" (Devices tab). */
         @JavascriptInterface

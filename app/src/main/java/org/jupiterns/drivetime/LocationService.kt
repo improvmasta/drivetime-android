@@ -319,6 +319,7 @@ class LocationService : Service() {
         if (tier != DriveDetector.Tier.DRIVING) {
             if (settings.driveStartedAt != 0L) {
                 stampBatteryUsed(settings.driveStartedAt)   // before the start mark is cleared
+                onDriveEnded(settings.driveStartedAt)       // notifications (P3): before totals reset
                 settings.driveStartedAt = 0L
                 // A drive just ended: on the "after each drive" backup schedule, queue an
                 // archive shortly (debounced inside — a quick errand resume re-arms it).
@@ -330,6 +331,9 @@ class LocationService : Service() {
         val now = System.currentTimeMillis()
         val existing = settings.driveStartedAt
         val resume = existing != 0L && now - existing in 0L..MAX_DRIVE_MS
+        // Entering DRIVING — resumed or new — invalidates the previous leg's pending
+        // "tag your drive" prompt: a gas-stop chain prompts once, after its final leg.
+        DriveCompleteWorker.cancel(this)
         if (resume) {
             resumeDriveTotals(existing)
         } else {
@@ -337,8 +341,67 @@ class LocationService : Service() {
             resetDriveTotals()   // a NEW drive: its miles and markers start at zero
             // Snapshot the battery at the drive's start so drive end can report what it cost.
             settings.driveBatteryStart = Battery.levelPct(this) ?: -1
+            // The start position (last known fix ≈ the spot the car starts from), for the
+            // gas-stop heuristic's same-spot / onward-progress checks at drive end.
+            val lat = LiveState.lat
+            val lon = LiveState.lon
+            settings.driveStartPos = if (lat != null && lon != null) "$lat,$lon" else ""
         }
         return if (resume) existing else now
+    }
+
+    /**
+     * A drive just ended (still holds its start mark). For REAL drives — far/long enough to
+     * be a visible trip — arm the delayed "tag your drive" prompt, run the gas-stop pair
+     * heuristic against the PREVIOUS drive, and stamp this drive as the next check's
+     * "previous". Jitter loops are ignored entirely: they never prompt and never become the
+     * left leg of a gas pair. Everything here is default-off (NOTIFICATIONS.md P3).
+     */
+    private fun onDriveEnded(startedAtMs: Long) {
+        val now = System.currentTimeMillis()
+        // LiveState is live but zeroed by a mid-drive restart; the Settings mirror is durable
+        // but throttled. The max of the two is the honest distance either way.
+        val meters = maxOf(LiveState.driveMeters, settings.driveMeters.toDouble())
+        if (meters < REAL_DRIVE_METERS || now - startedAtMs < REAL_DRIVE_MS) return
+        if (settings.notifyDriveComplete) {
+            DriveCompleteWorker.schedule(this, startedAtMs, now, meters)
+        }
+        val startPos = settings.driveStartPos.split(",").mapNotNull { it.toDoubleOrNull() }
+        val endLat = LiveState.lat
+        val endLon = LiveState.lon
+        if (settings.notifyGasStop) maybeNotifyGasStop(startedAtMs, startPos, endLat, endLon)
+        settings.prevDriveSummary = if (startPos.size == 2 && endLat != null && endLon != null) {
+            "$startedAtMs,$now,${startPos[0]},${startPos[1]},$endLat,$endLon"
+        } else ""
+    }
+
+    /**
+     * The SPA's gas-stop rules (localmerge.js / detail.py), run natively at drive end so the
+     * split is flagged even with the app closed: the previous drive ended 4–15 min before
+     * this one started, this one resumed at the SAME spot (≤0.5 km), and it continued ONWARD
+     * (ends ≥1.5 km from where the previous began — not an out-and-back). Keyed by this
+     * drive's start (the pair's `right_ts`, same boundary the SPA uses) so the attention
+     * push can retract it after a merge/dismissal.
+     */
+    private fun maybeNotifyGasStop(startedAtMs: Long, startPos: List<Double>, endLat: Double?, endLon: Double?) {
+        val prev = settings.prevDriveSummary.split(",").mapNotNull { it.toDoubleOrNull() }
+        if (prev.size != 6 || startPos.size != 2 || endLat == null || endLon == null) return
+        val prevStartMs = prev[0].toLong()
+        val prevEndMs = prev[1].toLong()
+        val gapMin = (startedAtMs - prevEndMs) / 60000.0
+        if (gapMin < GAS_MIN_GAP_MIN || gapMin > GAS_MAX_GAP_MIN) return
+        val d = FloatArray(1)
+        android.location.Location.distanceBetween(prev[4], prev[5], startPos[0], startPos[1], d)
+        if (d[0] > GAS_SAME_SPOT_M) return
+        android.location.Location.distanceBetween(prev[2], prev[3], endLat, endLon, d)
+        if (d[0] < GAS_PROGRESS_M) return
+        val rightTs = startedAtMs / 1000
+        Notify.post(
+            this, Notify.KIND_GAS_STOP, rightTs.toString(),
+            "Likely gas-stop split",
+            "Two legs ${Math.round(gapMin)} min apart look like one drive — merge them?",
+            "/drive/L${prevStartMs / 1000}"
+        )
     }
 
     /**
@@ -1050,5 +1113,15 @@ class LocationService : Service() {
         // Longest a persisted drive-start mark stays resumable. Past this it can only be a
         // leak (crashed out of a drive without clearing), never a drive still in progress.
         private const val MAX_DRIVE_MS = 12 * 60 * 60 * 1000L
+
+        // Event notifications (P3): what counts as a REAL drive worth prompting about —
+        // mirrors the SPA min-trip gate's spirit (a jitter loop must never nag).
+        private const val REAL_DRIVE_METERS = 800.0
+        private const val REAL_DRIVE_MS = 5 * 60 * 1000L
+        // Native gas-stop pair rules — same numbers as localmerge.js / detail.py.
+        private const val GAS_MIN_GAP_MIN = 4.0
+        private const val GAS_MAX_GAP_MIN = 15.0
+        private const val GAS_SAME_SPOT_M = 500f
+        private const val GAS_PROGRESS_M = 1500f
     }
 }

@@ -46,6 +46,13 @@ object SettingsExport {
         o.put("obd_name", s.obdName)
         o.put("tracking_mode", s.trackingMode)
         o.put("control_token", s.controlToken)
+        // Event notifications (NOTIFICATIONS.md) — a restored phone keeps the kinds the user
+        // opted into, and its digest slot.
+        o.put("notify_drive_complete", s.notifyDriveComplete)
+        o.put("notify_gas_stop", s.notifyGasStop)
+        o.put("notify_digest", s.notifyDigest)
+        o.put("digest_day", s.digestDay)
+        o.put("digest_time", s.digestTime)
         // Backup config rides along so a restored phone keeps backing itself up. The folder
         // URI stays out (its permission grant is per-device — re-pick it); the Drive refresh
         // token IS portable, so Drive backups resume with no re-consent.
@@ -105,6 +112,20 @@ object SettingsExport {
             ControlParse.parseMode(o.optString("tracking_mode"))?.let { s.trackingMode = it; applied++ }
         }
         if (o.has("control_token")) { s.controlToken = o.optString("control_token"); applied++ }
+        var digestChanged = false
+        if (o.has("notify_drive_complete")) {
+            s.notifyDriveComplete = o.optBoolean("notify_drive_complete", s.notifyDriveComplete); applied++
+        }
+        if (o.has("notify_gas_stop")) {
+            s.notifyGasStop = o.optBoolean("notify_gas_stop", s.notifyGasStop); applied++
+        }
+        if (o.has("notify_digest")) {
+            s.notifyDigest = o.optBoolean("notify_digest", s.notifyDigest); digestChanged = true; applied++
+        }
+        if (o.has("digest_day")) { s.digestDay = o.optInt("digest_day", s.digestDay); digestChanged = true; applied++ }
+        if (o.has("digest_time")) { s.digestTime = o.optString("digest_time"); digestChanged = true; applied++ }
+        // Guarded like the backup reschedule below: a restore can run before WorkManager is up.
+        if (digestChanged) runCatching { DigestWorker.reschedule(context, s) }
         var backupChanged = false
         if (o.has("backup_schedule")) { s.backupSchedule = o.optString("backup_schedule"); backupChanged = true; applied++ }
         if (o.has("backup_keep")) { s.backupKeep = o.optInt("backup_keep", s.backupKeep); applied++ }

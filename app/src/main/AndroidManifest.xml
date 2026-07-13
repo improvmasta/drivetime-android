@@ -53,9 +53,12 @@
             android:name="com.google.android.gms.car.application"
             android:resource="@xml/automotive_app_desc" />
 
-        <!-- Launcher = the hybrid shell that hosts the SPA (the app *is* the web app). -->
+        <!-- Launcher = the hybrid shell that hosts the SPA (the app *is* the web app).
+             singleTask: a tapped event notification routes into the RUNNING instance via
+             onNewIntent (NOTIFICATIONS.md P3) instead of stacking a second WebView. -->
         <activity
             android:name=".WebViewActivity"
+            android:launchMode="singleTask"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
