@@ -75,9 +75,9 @@ class Settings(context: Context) {
         set(v) = prefs.edit().putInt("upload_interval_sec", v).apply()
 
     /** Seconds between flushes while **DRIVING** — short, so the dashboard / live ETA
-     *  / Android Auto pane see near-real-time position instead of the battery-friendly
-     *  LIGHT cadence. Foreground UI and charge-connected events also trigger an
-     *  immediate flush regardless of this. */
+     *  see near-real-time position instead of the battery-friendly LIGHT cadence.
+     *  Foreground UI and charge-connected events also trigger an immediate flush
+     *  regardless of this. */
     var drivingUploadIntervalSec: Int
         get() = prefs.getInt("driving_upload_interval_sec", 10)
         set(v) = prefs.edit().putInt("driving_upload_interval_sec", v).apply()

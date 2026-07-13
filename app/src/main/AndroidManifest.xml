@@ -32,7 +32,6 @@
     <uses-permission android:name="android.permission.CAMERA" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
-    <uses-feature android:name="android.hardware.type.automotive" android:required="false" />
     <!-- Motion-onset fast start (significant-motion + accelerometer). Optional: the app
          falls back to the GPS speed backstop on devices without these sensors. -->
     <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="false" />
@@ -45,17 +44,6 @@
         android:label="drivetime"
         android:supportsRtl="true"
         android:theme="@style/Theme.Drivetime">
-
-        <meta-data
-            android:name="androidx.car.app.minCarApiLevel"
-            android:value="1" />
-
-        <!-- REQUIRED for Android Auto to discover the app: the Auto host enumerates apps by
-             this meta-data, not by the CarAppService alone. Its absence is why the app never
-             showed up on the head unit. -->
-        <meta-data
-            android:name="com.google.android.gms.car.application"
-            android:resource="@xml/automotive_app_desc" />
 
         <!-- Launcher = the hybrid shell that hosts the SPA (the app *is* the web app).
              singleTask: a tapped event notification routes into the RUNNING instance via
@@ -179,14 +167,5 @@
             </intent-filter>
         </receiver>
 
-        <!-- Android Auto -->
-        <service
-            android:name=".car.DrivetimeCarAppService"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="androidx.car.app.CarAppService" />
-                <category android:name="androidx.car.app.category.POI" />
-            </intent-filter>
-        </service>
     </application>
 </manifest>

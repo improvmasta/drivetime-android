@@ -2,7 +2,7 @@ package org.jupiterns.drivetime
 
 /**
  * The single source of truth for the drive in progress, written by LocationService and read
- * by the Android Auto screen, the notification, and the SPA's live bar (all one process).
+ * by the notification and the SPA's live bar (all one process).
  * Glanceable, not persisted.
  */
 object LiveState {

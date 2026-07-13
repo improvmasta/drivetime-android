@@ -58,9 +58,13 @@ ongoing drive card — drive-complete, gas-stop, weekly digest, check-engine, tr
 full-data snapshots to a SAF folder and/or the user's own Google Drive (`drivetime/BACKUP.md`).
 `Updater` polls GitHub Releases (and a paired server's `/dl`) for one-tap APK updates.
 `Control` + `ControlReceiver` + `StateBroadcaster` are the routine API (`AUTOMATION.md`).
-`car/DriveScreen` is the Android Auto dashboard — *the host needs both the
-`com.google.android.gms.car.application` meta-data* **and** *the `app-projected` artifact, or
-the app never appears on the head unit.* `Permissions.snapshot`/`checklist` is the one gate
+**Android Auto was removed** (2026-07-13, commit before the first Play upload): Play refuses a
+manifest declaring both the `android.hardware.type.automotive` feature (Automotive OS) and the
+`com.google.android.gms.car.application` meta-data (Auto). Dropping the stray automotive line
+would have kept Auto, but a declared `CarAppService` makes this an Auto app in review's eyes
+and we have no head unit to verify it against — so `car/`, the meta-data, `automotive_app_desc`,
+and both `androidx.car.app` artifacts came out. Restore from git if it earns its keep later; do
+**not** re-add the automotive `uses-feature` line with it. `Permissions.snapshot`/`checklist` is the one gate
 every "can we log right now?" question goes through — the warning banner, the wizard, the start
 path, and `Watchdog` all read it, so they can never disagree.
 

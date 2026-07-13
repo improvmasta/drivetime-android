@@ -753,7 +753,7 @@ class WebViewActivity : AppCompatActivity() {
 
         /**
          * Stamp a marker from the SPA's own Mark button, through the SAME service path the
-         * notification and Android Auto use. One writer: otherwise an in-app mark would land
+         * notification uses. One writer: otherwise an in-app mark would land
          * in IndexedDB without ever reaching [LiveState.markerCount], and the notification's
          * "since #N" would disagree with the live bar's — the two surfaces the driver checks
          * against each other. The SPA then drains it back out of the buffer like any other.

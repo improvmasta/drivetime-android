@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Speedometer glyph (Material "speed"). Shared by the notification speed tile and the
-     Android Auto grid; tint applied at the use site. -->
+<!-- Speedometer glyph (Material "speed"). Used by the notification speed tile;
+     tint applied at the use site. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"

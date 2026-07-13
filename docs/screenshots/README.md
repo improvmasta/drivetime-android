@@ -15,6 +15,5 @@ roughly 1080×2400. Keep any real addresses out of frame, or rename the places f
 | `commute.png` | A route comparison: the fork table with a ★ on the fastest way | The thing no other tracker does |
 | `setup.png` | The first-run wizard — the welcome hero or the permissions checklist | Shows how little setup there is |
 
-Nice-to-haves if you're taking more anyway: the Android Auto dashboard (shot from the head
-unit), the notification centre with a couple of pending items, and the ongoing drive
-notification on the lock screen.
+Nice-to-haves if you're taking more anyway: the notification centre with a couple of pending
+items, and the ongoing drive notification on the lock screen.

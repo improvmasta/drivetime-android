@@ -66,8 +66,8 @@ object Control {
         "onset_speed_mps", "onset_accel_rms",
     )
 
-    /** Convenience for callers that only have an action string (Android Auto pane,
-     *  activity-recognition receiver). The optional [source] tags the resulting
+    /** Convenience for callers that only have an action string (the activity-recognition
+     *  receiver, a routine broadcast). The optional [source] tags the resulting
      *  STATE_CHANGED so a routine can distinguish, say, an activity-recognition
      *  auto-start from a user shortcut. */
     fun apply(context: Context, action: String?, source: String? = null): String {

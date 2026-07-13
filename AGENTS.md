@@ -57,8 +57,11 @@ ongoing drive card (drive-complete, gas-stop, weekly digest, check-engine, track
 `BackupStore`/`BackupWorker`/`DriveClient` take scheduled full-data snapshots to a SAF folder
 and/or the user's own Google Drive. `Updater` polls GitHub Releases for one-tap APK updates.
 `Control` + `ControlReceiver` + `StateBroadcaster` are the routine API (`AUTOMATION.md`).
-`car/DriveScreen` is the Android Auto dashboard. `Permissions.snapshot`/`checklist` is the one
-gate every "can we log right now?" question goes through.
+**Android Auto was removed** before the first Play upload — Play rejects a manifest carrying
+both the `automotive` feature and the Auto meta-data, and an Auto app draws review scrutiny we
+can't verify without a head unit. Don't re-add it casually; git has it.
+`Permissions.snapshot`/`checklist` is the one gate every "can we log right now?" question goes
+through.
 
 ## The web assets are generated — never hand-edit them
 

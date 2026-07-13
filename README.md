@@ -98,11 +98,6 @@ maintenance log that writes itself.
 Register each vehicle by its Bluetooth or its VIN and drivetime files every drive against
 the right one automatically — so the work truck's miles and the family car's miles never mix.
 
-🚘 **Rides on your dashboard.**
-drivetime speaks **Android Auto** — a glanceable grid dashboard (speed, miles, elapsed,
-marks, plus RPM and battery with a dongle) with one-tap **Mark** while you drive, and a
-"leave by" card when you're parked so you're never late.
-
 🔔 **Tells you what needs attention.** *(optional — it asks first, and stays quiet if you say no)*
 A quiet notification when a drive lands, ready to tag. A heads-up when a gas stop split one
 drive into two so you can merge them back. A weekly nudge about untagged miles. Every one of
