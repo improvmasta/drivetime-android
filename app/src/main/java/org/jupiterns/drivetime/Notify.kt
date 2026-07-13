@@ -10,31 +10,54 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.content.ContextCompat
+import androidx.work.WorkManager
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.abs
 
 /**
- * Event notifications (NOTIFICATIONS.md P3) — "drive completed, tag it", "gas-stop split
- * detected", and (P4) the weekly digest. Distinct from the logger's ongoing drive card:
- * these are one-shot, tappable, and **all default OFF** ([Settings.notifyDriveComplete] etc.).
+ * **Every** notification the app posts except the logger's ongoing drive card, which is a
+ * different animal (persistent, foreground-service-bound, always on).
+ *
+ * Two families share this one door:
+ *  - **Decision prompts** (NOTIFICATIONS.md P3/P4) — "drive completed, tag it", "gas-stop
+ *    split detected", the weekly digest. One-shot, tappable, and **default OFF**.
+ *  - **Health alerts** (P5) — [KIND_CHECK_ENGINE] and [KIND_TRACKING_HEALTH]. These used to
+ *    post themselves from LocationService and Watchdog, each inventing its own channel, id
+ *    scheme, and (non-)retraction. They now come through here, which is what buys them a
+ *    channel in the group, a toggle, a deep link, and honest retraction.
  *
  * One OS channel per kind, so the system's own channel controls map 1:1 to the app's
  * toggles. [post] is the single gate: it silently no-ops unless the kind's toggle is on AND
  * notifications are actually postable, so callers never need to pre-check.
  *
- * **Retraction:** the SPA pushes its pending-attention snapshot over the bridge once per
- * sync tick ([setPendingAttention]). Every posted notification is remembered here, and any
- * whose item the SPA no longer produces — the drive got tagged/merged, the pair dismissed —
- * is cancelled. Matching is by timestamp with [MATCH_TOLERANCE_SEC] slack, because native
- * stamps a drive's start at tier-detection time while the SPA's segmenter reads it off the
- * first fix; the two can differ by a few seconds.
+ * **Retraction** happens two ways, because the two families know different things:
+ *  - The decision prompts are retracted by the SPA, which pushes its pending-attention
+ *    snapshot over the bridge once per sync tick ([setPendingAttention]). Every posted
+ *    notification is remembered here, and any whose item the SPA no longer produces — the
+ *    drive got tagged/merged, the pair dismissed — is cancelled. Matching is by timestamp
+ *    with [MATCH_TOLERANCE_SEC] slack, because native stamps a drive's start at
+ *    tier-detection time while the SPA's segmenter reads it off the first fix; the two can
+ *    differ by a few seconds.
+ *  - The health alerts are retracted by their own producer, which is the only thing that
+ *    knows the fact: LocationService cancels a trouble code the moment the dongle stops
+ *    reporting it, and the bridge cancels the kill warning when the user acknowledges it.
+ *    Nothing about a DTC is visible to the SPA's replica, so routing these through the
+ *    attention push would be inventing a fact the SPA does not have.
  */
 object Notify {
 
     const val KIND_DRIVE_COMPLETE = "drive_complete"
     const val KIND_GAS_STOP = "gas_stop"
     const val KIND_WEEKLY_DIGEST = "weekly_digest"
+    /** Channel id deliberately unchanged from LocationService's old ad-hoc `ALERT_CHANNEL`,
+     *  so a user who already silenced or tuned check-engine alerts keeps that setting. */
+    const val KIND_CHECK_ENGINE = "check_engine"
+    const val KIND_TRACKING_HEALTH = "tracking_health"
+
+    /** The kill warning is a singleton — one "we lost your drives" at a time, replaced in
+     *  place rather than stacked, and cancelled by this id when the user acknowledges it. */
+    const val HEALTH_ID = "1"
 
     /** Native drive boundaries vs the SPA's segmented ones: same drive, seconds apart. */
     const val MATCH_TOLERANCE_SEC = 180L
@@ -46,6 +69,17 @@ object Notify {
     private const val KEY_POSTED = "posted"
     private const val POSTED_CAP = 40
 
+    /** Ad-hoc channels the pre-P5 producers created for themselves. Deleted on sight: nothing
+     *  posts to them any more, and leaving them behind would strand both an orphan row in the
+     *  OS channel list and any notification still sitting on one (which no code could cancel,
+     *  since the ids that addressed them are gone too). */
+    private val RETIRED_CHANNELS = listOf("alerts", "drivetime-health")
+
+    /** The retired server-poll AlertWorker's unique work. Cancelled by NAME (the class is
+     *  gone) so a phone upgrading from an older APK stops waking every 15 minutes to poll an
+     *  endpoint it no longer needs — check-engine is read straight off the dongle now. */
+    private const val RETIRED_ALERT_WORK = "drivetime-alerts"
+
     private fun prefs(ctx: Context) =
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -54,11 +88,18 @@ object Notify {
 
     private fun notifId(kind: String, id: String) = (kind + id).hashCode()
 
-    /** The per-kind master toggle — every kind ships default OFF. */
+    /**
+     * The per-kind master toggle. Every *decision prompt* ships default OFF (they are nags,
+     * and the app should be quiet until asked). The two health alerts keep the defaults they
+     * already had before P5 folded them in here: check-engine off (it is meaningless without
+     * a paired dongle), tracking-health **on** — see [Settings.notifyTrackingHealth].
+     */
     fun enabledFor(s: Settings, kind: String): Boolean = when (kind) {
         KIND_DRIVE_COMPLETE -> s.notifyDriveComplete
         KIND_GAS_STOP -> s.notifyGasStop
         KIND_WEEKLY_DIGEST -> s.notifyDigest
+        KIND_CHECK_ENGINE -> s.alertsEnabled
+        KIND_TRACKING_HEALTH -> s.notifyTrackingHealth
         else -> false
     }
 
@@ -79,23 +120,35 @@ object Notify {
         // never creates its channel on an install that already has the older ones — and
         // notifying on a channel that doesn't exist is silently dropped.
         m.createNotificationChannelGroup(NotificationChannelGroup(GROUP_ID, "Events"))
-        for ((id, name) in listOf(
-            KIND_DRIVE_COMPLETE to "Drive completed",
-            KIND_GAS_STOP to "Gas-stop detected",
-            KIND_WEEKLY_DIGEST to "Weekly digest",
+        // A decision prompt is DEFAULT (it can wait for the next glance at the phone); a
+        // health alert is HIGH (a fault light and a tracker the OS killed are both "you are
+        // losing data right now" — they earn the heads-up).
+        for ((id, spec) in listOf(
+            KIND_DRIVE_COMPLETE to ("Drive completed" to NotificationManager.IMPORTANCE_DEFAULT),
+            KIND_GAS_STOP to ("Gas-stop detected" to NotificationManager.IMPORTANCE_DEFAULT),
+            KIND_WEEKLY_DIGEST to ("Weekly digest" to NotificationManager.IMPORTANCE_DEFAULT),
+            KIND_CHECK_ENGINE to ("Check-engine alerts" to NotificationManager.IMPORTANCE_HIGH),
+            KIND_TRACKING_HEALTH to ("Tracking health" to NotificationManager.IMPORTANCE_HIGH),
         )) {
-            val ch = NotificationChannel(id, name, NotificationManager.IMPORTANCE_DEFAULT)
+            val ch = NotificationChannel(id, spec.first, spec.second)
             ch.group = GROUP_ID
             m.createNotificationChannel(ch)
         }
+        for (old in RETIRED_CHANNELS) runCatching { m.deleteNotificationChannel(old) }
+    }
+
+    /** One-shot cleanup for phones upgrading across P5: drop the retired poll's background
+     *  work. Safe to call repeatedly (cancelling unknown unique work is a no-op). */
+    fun cancelRetiredAlertPoll(ctx: Context) {
+        runCatching { WorkManager.getInstance(ctx).cancelUniqueWork(RETIRED_ALERT_WORK) }
     }
 
     /**
      * Post one event notification. No-op (false) unless [kind]'s toggle is on and
-     * POST_NOTIFICATIONS is granted. [id] is the item's stable key (a drive's start_ts, a
-     * pair's right_ts — epoch seconds as a string): it dedupes re-posts (same notif id) and
-     * is what [setPendingAttention]'s retraction matches against. Tapping deep-links the
-     * SPA to [route] via the `dt_route` extra.
+     * POST_NOTIFICATIONS is granted. [id] is the item's stable key — a drive's start_ts, a
+     * pair's right_ts (epoch seconds as a string), a DTC code, [HEALTH_ID] for the singleton
+     * kill warning. It dedupes re-posts (same notif id) and is what retraction addresses.
+     * Tapping deep-links the SPA to [route] via the `dt_route` extra.
      */
     fun post(ctx: Context, kind: String, id: String, title: String, body: String, route: String): Boolean {
         val s = Settings(ctx)
@@ -176,6 +229,10 @@ object Notify {
                 // The digest isn't about one drive: it stands until the backlog is empty, so
                 // tagging the last untagged drive clears last week's digest from the shade.
                 KIND_WEEKLY_DIGEST -> att.untagged > 0
+                // The health alerts are none of the SPA's business — its replica has no idea
+                // whether a trouble code is still standing or the logger is running. Their
+                // own producers retract them; the attention push must never touch them.
+                KIND_CHECK_ENGINE, KIND_TRACKING_HEALTH -> true
                 else -> true
             }
             if (!still) {

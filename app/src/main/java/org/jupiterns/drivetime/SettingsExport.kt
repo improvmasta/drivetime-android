@@ -53,6 +53,7 @@ object SettingsExport {
         o.put("notify_digest", s.notifyDigest)
         o.put("digest_day", s.digestDay)
         o.put("digest_time", s.digestTime)
+        o.put("notify_tracking_health", s.notifyTrackingHealth)
         // Backup config rides along so a restored phone keeps backing itself up. The folder
         // URI stays out (its permission grant is per-device — re-pick it); the Drive refresh
         // token IS portable, so Drive backups resume with no re-consent.
@@ -100,8 +101,8 @@ object SettingsExport {
             val v = o.optBoolean("alerts_enabled", s.alertsEnabled)
             s.alertsEnabled = v
             // On-device alerts now — no worker to schedule; drop any legacy server poll.
-            // Guarded: a restore can run before WorkManager is initialized (BackupStore).
-            runCatching { AlertWorker.cancel(context) }
+            // (Notify guards it: a restore can run before WorkManager is initialized.)
+            Notify.cancelRetiredAlertPoll(context)
             applied++
         }
         if (o.has("car_bt_mac")) { s.carBtMac = o.optString("car_bt_mac"); applied++ }
@@ -124,6 +125,9 @@ object SettingsExport {
         }
         if (o.has("digest_day")) { s.digestDay = o.optInt("digest_day", s.digestDay); digestChanged = true; applied++ }
         if (o.has("digest_time")) { s.digestTime = o.optString("digest_time"); digestChanged = true; applied++ }
+        if (o.has("notify_tracking_health")) {
+            s.notifyTrackingHealth = o.optBoolean("notify_tracking_health", s.notifyTrackingHealth); applied++
+        }
         // Guarded like the backup reschedule below: a restore can run before WorkManager is up.
         if (digestChanged) runCatching { DigestWorker.reschedule(context, s) }
         var backupChanged = false

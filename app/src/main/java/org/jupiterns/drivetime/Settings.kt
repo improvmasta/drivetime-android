@@ -206,7 +206,21 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("notif_driving_only", false)
         set(v) = prefs.edit().putBoolean("notif_driving_only", v).apply()
 
-    // ---- event notifications (NOTIFICATIONS.md P3) — all default OFF ----
+    /**
+     * Post the watchdog's "tracking was interrupted" warning ([Notify.KIND_TRACKING_HEALTH]).
+     *
+     * The one pref here that defaults **ON**, and deliberately so: this notification reports
+     * the app failing at its single most important job (*never silently stop logging*). A
+     * user who never learns the OEM battery manager killed the tracker just finds a mystery
+     * hole in the trip log weeks later, which is the exact outcome the watchdog exists to
+     * prevent — so defaulting it off would make the app complicit in its own worst failure.
+     * It is an error report, not a nag, and it fires at most once per kill episode.
+     */
+    var notifyTrackingHealth: Boolean
+        get() = prefs.getBoolean("notify_tracking_health", true)
+        set(v) = prefs.edit().putBoolean("notify_tracking_health", v).apply()
+
+    // ---- event notifications (NOTIFICATIONS.md P3) — decision prompts, all default OFF ----
 
     /** Post a system notification when a drive seals still untagged ("drive completed —
      *  tag it"). Fires 16 min after drive end via [DriveCompleteWorker]. */

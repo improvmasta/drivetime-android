@@ -812,6 +812,7 @@ class WebViewActivity : AppCompatActivity() {
                 .put("notify_drive_complete", settings.notifyDriveComplete)
                 .put("notify_gas_stop", settings.notifyGasStop)
                 .put("notify_digest", settings.notifyDigest)
+                .put("notify_tracking_health", settings.notifyTrackingHealth)
                 .put("digest_day", settings.digestDay)
                 .put("digest_time", settings.digestTime)
                 .put("control_token", settings.controlToken)
@@ -843,6 +844,10 @@ class WebViewActivity : AppCompatActivity() {
                 .put("oemAdvice", oem.advice)
                 .put("conn", syncStatus.connStatus())
                 .put("killWarning", syncStatus.killWarning() ?: JSONObject.NULL)
+                // Standing trouble codes (NOTIFICATIONS.md P5). The dongle is the only thing
+                // that knows these and nothing replicates them, so the notification centre
+                // gets its check-engine row from here rather than from the replica.
+                .put("dtcs", JSONArray(settings.knownDtcs.sorted()))
                 .put("test", JSONObject().put("msg", lastTestMsg).put("kind", lastTestKind))
                 .toString()
         }.getOrDefault("{}")
@@ -877,6 +882,17 @@ class WebViewActivity : AppCompatActivity() {
                         value.toBooleanStrictOrNull() ?: settings.notifyDriveComplete
                     "notify_gas_stop" -> settings.notifyGasStop =
                         value.toBooleanStrictOrNull() ?: settings.notifyGasStop
+                    // Health alerts (P5). Turning the kill warning OFF also clears one that
+                    // is already in the shade — a toggle that leaves its own notification
+                    // sitting there reads as broken.
+                    "notify_tracking_health" -> {
+                        settings.notifyTrackingHealth =
+                            value.toBooleanStrictOrNull() ?: settings.notifyTrackingHealth
+                        if (!settings.notifyTrackingHealth) {
+                            Notify.cancel(
+                                this@WebViewActivity, Notify.KIND_TRACKING_HEALTH, Notify.HEALTH_ID)
+                        }
+                    }
                     // The digest keys own a scheduled worker, so each write re-arms it (the
                     // backup_schedule precedent above).
                     "notify_digest" -> {
@@ -944,9 +960,21 @@ class WebViewActivity : AppCompatActivity() {
         @JavascriptInterface
         fun openOemPage() { ui.post { OemBatteryLinks.openProtectedAppsPage(this@WebViewActivity) } }
 
-        /** Stop nagging about the last suspected OEM kill (Tracking tab dismiss). */
+        /**
+         * Acknowledge the last suspected OEM kill — the Tracking-tab dismiss, and (P5) the
+         * notification centre's X on the `tracking_interrupted` notice.
+         *
+         * This is the kill warning's ONE dismissal, and it is deliberately per-episode: the
+         * ack is a timestamp, so the *next* kill (a later `lastKillDetectedAt`) raises the
+         * warning again. It also cancels the posted notification, so acknowledging in the app
+         * clears the shade — the two halves must never disagree about whether the user has
+         * seen this.
+         */
         @JavascriptInterface
-        fun dismissKillWarning() { settings.killAcknowledgedAt = System.currentTimeMillis() }
+        fun dismissKillWarning() {
+            settings.killAcknowledgedAt = System.currentTimeMillis()
+            Notify.cancel(this@WebViewActivity, Notify.KIND_TRACKING_HEALTH, Notify.HEALTH_ID)
+        }
 
         // ---- event notifications + deep-linking (NOTIFICATIONS.md P3) ----
 

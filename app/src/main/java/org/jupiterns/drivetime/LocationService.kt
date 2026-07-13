@@ -859,42 +859,33 @@ class LocationService : Service() {
     }
 
     /**
-     * Fire a check-engine notification the instant the dongle reports a trouble code we
-     * haven't already flagged — fully on-device, no server round-trip. The remembered set is
-     * replaced with the current codes each read, so a fault that clears drops out and its
-     * later return alerts again. Reading DTCs but leaving [Settings.alertsEnabled] off still
-     * updates the set, so enabling it later doesn't dump every standing code at once.
+     * Reconcile the dongle's trouble codes against the ones we've already flagged, and let
+     * [Notify] carry the difference both ways — fully on-device, no server round-trip.
+     *
+     * A code that APPEARS alerts. A code that CLEARS retracts its own notification: this is
+     * the only place that knows a fault went away (the SPA's replica has no idea a car has a
+     * check-engine light), so leaving the shade to time out on its own would strand a red
+     * warning for a fault the driver already fixed. The remembered set is replaced wholesale
+     * each read, so a fault that clears and returns alerts again.
+     *
+     * [Notify.post] is itself gated on [Settings.alertsEnabled], so a reader with alerts off
+     * still just updates the set — enabling them later doesn't dump every standing code at
+     * once.
      */
     private fun maybeAlertDtcs(codes: List<String>) {
         val cur = codes.toSet()
         val prev = settings.knownDtcs
         if (cur == prev) return
-        if (settings.alertsEnabled) {
-            for (code in cur) if (code !in prev) postDtcAlert(code)
+        for (code in cur - prev) {
+            Notify.post(
+                this, Notify.KIND_CHECK_ENGINE, code,
+                "Check engine: $code",
+                "Your vehicle reported a diagnostic trouble code.",
+                "/settings",
+            )
         }
+        for (code in prev - cur) Notify.cancel(this, Notify.KIND_CHECK_ENGINE, code)
         settings.knownDtcs = cur
-    }
-
-    private fun postDtcAlert(code: String) {
-        val mgr = getSystemService(NotificationManager::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-            mgr.getNotificationChannel(ALERT_CHANNEL) == null) {
-            mgr.createNotificationChannel(
-                NotificationChannel(ALERT_CHANNEL, "Check-engine alerts", NotificationManager.IMPORTANCE_HIGH))
-        }
-        val open = PendingIntent.getActivity(
-            this, 0, Intent(this, WebViewActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val n = Notification.Builder(this, ALERT_CHANNEL)
-            .setSmallIcon(R.drawable.ic_notif_driving)
-            .setColor(getColor(R.color.status_red))
-            .setContentTitle("Check engine: $code")
-            .setContentText("Your vehicle reported a diagnostic trouble code.")
-            .setContentIntent(open)
-            .setAutoCancel(true)
-            .build()
-        mgr.notify(ALERT_NOTIF_BASE + (code.hashCode() and 0xffff), n)
-        EventLog.info("Check-engine alert: $code")
     }
 
     private fun servicePi(action: String, code: Int): PendingIntent {
@@ -1070,12 +1061,6 @@ class LocationService : Service() {
         /** IMPORTANCE_MIN twin of [CHANNEL]: same notification id, no status-bar icon, used
          *  while idle when `notif_driving_only` is on. */
         private const val IDLE_CHANNEL = "drive_idle"
-        /** IMPORTANCE_HIGH channel for on-device check-engine alerts (distinct from the
-         *  ongoing tracking notification, so the user can tune/silence each separately). */
-        private const val ALERT_CHANNEL = "check_engine"
-        /** Base id for DTC notifications; one stable id per code (base + code hash) so the
-         *  same standing fault re-posts in place instead of stacking. */
-        private const val ALERT_NOTIF_BASE = 2000
         private const val NOTIF_ID = 1
         /** How long "Marked #3" replaces the stats line before it falls back. */
         private const val FLASH_MS = 3_000L

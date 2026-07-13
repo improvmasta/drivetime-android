@@ -48,6 +48,6 @@ class BootReceiver : BroadcastReceiver() {
         // landing between two fires would otherwise leave pointing at a stale slot.
         runCatching { DigestWorker.reschedule(context, s) }
         // Check-engine alerts are on-device now; retire any legacy server-poll worker.
-        AlertWorker.cancel(context)
+        Notify.cancelRetiredAlertPoll(context)
     }
 }

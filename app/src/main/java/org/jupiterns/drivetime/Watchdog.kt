@@ -1,12 +1,6 @@
 package org.jupiterns.drivetime
 
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.Context
-import android.content.Intent
-import android.os.Build
-import androidx.core.app.NotificationCompat
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.Worker
@@ -69,36 +63,29 @@ class Watchdog(ctx: Context, params: WorkerParameters) : Worker(ctx, params) {
         return Result.success()
     }
 
+    /**
+     * Say it, once per episode, through [Notify] — which gives this the same channel group,
+     * toggle ([Settings.notifyTrackingHealth]) and deep link every other notification has,
+     * instead of the ad-hoc channel it used to build for itself.
+     *
+     * The route matters: the notification's whole job is to get the user to the setting that
+     * stops it happening again, and the Settings → Tracking tab is where the OEM-battery
+     * banner and its fix instructions live. Acknowledging it there cancels this (the bridge's
+     * `dismissKillWarning`), so the shade agrees with the app.
+     */
     private fun notifyKill(minutes: Long) {
-        val ctx = applicationContext
-        val mgr = ctx.getSystemService(NotificationManager::class.java) ?: return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-            mgr.getNotificationChannel(HEALTH_CHANNEL) == null) {
-            mgr.createNotificationChannel(
-                NotificationChannel(
-                    HEALTH_CHANNEL, "Tracking health", NotificationManager.IMPORTANCE_HIGH))
-        }
-        val open = PendingIntent.getActivity(
-            ctx, 0, Intent(ctx, WebViewActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val n = NotificationCompat.Builder(ctx, HEALTH_CHANNEL)
-            .setSmallIcon(android.R.drawable.ic_dialog_alert)
-            .setContentTitle("Drive tracking was interrupted")
-            .setContentText("No GPS for ~${minutes} min — drives in that window are missing.")
-            .setStyle(NotificationCompat.BigTextStyle().bigText(
-                "No GPS was recorded for ~${minutes} minutes — your phone likely stopped the " +
+        Notify.post(
+            applicationContext, Notify.KIND_TRACKING_HEALTH, Notify.HEALTH_ID,
+            "Drive tracking was interrupted",
+            "No GPS was recorded for ~$minutes minutes — your phone likely stopped the " +
                 "tracker to save battery, and any drives in that window are missing. " +
-                "Open Settings → Access & battery to keep it running."))
-            .setContentIntent(open)
-            .setAutoCancel(true)
-            .build()
-        runCatching { mgr.notify(KILL_NOTIF_ID, n) }
+                "Open Settings → Access & battery to keep it running.",
+            "/settings",
+        )
     }
 
     companion object {
         private const val WORK = "drivetime-watchdog"
-        private const val HEALTH_CHANNEL = "drivetime-health"
-        private const val KILL_NOTIF_ID = 7401
 
         /** Below this gap, a missing-service window is "OK, you swiped or rebooted";
          *  above it, treat it as a silent kill that warrants the OEM warning. 20 min
