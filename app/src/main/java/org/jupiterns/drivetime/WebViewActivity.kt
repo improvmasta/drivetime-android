@@ -15,6 +15,7 @@ import android.provider.MediaStore
 import android.widget.Toast
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.View
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
@@ -82,6 +83,11 @@ class WebViewActivity : AppCompatActivity() {
     private val ui = Handler(Looper.getMainLooper())
 
     private var loadedOnce = false
+
+    // Double-tap-to-exit guard: timestamp of the last unhandled BACK on the home tab. A
+    // second press within EXIT_CONFIRM_MS backgrounds the app; otherwise we just toast.
+    private var lastBackAt = 0L
+    private val EXIT_CONFIRM_MS = 2000L
 
     // Native-action plumbing (moved here from the retired LoggerActivity). These need an
     // Activity + the ActivityResult APIs, so they can't live in the WebView — the Settings
@@ -236,12 +242,23 @@ class WebViewActivity : AppCompatActivity() {
         // Hardware back is owned by the SPA: it closes an open sheet/dialog, then exits a
         // multi-select, then returns to the first tab from anywhere else. Only when the SPA
         // has nothing left to handle (home tab, nothing open) do we act — and even then we
-        // background the app rather than finish it, so BACK never closes drivetime.
+        // never leave on a single press: the first back shows a "press again to exit" toast,
+        // and only a second press within the window backgrounds the app. So a stray BACK on
+        // the home tab can't make drivetime vanish.
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 b.webview.evaluateJavascript(
                     "(typeof window.__dtHandleBack==='function') ? window.__dtHandleBack() : false"
-                ) { res -> if (res != "true") moveTaskToBack(true) }
+                ) { res ->
+                    if (res == "true") return@evaluateJavascript
+                    val now = SystemClock.elapsedRealtime()
+                    if (now - lastBackAt < EXIT_CONFIRM_MS) {
+                        moveTaskToBack(true)
+                    } else {
+                        lastBackAt = now
+                        Toast.makeText(this@WebViewActivity, "Press back again to exit", Toast.LENGTH_SHORT).show()
+                    }
+                }
             }
         })
 
