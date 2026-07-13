@@ -125,7 +125,11 @@ dependencies {
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.robolectric:robolectric:4.13")
+    // Robolectric picks its android-all jar from targetSdk, so it moves WITH the toolchain:
+    // 4.13 has no jar for SDK 35 and every Robolectric test dies at init (DefaultSdkPicker
+    // → IllegalArgumentException), which is not an assertion failure and reads nothing like
+    // one. 4.16 carries both 35 and 36, so the August targetSdk 36 bump won't re-break it.
+    testImplementation("org.robolectric:robolectric:4.16.1")
     testImplementation("androidx.test:core:1.6.1")
     testImplementation("androidx.test.ext:junit:1.2.1")
 }

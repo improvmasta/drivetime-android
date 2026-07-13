@@ -178,6 +178,10 @@ real coverage. There is no device on the dev host, so CI *is* the safety net.
 
 The toolchain moves as a unit: **compileSdk 36 needs AGP ≥ 8.9.1, and AGP 8.10 needs Gradle
 ≥ 8.11.1** (CI generates the wrapper). Bumping one without the other fails at configuration.
+**Robolectric is part of that unit** — it picks its `android-all` jar from *targetSdk*, so a
+version with no jar for the new level fails every Robolectric test with `initializationError`
+(`DefaultSdkPicker`), which looks like a broken test and is really a stale dependency. 4.13 had
+no SDK 35 jar; we run 4.16.1, which covers 35 and 36.
 
 `ship.sh` here is intentionally leaner than the generic `/home/lindsay/scripts/ship.sh` (no
 ship log to stamp, no local build to gate on); CI plus `--watch` are the pre-publish gate.
