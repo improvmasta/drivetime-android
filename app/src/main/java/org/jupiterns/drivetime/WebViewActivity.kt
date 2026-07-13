@@ -17,6 +17,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.view.View
+import android.view.WindowManager
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
@@ -1053,6 +1054,20 @@ class WebViewActivity : AppCompatActivity() {
             }.onFailure { EventLog.warn("setVehicleBtMacs failed: ${it.message}") }
         }
 
+        /** Hold the screen awake while the live-drive HUD asks for it (its "Keep screen on"
+         *  toggle) — a phone mounted on the dash is useless if it sleeps mid-drive.
+         *  FLAG_KEEP_SCREEN_ON is scoped to this window: it needs no wake-lock permission, and
+         *  it lapses the moment the activity leaves the foreground, so a forgotten toggle can
+         *  never strand the screen on behind another app. The SPA drops it when the drive ends. */
+        @JavascriptInterface
+        fun setKeepScreenOn(on: Boolean) {
+            ui.post {
+                val w = this@WebViewActivity.window
+                if (on) w.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                else w.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+        }
+
         /** Launch the QR pairing scanner (Sync tab). */
         @JavascriptInterface
         fun scanPairingQr() { ui.post { startPairScan() } }
@@ -1276,6 +1291,12 @@ class WebViewActivity : AppCompatActivity() {
                 .put("logging", s.logging)
                 .put("tier", s.tier ?: JSONObject.NULL)
                 .put("driving", s.tier == "DRIVING")
+                // The drive's signal light. `driving` means "a drive is in progress" (it survives
+                // a red light and a gas pump); `moving` is whether the wheels are turning right
+                // now, and `stopped_since` (epoch seconds, 0 while moving) lets the HUD count the
+                // current stop up live rather than guess at it.
+                .put("moving", s.moving)
+                .put("stopped_since", if (s.stoppedSince > 0L) s.stoppedSince / 1000 else 0L)
                 .put("reason", s.driveReason ?: JSONObject.NULL)
                 // Epoch *seconds* (0 = not driving), the same unit as a buffered fix's `ts`, so
                 // the SPA can anchor the live bar to the real drive start with no unit juggling.

@@ -519,6 +519,10 @@ class LocationService : Service() {
         val speed = if (loc.hasSpeed()) loc.speed else 0f
         movingHint = speed >= MOVING_MPS
         detector.onSpeed(speed, System.currentTimeMillis())
+        // The drive's signal light — green moving, red stopped — plus when the stop began, so
+        // the card and the HUD can both count it up. A drive sitting at a pump says so.
+        LiveState.moving = detector.isMoving
+        LiveState.stoppedSince = detector.stoppedSince
         reevaluate()
         if (currentTier == DriveDetector.Tier.DRIVING) adaptSampling(loc)
         // Coalesce the drive-card redraw: only re-post when a value the card actually shows has
@@ -591,8 +595,17 @@ class LocationService : Service() {
                     main.post { reevaluate(); StateBroadcaster.emit(this@LocationService, "obd") }
                     var ticks = 0
                     var loggedSample = false
-                    while (isActive && client.isConnected()) {
+                    // Leave when we're parked, not just when the socket dies. An OBD-II port is
+                    // permanently powered, so `isConnected()` stays true with the ignition off —
+                    // this loop used to spin forever on a key-off dongle, which both kept
+                    // `obdConnected` (and therefore DRIVING) pinned and polled a dead ECU for
+                    // hours. Dropping the link runs the `finally` below, which clears both.
+                    while (isActive && client.isConnected() && !detector.isParked) {
                         val s = client.readSample()
+                        // rpm is the ONLY thing that distinguishes "engine running" from "dongle
+                        // still plugged into a parked car" — the detector needs it to know that
+                        // idling at a light is not the same as sitting in a parking lot.
+                        detector.engineRunning = (s.rpm ?: 0) > 0
                         // Log the first decoded sample so we can confirm PIDs are parsing
                         // (not just connecting) without watching live.
                         if (!loggedSample) {
@@ -627,6 +640,7 @@ class LocationService : Service() {
                     obd?.close(); obd = null
                     latestObd = null
                     detector.obdConnected = false
+                    detector.engineRunning = false
                     LiveState.obdConnected = false
                     main.post {
                         reevaluate()
@@ -652,8 +666,14 @@ class LocationService : Service() {
         }
     }
 
+    /** Only probe when there's reason to think we're in a *running* car. The `currentTier ==
+     *  DRIVING` arm is what made this self-sustaining: a connected dongle pins DRIVING, and
+     *  DRIVING re-probes the dongle within 5 s of any drop — a closed loop with no exit. Gating
+     *  the whole thing on `!isParked` breaks it; the first moving fix clears `parked` and the
+     *  probe resumes, with nothing to re-acquire because the dongle never went anywhere. */
     private fun shouldProbeObd(): Boolean =
-        detector.carConnected || movingHint || currentTier == DriveDetector.Tier.DRIVING
+        !detector.isParked &&
+            (detector.carConnected || movingHint || currentTier == DriveDetector.Tier.DRIVING)
 
     // ---- Motion-onset (device-agnostic fast start) ----
 
@@ -820,8 +840,11 @@ class LocationService : Service() {
         return "drive:$speed:$miles10:${LiveState.markerCount}:${tierText()}"
     }
 
+    /** Say the honest thing: a drive that is sitting still reads "Stopped", not "Driving". The
+     *  drive is still running underneath (dense sampling and all) — it just isn't moving. */
     private fun tierText(): String = when (currentTier) {
-        DriveDetector.Tier.DRIVING -> "Driving · ${detector.reason()}"
+        DriveDetector.Tier.DRIVING ->
+            if (detector.isMoving) "Driving · ${detector.reason()}" else "Stopped · ${detector.reason()}"
         DriveDetector.Tier.LIGHT -> "Idle"
         DriveDetector.Tier.OFF -> "Off"
     }

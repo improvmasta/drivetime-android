@@ -13,9 +13,19 @@ package org.jupiterns.drivetime
  *   4. **Sustained / high GPS speed** — the backstop when there's no connection
  *      signal (a car with no BT pairing and no dongle).
  *
- * Connection signals (2,3) keep us in DRIVING even at a dead stop (sitting at a
- * light), so a stop never drops the tier. The speed backstop (4) has hysteresis so
- * traffic crawls don't flap, and it only *exits* after a sustained stop.
+ * Connection signals (2,3) hold DRIVING through a dead stop (a red light, a pump), so a stop
+ * never drops the tier — but that hold is BOUNDED by [parked]. It has to be: an OBD-II port is
+ * permanently powered and a car head unit can sit on accessory power, so both stay *connected*
+ * with the ignition off. An unbounded hold therefore pinned DRIVING for as long as the phone
+ * sat in a parking lot, which burned battery, invented phantom drives out of parked GPS drift,
+ * and had the app insisting you were driving when you were sitting still. Connection signals
+ * are for *starting fast*, not for deciding you never stopped.
+ *
+ * Three things are kept deliberately separate here, because collapsing them is what caused
+ * that bug:
+ *   - [isMoving] — are the wheels turning right now? The honest live state; what the UI shows.
+ *   - [tier]     — how fast to sample. Stays DRIVING through a stop, until [parked].
+ *   - the drive session (LocationService.markDriveStart) — ends when the tier leaves DRIVING.
  *
  * The detector owns no Android objects and no threads — callers feed it signal
  * updates and read [tier]; LocationService maps the tier to a sampling rate.
@@ -26,6 +36,32 @@ class DriveDetector(private val settings: Settings) {
 
     @Volatile var carConnected = false
     @Volatile var obdConnected = false
+
+    /** True while the engine is actually turning (OBD rpm > 0), fed by LocationService's OBD
+     *  loop. The dongle keeps its Bluetooth socket long after the ignition is off — rpm is the
+     *  only signal that knows the difference. Always false for the (vast majority of) users with
+     *  no dongle, which is why it can only ever *extend* a hold, never be required to end one. */
+    @Volatile var engineRunning = false
+
+    /** Are the wheels turning right now? Deliberately NOT the tier: sitting at a red light or a
+     *  gas pump is not moving, but it is still a drive. The UI shows this as the drive's signal
+     *  light — green moving, red stopped — so a drive reads honestly second by second while its
+     *  dense sampling and its session carry on underneath. */
+    @Volatile private var moving = false
+    val isMoving: Boolean get() = moving
+
+    /** Wall-clock (ms) of the first stopped fix of the current stop; 0 while moving. The UI
+     *  counts up from this, so "Stopped 0:42" is the real length of the stop — measured from
+     *  when the wheels stopped, not from when the debounce below got around to admitting it. */
+    @Volatile private var stoppedAt = 0L
+    val stoppedSince: Long get() = stoppedAt
+
+    /** Stationary for a full [STOP_MS] with the engine not turning. This is the bound on the
+     *  connection signals — the thing that lets a parked car actually end the drive even though
+     *  the dongle/head unit is still connected. Cleared by the first moving fix, so re-promotion
+     *  is instant: the connection signal never dropped, so there is nothing to re-acquire. */
+    @Volatile private var parked = false
+    val isParked: Boolean get() = parked
 
     /** Set by the motion-onset confirmer in LocationService (significant-motion wake →
      *  instant GPS Doppler + a short accelerometer check). The fast, device-agnostic
@@ -49,17 +85,39 @@ class DriveDetector(private val settings: Settings) {
     private var slowSince = NO_TS
     private var motionSlowSince = NO_TS   // sustained-stop timer for the motion latch
     private var resumeSlowSince = NO_TS   // sustained-stop timer for the resume latch
+    private var stillSince = NO_TS        // debounce timer for the signal light
+    private var parkedSince = NO_TS       // sustained-stop timer for [parked]
 
     /** Feed a GPS speed sample (m/s) to drive the speed backstop. */
     fun onSpeed(mps: Float, now: Long) {
-        // The motion-onset latch clears after the same sustained stop (EXIT_MS) as the
+        val stopped = mps < EXIT_MPS
+
+        // The drive's signal light. It goes green on the first moving fix — no debounce, pulling
+        // away is unambiguous — and red a few seconds into a stop, the delay being only enough
+        // that GPS noise and a crawling queue can't strobe it. In DRIVING we sample every second
+        // or two, so this tracks the real thing about as closely as the fixes allow.
+        if (!stopped) { moving = true; stillSince = NO_TS; stoppedAt = 0L }
+        else {
+            if (stillSince == NO_TS) { stillSince = now; stoppedAt = now }
+            if (now - stillSince >= MOVING_OFF_MS) moving = false
+        }
+
+        // Parked: stationary for a full sustained stop with the engine not turning. Any moving
+        // fix clears it outright — you are demonstrably not parked — so pulling away out of a
+        // gas station re-promotes on the very next fix without waiting on any timer.
+        if (stopped && !engineRunning) {
+            if (parkedSince == NO_TS) parkedSince = now
+            if (now - parkedSince >= STOP_MS) parked = true
+        } else { parkedSince = NO_TS; parked = false }
+
+        // The motion-onset latch clears after the same sustained stop (STOP_MS) as the
         // speed backstop, but independent of driveBySpeed — the onset path has its own
         // master switch, so a user who turned off the speed backstop still gets a clean
         // end to a motion-detected drive.
         if (motionDriving) {
             if (mps < EXIT_MPS) {
                 if (motionSlowSince == NO_TS) motionSlowSince = now
-                if (now - motionSlowSince >= EXIT_MS) { motionDriving = false; motionSlowSince = NO_TS }
+                if (now - motionSlowSince >= STOP_MS) { motionDriving = false; motionSlowSince = NO_TS }
             } else motionSlowSince = NO_TS
         }
         // The resume latch ends the same way — a sustained stop — so a drive resumed across a
@@ -68,7 +126,7 @@ class DriveDetector(private val settings: Settings) {
         if (resumeDriving) {
             if (mps < EXIT_MPS) {
                 if (resumeSlowSince == NO_TS) resumeSlowSince = now
-                if (now - resumeSlowSince >= EXIT_MS) { resumeDriving = false; resumeSlowSince = NO_TS }
+                if (now - resumeSlowSince >= STOP_MS) { resumeDriving = false; resumeSlowSince = NO_TS }
             } else resumeSlowSince = NO_TS
         }
         if (!settings.driveBySpeed) { speedDriving = false; fastSince = NO_TS; slowSince = NO_TS; return }
@@ -82,7 +140,7 @@ class DriveDetector(private val settings: Settings) {
             mps < EXIT_MPS -> {                   // near-stopped: exit only after a sustained stop
                 fastSince = NO_TS
                 if (slowSince == NO_TS) slowSince = now
-                if (now - slowSince >= EXIT_MS) speedDriving = false
+                if (now - slowSince >= STOP_MS) speedDriving = false
             }
             else -> { fastSince = NO_TS; slowSince = NO_TS }  // between thresholds: hold current state
         }
@@ -93,15 +151,19 @@ class DriveDetector(private val settings: Settings) {
         Settings.MODE_OFF -> Tier.OFF
         Settings.MODE_DRIVING -> Tier.DRIVING
         Settings.MODE_LIGHT -> Tier.LIGHT
-        else -> if (carConnected || obdConnected || motionDriving || speedDriving || resumeDriving) Tier.DRIVING else Tier.LIGHT
+        // The connection signals hold the tier through a stop, but only until [parked] — see the
+        // class doc. The speed/motion/resume latches carry their own sustained-stop timers, so
+        // they need no gate here.
+        else -> if (((carConnected || obdConnected) && !parked) || motionDriving || speedDriving || resumeDriving)
+            Tier.DRIVING else Tier.LIGHT
     }
 
     /** Short human reason for the current Driving decision (for the notification/status). */
     fun reason(): String = when {
         settings.trackingMode == Settings.MODE_DRIVING -> "forced"
         settings.trackingMode == Settings.MODE_LIGHT -> "eco"
-        carConnected -> "car BT"
-        obdConnected -> "OBD"
+        carConnected && !parked -> "car BT"
+        obdConnected && !parked -> "OBD"
         motionDriving -> "motion"
         speedDriving -> "speed"
         resumeDriving -> "resumed"
@@ -139,7 +201,18 @@ class DriveDetector(private val settings: Settings) {
         private const val ENTER_MPS = 6.0f        // ~13 mph: driving if sustained for ENTER_MS
         private const val EXIT_MPS = 1.3f         // ~3 mph: near-stopped
         private const val ENTER_MS = 20_000L      // sustained-moderate-speed window to enter
-        private const val EXIT_MS = 180_000L      // sustained stop (3 min) before speed-exit
+
+        /** ONE definition of "a sustained stop", used by every latch and by [parked]: five
+         *  minutes stationary. It is the same five minutes `segment.js`/`detail.py` call a park
+         *  (a 5-minute dwell ends a drive), so the live app, the drive log and the phone's own
+         *  segmentation all agree on what a stop is instead of each having its own opinion. */
+        private const val STOP_MS = 300_000L
+
+        /** How long stationary before the light goes red. This only *labels* — it ends nothing —
+         *  so it is deliberately short: long enough that GPS noise and a crawling queue can't
+         *  strobe the signal, short enough that the drive reads true within a few seconds. */
+        private const val MOVING_OFF_MS = 5_000L
+
         private const val NO_TS = Long.MIN_VALUE  // "timer not started" sentinel (0L is a valid now)
 
         // Motion-onset: below this ground speed nothing vehicular is happening yet (just

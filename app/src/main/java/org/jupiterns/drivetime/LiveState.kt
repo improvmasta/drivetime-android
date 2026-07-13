@@ -11,6 +11,15 @@ object LiveState {
     @Volatile var driveReason: String? = null  // why: "car BT" | "OBD" | "motion" | "speed" | "forced" | "auto"
     @Volatile var onsetState: String? = null   // motion-onset probe: "probing" | "confirmed" | "idle" | null
     @Volatile var speedMph: Int? = null
+
+    /** The drive's signal light. Are the wheels turning right now (DriveDetector.isMoving)?
+     *  Separate from [tier] on purpose: a drive stopped at a pump or a red light is still
+     *  DRIVING (dense sampling, the session continues) but is NOT moving, and the UI must be
+     *  able to say so. [stoppedSince] is the wall-clock (ms) the current stop began — 0 while
+     *  moving — so the HUD can count the stop up live instead of guessing at it. */
+    @Volatile var moving = false
+    @Volatile var stoppedSince = 0L
+
     @Volatile var obdConnected = false
     @Volatile var rpm: Int? = null
     @Volatile var throttle: Double? = null
@@ -52,7 +61,8 @@ object LiveState {
 
     fun clear() {
         tier = null; driveReason = null; onsetState = null
-        speedMph = null; obdConnected = false; rpm = null; throttle = null; coolantC = null; voltage = null
+        speedMph = null; moving = false; stoppedSince = 0L
+        obdConnected = false; rpm = null; throttle = null; coolantC = null; voltage = null
         driveStartedAt = 0L; lat = null; lon = null
         driveMeters = 0.0; markerCount = 0; lastMarkerTs = null; vehicleKey = null
     }
