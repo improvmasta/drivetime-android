@@ -732,7 +732,7 @@ class LocationService : Service() {
                         // on — it only modulates the `parked` latch, which is computed on the
                         // reconciler thread on the next fix. A volatile write is the whole
                         // contract; queueing one per poll would be traffic for nothing.
-                        detector.engineRunning = (s.rpm ?: 0) > 0
+                        detector.engineRunning = ObdSession.engineRunning(s.rpm)
                         // Log the first decoded sample so we can confirm PIDs are parsing
                         // (not just connecting) without watching live.
                         if (!loggedSample) {

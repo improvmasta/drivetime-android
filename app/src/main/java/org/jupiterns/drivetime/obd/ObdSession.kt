@@ -105,6 +105,27 @@ class ObdSession {
             driving: Boolean,
         ): Boolean = !parked && (carConnected || movingHint || driving)
 
+        /**
+         * Is the engine actually turning, on the evidence of one rpm reading?
+         *
+         * Deliberately *not* `rpm > 0`. This is the only OBD signal that feeds a tracking
+         * decision — it is what holds `DriveDetector.parked` off, so an idling car is not
+         * mistaken for a parked one — and it is therefore the only place a bad frame from a
+         * cheap adapter can cost a drive. A turning engine idles somewhere near 600–900 rpm and
+         * does not survive past redline; a decode that lands on 1, or on 16 000, is a garbled or
+         * stale frame, not an engine. Reading it as "running" is how a dongle left in a parked
+         * car keeps the tier pinned to DRIVING.
+         *
+         * Null (the adapter said NO DATA, or the PID is unsupported) is not-running, which is the
+         * safe answer: it lets the car park. The detector bounds this signal regardless — see
+         * `DriveDetector.ENGINE_HOLD_MAX_MS` — so this check is the first of two nets, not the
+         * only one.
+         */
+        fun engineRunning(rpm: Int?): Boolean = (rpm ?: 0) in RPM_RUNNING
+
+        /** The band an rpm reading has to fall in to count as a turning engine. */
+        val RPM_RUNNING = 250..8_000
+
         /** Poll cadence, boosted while the live dashboard is open so the RPM/throttle gauges keep
          *  up. ~0.8 s is within a cheap clone's reach; it is a short, screen-on, user-attended
          *  window, so the extra draw is self-limiting. */

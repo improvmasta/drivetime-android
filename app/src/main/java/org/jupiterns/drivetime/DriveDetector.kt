@@ -37,10 +37,13 @@ class DriveDetector(private val settings: Settings) {
     @Volatile var carConnected = false
     @Volatile var obdConnected = false
 
-    /** True while the engine is actually turning (OBD rpm > 0), fed by LocationService's OBD
-     *  loop. The dongle keeps its Bluetooth socket long after the ignition is off — rpm is the
-     *  only signal that knows the difference. Always false for the (vast majority of) users with
-     *  no dongle, which is why it can only ever *extend* a hold, never be required to end one. */
+    /** True while the engine is actually turning (a plausible OBD rpm — see
+     *  [org.jupiterns.drivetime.obd.ObdSession.engineRunning]), fed by LocationService's OBD loop.
+     *  The dongle keeps its Bluetooth socket long after the ignition is off, so rpm is the only
+     *  signal that knows the difference. Always false for the (vast majority of) users with no
+     *  dongle, which is why it can only ever *extend* a hold, never be required to end one — and
+     *  why the hold it extends is itself bounded by [ENGINE_HOLD_MAX_MS]. OBD is additive: it
+     *  refines what GPS already decided, and never overrules it. */
     @Volatile var engineRunning = false
 
     /** Are the wheels turning right now? Deliberately NOT the tier: sitting at a red light or a
@@ -87,6 +90,7 @@ class DriveDetector(private val settings: Settings) {
     private var resumeSlowSince = NO_TS   // sustained-stop timer for the resume latch
     private var stillSince = NO_TS        // debounce timer for the signal light
     private var parkedSince = NO_TS       // sustained-stop timer for [parked]
+    private var stationarySince = NO_TS   // wheels-still timer; engineRunning cannot reset it
 
     /** Feed a GPS speed sample (m/s) to drive the speed backstop. */
     fun onSpeed(mps: Float, now: Long) {
@@ -102,6 +106,11 @@ class DriveDetector(private val settings: Settings) {
             if (now - stillSince >= MOVING_OFF_MS) moving = false
         }
 
+        // How long the wheels have been still, regardless of what the dongle claims. Nothing but
+        // motion resets it — that is the whole point: it is the one stationary clock the OBD
+        // signal cannot touch.
+        if (stopped) { if (stationarySince == NO_TS) stationarySince = now } else stationarySince = NO_TS
+
         // Parked: stationary for a full sustained stop with the engine not turning. Any moving
         // fix clears it outright — you are demonstrably not parked — so pulling away out of a
         // gas station re-promotes on the very next fix without waiting on any timer.
@@ -109,6 +118,25 @@ class DriveDetector(private val settings: Settings) {
             if (parkedSince == NO_TS) parkedSince = now
             if (now - parkedSince >= STOP_MS) parked = true
         } else { parkedSince = NO_TS; parked = false }
+
+        // The bound on [engineRunning], and the reason it is a bound rather than a veto.
+        //
+        // An idling engine is genuinely not parked, so rpm > 0 has to be able to hold the latch
+        // off — that is what makes a drive-through or a long light read correctly. But the dongle
+        // is the *least* reliable signal this app has: an OBD-II port stays powered with the
+        // ignition off, and a cheap ELM327 clone will happily keep serving a stale nonzero rpm
+        // frame to a socket that is still open. Given the veto above, one such frame every five
+        // minutes is enough to reset [parkedSince] forever — so the car never parks, the tier
+        // never leaves DRIVING, and the OBD loop (which exits on `!isParked`) never lets go
+        // either. That is a closed loop with no exit: dense GPS and a phantom drive in a parking
+        // lot, for as long as the socket lives. It is the exact bug [parked] was introduced to
+        // kill, reopened through an rpm-shaped hole.
+        //
+        // So the engine may *extend* the stop we tolerate — 5 minutes becomes 30 — but it may not
+        // abolish it. However long the dongle insists the engine is turning, a car that has not
+        // moved for half an hour is parked. GPS is the authority on whether the wheels turned;
+        // OBD only ever gets to add to what GPS already knows.
+        if (stopped && now - stationarySince >= ENGINE_HOLD_MAX_MS) parked = true
 
         // The motion-onset latch clears after the same sustained stop (STOP_MS) as the
         // speed backstop, but independent of driveBySpeed — the onset path has its own
@@ -207,6 +235,12 @@ class DriveDetector(private val settings: Settings) {
          *  (a 5-minute dwell ends a drive), so the live app, the drive log and the phone's own
          *  segmentation all agree on what a stop is instead of each having its own opinion. */
         private const val STOP_MS = 300_000L
+
+        /** The ceiling on how long [engineRunning] may hold off [parked]. Half an hour of not
+         *  moving an inch is a parked car whatever the dongle says — long enough that a real
+         *  drive-through, a warm-up or a bad jam still reads as one drive, short enough that a
+         *  lying dongle costs half an hour of dense GPS rather than a whole afternoon. */
+        private const val ENGINE_HOLD_MAX_MS = 1_800_000L
 
         /** How long stationary before the light goes red. This only *labels* — it ends nothing —
          *  so it is deliberately short: long enough that GPS noise and a crawling queue can't

@@ -49,8 +49,17 @@ Three things the detector keeps deliberately separate — collapsing them is wha
 shows), **`tier`** (how fast to sample; holds through a red light, ends at `parked`), and the
 **drive session** (`markDriveStart`, which still ends when the tier leaves DRIVING). `STOP_MS` is
 one 5-minute constant for every latch, the same 5 minutes `segment.js` calls a park, so the live
-app, the drive log and segmentation agree on what a stop is. OBD `rpm > 0` (`engineRunning`) is the
-only thing that extends the hold — idling with the engine on is not parked. *(The old
+app, the drive log and segmentation agree on what a stop is. A plausible OBD rpm (`engineRunning`,
+`ObdSession.engineRunning` — a band, **not** `rpm > 0`, which a garbled frame satisfies) is the only
+thing that extends the hold: idling with the engine on is not parked. **That extension is itself
+bounded** (`ENGINE_HOLD_MAX_MS`, 30 min), and the bound is the point — OBD is *additive*, never
+authoritative. An OBD-II port stays powered with the ignition off, so a cheap clone keeps its socket
+and can keep serving a stale nonzero rpm; unbounded, one such frame every five minutes resets
+`parkedSince` forever, so the car never parks, the tier never leaves DRIVING, and the OBD loop
+(which exits on `!isParked`) never lets go either — a closed loop with no exit, which is the very
+bug `parked` was added to kill. The stationary clock behind the ceiling is driven by motion alone,
+so a *flickering* dongle cannot wind it back. GPS decides whether the wheels turned; OBD only ever
+adds to what GPS already knows. *(The old
 activity-recognition `TripDetector` is retired — opt-in behind `auto_trip`, not armed by default.)*
 
 **Fixes are durable.** `Uploader` writes an on-disk queue that is atomic, size-capped (16 MB,

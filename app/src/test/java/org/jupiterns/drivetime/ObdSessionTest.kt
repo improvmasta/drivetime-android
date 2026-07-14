@@ -152,4 +152,22 @@ class ObdSessionTest {
         assertFalse(ObdSession.readDtcsOnTick(119))
         assertTrue(ObdSession.readDtcsOnTick(120))
     }
+
+    @Test fun engineRunning_believesAnEngine_notAnyNonZeroFrame() {
+        // This is the one OBD reading that feeds a tracking decision (it holds DriveDetector's
+        // parked latch off), so it is the one place a garbled frame from a cheap clone can cost a
+        // drive. `rpm > 0` was too credulous: a stale or corrupt decode landing on 1 reads as a
+        // running engine and pins the DRIVING tier in a parked car.
+        assertTrue(ObdSession.engineRunning(800))            // idling
+        assertTrue(ObdSession.engineRunning(2_500))          // cruising
+        assertFalse(ObdSession.engineRunning(0))             // key on, engine off
+        assertFalse(ObdSession.engineRunning(null))          // NO DATA / unsupported PID
+        assertFalse(ObdSession.engineRunning(1))             // not an engine — a bad frame
+        assertFalse(ObdSession.engineRunning(16_000))        // nor is this one
+        // Null is the safe answer on purpose: a dongle that stops answering must let the car park.
+        assertFalse(ObdSession.engineRunning(ObdSession.RPM_RUNNING.first - 1))
+        assertTrue(ObdSession.engineRunning(ObdSession.RPM_RUNNING.first))
+        assertTrue(ObdSession.engineRunning(ObdSession.RPM_RUNNING.last))
+        assertFalse(ObdSession.engineRunning(ObdSession.RPM_RUNNING.last + 1))
+    }
 }
