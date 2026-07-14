@@ -806,73 +806,12 @@ class WebViewActivity : AppCompatActivity() {
 
         // ---- Settings tabs: read ----
 
-        /** Every editable tracker setting + the derived flags the Settings tabs render.
-         *  The device token itself is never surfaced in the WebView (AUTH.md) — only whether
-         *  one is set — so pairing stays a native-only flow. */
+        /** Every editable tracker setting + the derived flags the Settings tabs render — see
+         *  [BridgeSerializer.settings], which owns the payload (and the test that pins its keys;
+         *  the SPA reads them by name, so a dropped key is a silently blank settings row). */
         @JavascriptInterface
-        fun getSettings(): String = runCatching {
-            JSONObject()
-                .put("serverUrl", settings.serverUrl)
-                .put("hasServer", settings.hasServer)
-                .put("server_enabled", settings.serverEnabled)
-                .put("isConfigured", settings.isConfigured)
-                .put("standalone", !settings.isConfigured)
-                .put("deviceTokenSet", settings.deviceToken.isNotBlank())
-                .put("trackingMode", settings.trackingMode)
-                .put("interval_sec", settings.intervalSec)
-                .put("idle_interval_sec", settings.idleIntervalSec)
-                .put("light_interval_sec", settings.lightIntervalSec)
-                .put("upload_interval_sec", settings.uploadIntervalSec)
-                .put("driving_upload_interval_sec", settings.drivingUploadIntervalSec)
-                .put("stationary_stop_min", settings.stationaryStopMin)
-                .put("drive_by_speed", settings.driveBySpeed)
-                .put("motion_onset", settings.motionOnset)
-                .put("auto_trip", settings.autoTrip)
-                .put("alerts_enabled", settings.alertsEnabled)
-                .put("notif_driving_only", settings.notifDrivingOnly)
-                .put("notify_drive_complete", settings.notifyDriveComplete)
-                .put("notify_gas_stop", settings.notifyGasStop)
-                .put("notify_digest", settings.notifyDigest)
-                .put("notify_tracking_health", settings.notifyTrackingHealth)
-                .put("notify_backup_health", settings.notifyBackupHealth)
-                .put("notify_apply_usual", settings.notifyApplyUsual)
-                .put("notify_coverage_gap", settings.notifyCoverageGap)
-                .put("notify_auth_failed", settings.notifyAuthFailed)
-                // The in-app half of every kind's pair. Nothing native reads these — the SPA's
-                // notify.js does, to gate its own bell (Settings' in-app block explains why they
-                // are stored here anyway). All default ON, which is what the bell has always done.
-                .put("notify_drive_complete_inapp", settings.inAppDriveComplete)
-                .put("notify_gas_stop_inapp", settings.inAppGasStop)
-                .put("notify_apply_usual_inapp", settings.inAppApplyUsual)
-                .put("notify_digest_inapp", settings.inAppDigest)
-                .put("notify_check_engine_inapp", settings.inAppCheckEngine)
-                .put("notify_tracking_health_inapp", settings.inAppTrackingHealth)
-                .put("notify_coverage_gap_inapp", settings.inAppCoverageGap)
-                .put("notify_backup_health_inapp", settings.inAppBackupHealth)
-                .put("notify_auth_failed_inapp", settings.inAppAuthFailed)
-                .put("digest_day", settings.digestDay)
-                .put("digest_time", settings.digestTime)
-                .put("control_token", settings.controlToken)
-                .put("updates_enabled", settings.updatesEnabled)
-                // No build self-updates any more (Play policy — the updater is deleted, not
-                // disabled), so the SPA hides the whole "check for updates" affordance rather
-                // than offering a dead button. Reported as a constant `false` rather than
-                // dropped: the SPA reads `updates_supported !== false`, so an ABSENT key means
-                // "supported" and would put the dead button back.
-                .put("updates_supported", false)
-                // The legacy standalone car/OBD devices. Nothing in the SPA *configures* these
-                // any more — the vehicle that owns the device does — but they're reported so the
-                // registry can adopt a pre-registry install's devices into a real vehicle
-                // exactly once (vehicles.js adoptLegacyDevices), instead of stranding them in a
-                // settings screen that no longer shows them.
-                .put("carBtName", settings.carBtName)
-                .put("carBtMac", settings.carBtMac)
-                .put("obdName", settings.obdName)
-                .put("obdMac", settings.obdMac)
-                .put("versionName", BuildConfig.VERSION_NAME)
-                .put("versionCode", BuildConfig.VERSION_CODE)
-                .toString()
-        }.getOrDefault("{}")
+        fun getSettings(): String =
+            runCatching { BridgeSerializer.settings(settings).toString() }.getOrDefault("{}")
 
         /** Live health for the tabs: the permission checklist (each with a fixable [action]
          *  key), battery + OEM state, the connection/upload summary, any OEM-kill warning,

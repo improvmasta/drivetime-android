@@ -456,45 +456,38 @@ class LocationService : Service() {
         // LiveState is live but zeroed by a mid-drive restart; the Settings mirror is durable
         // but throttled. The max of the two is the honest distance either way.
         val meters = maxOf(LiveState.driveMeters, settings.driveMeters.toDouble())
-        if (meters < REAL_DRIVE_METERS || now - startedAtMs < REAL_DRIVE_MS) return
+        if (!DriveEndProcessor.isRealDrive(meters, now - startedAtMs)) return
         if (settings.notifyDriveComplete) {
             DriveCompleteWorker.schedule(this, startedAtMs, now, meters)
         }
-        val startPos = settings.driveStartPos.split(",").mapNotNull { it.toDoubleOrNull() }
+        // This drive as a Leg — null if we never got a fix at one end or the other, in which case
+        // it can neither be paired against the previous drive nor become the next one's previous.
+        val start = DriveEndProcessor.decodePos(settings.driveStartPos)
         val endLat = LiveState.lat
         val endLon = LiveState.lon
-        if (settings.notifyGasStop) maybeNotifyGasStop(startedAtMs, startPos, endLat, endLon)
-        settings.prevDriveSummary = if (startPos.size == 2 && endLat != null && endLon != null) {
-            "$startedAtMs,$now,${startPos[0]},${startPos[1]},$endLat,$endLon"
-        } else ""
+        val cur = if (start != null && endLat != null && endLon != null) {
+            DriveEndProcessor.Leg(startedAtMs, now, start.first, start.second, endLat, endLon)
+        } else null
+
+        if (cur != null && settings.notifyGasStop) maybeNotifyGasStop(cur)
+        settings.prevDriveSummary = cur?.let { DriveEndProcessor.encode(it) } ?: ""
     }
 
     /**
-     * The SPA's gas-stop rules (localmerge.js / detail.py), run natively at drive end so the
-     * split is flagged even with the app closed: the previous drive ended 4–15 min before
-     * this one started, this one resumed at the SAME spot (≤0.5 km), and it continued ONWARD
-     * (ends ≥1.5 km from where the previous began — not an out-and-back). Keyed by this
-     * drive's start (the pair's `right_ts`, same boundary the SPA uses) so the attention
-     * push can retract it after a merge/dismissal.
+     * The SPA's gas-stop rules ([DriveEndProcessor.gasStopGapMinutes]), run natively at drive end
+     * so the split is flagged even with the app closed. Keyed by this drive's start (the pair's
+     * `right_ts`, the same boundary the SPA uses) so the attention push can retract it after a
+     * merge or a dismissal, and deep-linked to the *previous* leg, which is the one you would open
+     * to do the merging.
      */
-    private fun maybeNotifyGasStop(startedAtMs: Long, startPos: List<Double>, endLat: Double?, endLon: Double?) {
-        val prev = settings.prevDriveSummary.split(",").mapNotNull { it.toDoubleOrNull() }
-        if (prev.size != 6 || startPos.size != 2 || endLat == null || endLon == null) return
-        val prevStartMs = prev[0].toLong()
-        val prevEndMs = prev[1].toLong()
-        val gapMin = (startedAtMs - prevEndMs) / 60000.0
-        if (gapMin < GAS_MIN_GAP_MIN || gapMin > GAS_MAX_GAP_MIN) return
-        val d = FloatArray(1)
-        android.location.Location.distanceBetween(prev[4], prev[5], startPos[0], startPos[1], d)
-        if (d[0] > GAS_SAME_SPOT_M) return
-        android.location.Location.distanceBetween(prev[2], prev[3], endLat, endLon, d)
-        if (d[0] < GAS_PROGRESS_M) return
-        val rightTs = startedAtMs / 1000
+    private fun maybeNotifyGasStop(cur: DriveEndProcessor.Leg) {
+        val prev = DriveEndProcessor.decode(settings.prevDriveSummary) ?: return
+        val gapMin = DriveEndProcessor.gasStopGapMinutes(prev, cur) ?: return
         Notify.post(
-            this, Notify.KIND_GAS_STOP, rightTs.toString(),
+            this, Notify.KIND_GAS_STOP, (cur.startedAtMs / 1000).toString(),
             "Likely gas-stop split",
             "Two legs ${Math.round(gapMin)} min apart look like one drive — merge them?",
-            "/drive/L${prevStartMs / 1000}"
+            "/drive/L${prev.startedAtMs / 1000}"
         )
     }
 
@@ -985,24 +978,20 @@ class LocationService : Service() {
         updateNotification()
     }
 
-    /** The visible content of the ongoing notification as a comparable string: everything the
-     *  card shows EXCEPT the natively-ticking elapsed time. Two fixes with the same signature
-     *  produce the same card, so the second needs no notify(). */
-    private fun notifSignature(): String {
-        if (!driving()) return "idle:${tierText()}:${activeChannel()}"
-        val speed = LiveState.speedMph ?: -1
-        val miles10 = Math.round(LiveState.driveMeters * 0.000621371 * 10)
-        return "drive:$speed:$miles10:${LiveState.markerCount}:${tierText()}"
-    }
+    /** See [DriveNotification.signature] — what the card shows, as one comparable string. */
+    private fun notifSignature(): String = DriveNotification.signature(
+        tier = currentTier,
+        moving = detector.isMoving,
+        reason = detector.reason(),
+        channel = activeChannel(),
+        speedMph = LiveState.speedMph,
+        driveMeters = LiveState.driveMeters,
+        markerCount = LiveState.markerCount,
+    )
 
-    /** Say the honest thing: a drive that is sitting still reads "Stopped", not "Driving". The
-     *  drive is still running underneath (dense sampling and all) — it just isn't moving. */
-    private fun tierText(): String = when (currentTier) {
-        DriveDetector.Tier.DRIVING ->
-            if (detector.isMoving) "Driving · ${detector.reason()}" else "Stopped · ${detector.reason()}"
-        DriveDetector.Tier.LIGHT -> "Idle"
-        DriveDetector.Tier.OFF -> "Off"
-    }
+    /** See [DriveNotification.tierText] — "Driving · car BT", "Stopped · OBD", "Idle", "Off". */
+    private fun tierText(): String =
+        DriveNotification.tierText(currentTier, detector.isMoving, detector.reason())
 
     /** Car glyph while a drive is in progress, crosshair otherwise — the status bar says
      *  which state we're in by its shape, without the shade having to be pulled down. */
@@ -1133,7 +1122,10 @@ class LocationService : Service() {
         val startedMs = LiveState.driveStartedAt.takeIf { it > 0L } ?: System.currentTimeMillis()
         val base = SystemClock.elapsedRealtime() - (System.currentTimeMillis() - startedMs)
         val speed = LiveState.speedMph
-        val miles = String.format("%.1f", LiveState.driveMeters * 0.000621371)
+        // Same constant and same one-decimal precision the redraw signature compares on — if these
+        // two ever drift, the card either stops updating a number the driver can see or redraws
+        // once a second for a change they cannot.
+        val miles = String.format("%.1f", LiveState.driveMeters * DriveNotification.METERS_TO_MILES)
         val since = if (LiveState.markerCount > 0) "since #${LiveState.markerCount}" else null
         if (expanded) {
             rv.setChronometer(R.id.n_chrono_big, base, null, true)
@@ -1270,14 +1262,7 @@ class LocationService : Service() {
         // need this fresh to the order of a minute for the OEM kill detector).
         private const val PERSIST_FIX_MS = 30_000L
 
-        // Event notifications (P3): what counts as a REAL drive worth prompting about —
-        // mirrors the SPA min-trip gate's spirit (a jitter loop must never nag).
-        private const val REAL_DRIVE_METERS = 800.0
-        private const val REAL_DRIVE_MS = 5 * 60 * 1000L
-        // Native gas-stop pair rules — same numbers as localmerge.js / detail.py.
-        private const val GAS_MIN_GAP_MIN = 4.0
-        private const val GAS_MAX_GAP_MIN = 15.0
-        private const val GAS_SAME_SPOT_M = 500f
-        private const val GAS_PROGRESS_M = 1500f
+        // The real-drive gate and the gas-stop pair rules moved to DriveEndProcessor, with the
+        // logic that reads them.
     }
 }
