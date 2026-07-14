@@ -9,21 +9,31 @@ import java.net.URI
 object WebAuth {
 
     /**
-     * True if [url] should load *inside* the WebView, false if it's an external link
-     * (other host, `mailto:`, `tel:`, …) that should hand off to the system browser/app.
-     * Non-http(s) schemes are always external. In-app = the dashboard's own host **or** the
-     * bundled-SPA origin ([Shell.LOCAL_DOMAIN]) — so standalone/local mode, which has no
-     * server host, still keeps its own navigation inside the WebView.
+     * True if [url] should load *inside* the WebView. **Only the bundled-SPA origin
+     * ([Shell.LOCAL_DOMAIN]) ever does.** Everything else — every other host, `mailto:`,
+     * `tel:`, and *including the paired server's own host* — is external and hands off to the
+     * system browser.
+     *
+     * The server used to be in-app too, back when the dashboard was a remote page. It isn't
+     * one any more: [WebViewActivity.loadDashboard] always loads [Shell.LOCAL_URL], and the
+     * SPA reaches the server as a cross-origin *sync target* (absolute URL + Bearer token over
+     * the bridge), never as a page. So the only way a server URL could have become the
+     * document was a link — and that document would have loaded into the one WebView carrying
+     * the `DrivetimeNative` bridge, handing every `@JavascriptInterface` method (settings
+     * writes, the device token, backup, tracking control) to whatever that page happened to
+     * be. A self-hosted server on plain HTTP, a stale DNS record, a captive portal or a
+     * lookalike path is all it would take; a link to the privacy policy on the same host was
+     * enough to do it by accident.
+     *
+     * Confining navigation to the origin the app actually ships closes that with no loss:
+     * nothing in the product needs the server rendered as a page, and a link to it now opens
+     * in the browser like any other external link (hardening 3.3).
      */
-    fun isInAppUrl(serverUrl: String, url: String): Boolean {
+    fun isInAppUrl(url: String): Boolean {
         val u = runCatching { URI(url) }.getOrNull() ?: return false
         val scheme = u.scheme?.lowercase()
         if (scheme != "http" && scheme != "https") return false
         val host = u.host ?: return false
-        if (host.equals(Shell.LOCAL_DOMAIN, ignoreCase = true)) return true
-        val serverHost = hostOf(serverUrl) ?: return false
-        return host.equals(serverHost, ignoreCase = true)
+        return host.equals(Shell.LOCAL_DOMAIN, ignoreCase = true)
     }
-
-    private fun hostOf(s: String): String? = runCatching { URI(s).host }.getOrNull()
 }

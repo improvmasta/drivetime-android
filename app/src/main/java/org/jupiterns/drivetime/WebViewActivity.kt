@@ -173,8 +173,13 @@ class WebViewActivity : AppCompatActivity() {
 
         // Bridge for the SPA: drain the phone's own GPS into the on-device replica (A2), learn
         // whether we're standalone (A3), and drive/read every native tracker setting + action
-        // from the Settings tabs. Only our own SPA is ever loaded in this WebView (external
-        // links hand off to the system browser), so the surface is trusted.
+        // from the Settings tabs.
+        //
+        // The bridge is attached to the WebView, not to a page, so EVERY document loaded here
+        // gets it. What makes that safe is that only the bundled SPA can ever become the
+        // document: shouldOverrideUrlLoading sends everything that isn't the appassets origin
+        // to the system browser (WebAuth.isInAppUrl). That is the invariant this call depends
+        // on — widen isInAppUrl and you hand DrivetimeNative to whatever you let in.
         web.addJavascriptInterface(NativeBridge(), "DrivetimeNative")
 
         CookieManager.getInstance().setAcceptCookie(true)
@@ -195,8 +200,11 @@ class WebViewActivity : AppCompatActivity() {
 
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val url = request.url.toString()
-                if (WebAuth.isInAppUrl(settings.serverUrl, url)) return false
-                // External link (other host, mailto:, tel:, …) → hand off to the system.
+                if (WebAuth.isInAppUrl(url)) return false
+                // Anything that is not the bundled origin — including the paired server's own
+                // host — hands off to the system browser. This WebView carries the
+                // DrivetimeNative bridge; nothing but the app's own SPA may become its
+                // document (WebAuth.isInAppUrl, hardening 3.3).
                 runCatching {
                     startActivity(Intent(Intent.ACTION_VIEW, request.url)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -205,7 +213,7 @@ class WebViewActivity : AppCompatActivity() {
             }
 
             override fun onPageFinished(view: WebView, url: String?) {
-                if (url != null && WebAuth.isInAppUrl(settings.serverUrl, url)) {
+                if (url != null && WebAuth.isInAppUrl(url)) {
                     loadedOnce = true
                     hideOverlay()
                 }
