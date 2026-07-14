@@ -7,17 +7,18 @@ contract* before starting anything.
 
 ---
 
-## Confirm first — it changes Phase 3
+## ~~Confirm first — it changes Phase 3~~ — **ANSWERED: Play internal, fully migrated**
 
-**Which channel are the testers on: Play internal testing, or a sideloaded APK?** This is the
-only fact that changes the plan, because the sideload and Play signatures **cannot upgrade into
-each other** (channel switch = uninstall = every drive on the device is wiped):
+Every install (Lindsay's phone included) now comes from Play internal testing; the migration in
+`PLAY.md` §5 is done. So removing the updater was a no-op for testers — it was already compiled
+out of the `play` flavor — and Phase 3 shipped in full.
 
-- **Play internal (assumed):** removing the updater is a no-op for testers — already compiled
-  out of the `play` flavor. Everything below is safe.
-- **Sideloaded APK:** removing the updater removes their only update path, and moving them to
-  Play is destructive. That step then needs a "Back up now → reinstall → restore" runbook
-  first, not a silent removal.
+CI still publishes a sideload APK to GitHub Releases on every push to `main`. With the updater
+gone that release is a **build artifact you can install by hand, not a channel**: nothing polls
+it, and no install updates itself from it. Retiring it (and `publish-apk.sh` / the server `/dl`
+route / `ship.sh`'s publish gate, which all exist only to feed the updater) is a real cleanup,
+but it reaches into the sibling repo and `ship.sh`, so it is **left as a follow-up decision**,
+not done silently. See "Follow-ups" at the bottom.
 
 ---
 
@@ -125,26 +126,64 @@ new prefs (`backup_fail_streak`, `notify_backup_health`) and one new bridge *key
 the extension-append behaviour above is provider-specific), and a Drive backup while offline
 (defers, doesn't fail).
 
-## Phase 3 — security hardening (backward-compatible)
+## Phase 3 — security hardening — **DONE, committed on `hardening-phase-3`, unshipped**
 
-- **3.1 Remove the self-updater** — delete `Updater.kt`, the `/dl` client, the github
-  `REQUEST_INSTALL_PACKAGES` manifest, the `UPDATER_ENABLED` call sites
-  (`WebViewActivity.kt:307,838,1139,1146`), and the SPA update affordance (already hidden when
-  `updates_supported=false`). **Zero change for Play testers.** *Gated on the channel question.*
-- **3.2 Extend the control token to STOP/destructive verbs — only when a token is set** —
-  `Control.kt:116`. Blank token stays fully open exactly as today (no existing routine breaks);
-  a tester who sets a token now also gets STOP protected. Fix the doc, which implies the token
-  guards STOP today (it doesn't). Backward-compatible by construction.
-- **3.3 Confine WebView navigation to the `appassets` origin** — `WebViewActivity.kt:196`,
-  `WebAuth.kt:18`. Send the paired-server host to the external branch. The server is never
-  legitimately loaded as a page, so this closes the "server page runs with the bridge" hole with
-  no contract change.
-- **3.4 `dataExtractionRules`** excluding the credential prefs from auto/adb backup —
-  `AndroidManifest.xml:41`. Note: a tester relying on cloud-backup to carry the device token
-  across reinstall would re-pair instead (acceptable; Play testers do fresh installs).
+No prefs key, on-disk file, or `DrivetimeNative` method was removed (contracts #2/#3/#4 intact).
+Contract #5 holds too: with the default **blank** control token every routine verb stays exactly
+as open as before.
+
+- **3.1 Self-updater deleted** — ✅ `Updater.kt`, `UpdaterTest.kt`, `src/github/AndroidManifest.xml`
+  (its only content was `REQUEST_INSTALL_PACKAGES`), the `UPDATER_ENABLED` field on both flavors,
+  the `onResume` auto-check, and the FileProvider `updates/` root. The flavors now differ only by
+  their Drive OAuth client. **Two things deliberately kept**, against the letter of the plan:
+  - `getStatus` still reports **`updates_supported`, hardcoded `false`**. The SPA tests
+    `updates_supported !== false`, so *dropping* the key means "supported" — it would have put
+    the dead button back. This is also why the SPA needed no change and Phase 3 stayed a
+    one-repo job (no `sync-web-to-android.sh`).
+  - **`checkForUpdate()` stays on the bridge** as an honest no-op toast. A WebView on an older
+    cached snapshot still has the button and calls it by name (contract #4).
+- **3.2 Control token now covers STOP/TOGGLE** — ✅ and **not where this doc said**. The plan put
+  the check at `Control.kt:116`, inside `apply()` — but the **in-app Tracking switch**
+  (`WebViewActivity.kt:953`) and the activity-recognition receiver stop logging through that same
+  function, so a check there would have meant *a user who sets a token can no longer press their
+  own Off switch*. The trust boundary is the **exported** surface, so that is where the gate went:
+  - `Control.applyExternal()` — the one gated entry point. `ControlActivity` and `ControlReceiver`
+    (the only exported components; any installed app can reach both, no permission needed) call it.
+    `Control.apply()` is now explicitly the *trusted* in-app path with no token check — this app
+    does not need the user's secret to obey the user.
+  - `Control.externalAllowed()` is pure/Context-free, so the whole policy is unit-tested on the
+    JVM (`ControlTokenTest`) — the same idiom Phase 1.2 used for `clampSetting`.
+  - Gated: `SET`/`QUERY`/`MARK` (as before) **+ `STOP`/`TOGGLE`** (new). `START` and the `MODE_*`
+    verbs stay open on purpose — they cannot stop logging, so a routine can always *recover*
+    tracking without the secret, which is what the old always-open STOP was really protecting.
+  - **The cost of opting in, now documented:** the built-in **Off** App Shortcut is static XML and
+    cannot carry a runtime secret, so it stops working once a token is set (Auto/Driving/Eco are
+    unaffected). There is no way around this short of making the token not a secret.
+- **3.3 WebView navigation confined to `appassets`** — ✅ `isInAppUrl(url)` lost its `serverUrl`
+  parameter entirely — with the server external there is no host-dependent case left. The bridge
+  is attached to the *WebView*, not a page, so every document it loads gets `DrivetimeNative`;
+  the privacy-policy link on the server's own host was enough to trip this by accident, never mind
+  a MITM'd self-hosted server on plain HTTP. The `addJavascriptInterface` comment already claimed
+  "only our own SPA is ever loaded here" — this commit made that true and named what enforces it.
+- **3.4 Credentials excluded from auto-backup** — ✅ but note the granularity: **Android cannot
+  exclude individual prefs keys**, only whole files, and the credentials share `drivetime.xml`
+  with every ordinary setting — so the settings are excluded with them. That is the right trade
+  (the app's own Sync & Backup already carries settings + drives + credentials and is the
+  documented restore path; Android's was a redundant copy nobody opted into), but the consequence
+  is real: after a cloud restore or device transfer the app comes up **unconfigured**.
+  - Excluded from **device-transfer** as well as cloud-backup — a phone-to-phone transfer would
+    otherwise mint a second install holding the same device token, and pairing exists so a
+    device's authority is *granted* to it, not cloned into it.
+  - **Both** rule files are required and must agree: `fullBackupContent` (`backup_rules.xml`) is
+    read on API ≤ 30, `dataExtractionRules` on 31+, and minSdk is 26. Shipping only the latter
+    would have left every Android 11 phone still backing the credentials up.
 - **Deferred (needs device):** origin-scoped bridge via `addWebMessageListener` and not exposing
   the raw token through `authHeader()`. Higher regression risk to the native↔web contract — do
   it in Phase 5 with device verification.
+
+*Phone checks owed:* none are strictly blocking, but worth a look on the phone — an external link
+(privacy policy, Play link) now opens in the browser rather than in-app (3.3), and the About card
+should read "Updates arrive through Google Play" with no update button (3.1).
 
 ## Phase 4 — UI/UX (SPA — sibling `drivetime/frontend` repo)
 
@@ -205,6 +244,17 @@ bump, and keep it off the testers' build until it's been seen to render.
   currently load-bearing for the bridge).
 - Ship `TierReconciler` (5.1) or the edge-to-edge change (Phase 6) to testers without a phone
   check first.
+
+## Follow-ups this raised (decisions, not chores)
+
+- **Retire the sideload update plumbing.** With the updater deleted, `version.json`, the server
+  `/dl` route, `drivetime/publish-apk.sh` and `ship.sh`'s publish gate have no consumer — CI
+  still produces and publishes them, and `ship.sh` still blocks on them. Left in place on
+  purpose: unpicking it touches the sibling repo and the ship script. Decide whether the GitHub
+  APK release stays as a hand-install artifact (it is harmless) or goes entirely.
+- **`ActivityTransitionReceiver` can stop logging and is not token-gated** — correctly, since it
+  is `exported="false"` and therefore unreachable by other apps. Noted only so the next reader
+  doesn't "fix" it: it is inside the trust boundary, and `auto_trip` is opt-in and off by default.
 
 ## Verification model
 
