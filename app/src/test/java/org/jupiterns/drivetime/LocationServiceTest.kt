@@ -59,9 +59,6 @@ class LocationServiceTest {
         EventLog.init(ctx)
         EventLog.clear()
         Clock.setForTest(clock)
-        // Static, and Robolectric does not reset an app class's statics between test methods — so a
-        // service another test built would still read as "running" here.
-        LocationService.isRunning = false
         s = Settings(ctx)
     }
 
@@ -277,7 +274,13 @@ class LocationServiceTest {
         // service is a no-op — no `onDestroy` runs — so [Control] has to drop the mark itself or it
         // outlives the Off toggle. Nobody can run the end effects for a process that is gone, but
         // "tracking off ends the drive" has to hold anyway.
-        LocationService.isRunning = false
+        //
+        // `isRunning` is written by the service's own lifecycle and nothing else (its setter is
+        // private, and that is the invariant) — so the way to a phone with no live service is to
+        // let one live and die, not to poke the static. This one starts on a clean prefs file, so
+        // its own stop ends nothing.
+        controller().destroy()
+
         s.loggingEnabled = true
         s.trackingMode = Settings.MODE_AUTO
         s.driveStartedAt = clock.wall - 30_000L
