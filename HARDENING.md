@@ -46,6 +46,11 @@ commit. Behavior-fixes (Phases 1–4) are small and verifiable; the structural r
 are where a regression could *introduce* a silent-stop, so they ship to testers only after a
 phone check. Never bundle a fix with the refactor that makes it pretty.
 
+And one corollary, learned inside Phase 5 and worth stating: **build the net before you walk the
+wire.** The plan numbered `TierReconciler` first and the safety-net tests fourth, while also naming
+`TierReconciler` "the change most able to introduce a silent-stop regression". Those two statements
+cannot both be honoured, so 5.4 was done before 5.1.
+
 ---
 
 ## Phase 1 — surgical safety fixes — **DONE, in the working tree, unshipped**
@@ -255,20 +260,66 @@ ship**. No bridge method, prefs key or on-disk format touched (contracts #2/#3/#
 reopen), Mark still one-handed at 44px, and a sheet opened from a Modal (Mileage → Tags → New tag)
 still behaving with the focus trap in place.
 
-## Phase 5 — structural refactor (highest care; verify on phone before testers)
+## Phase 5 — structural refactor — **DONE, committed on `hardening-phase-3`, unshipped**
 
-Ordered so each is a safe standalone step (CI is the only compiler — no giant single commit).
-**Done so far: 5.6 and 5.3.** They were taken out of order deliberately: 5.6 is the thing that makes
-every other item here cheaper to attempt, so it went first.
+Every item is in, CI-green (compile + unit tests + lint + both artifacts). **The order was
+5.6 → 5.3 → 5.4 → 5.1 → 5.2 → 5.5, not 1–6**, and the two reorderings were the point:
 
-1. **`TierReconciler`** — the keystone. One serial dispatcher every trigger posts events to
-   (`Fix`, `CarBt`, `Obd`, `Command`, `Motion`); nothing mutates tier fields directly. Fixes the
-   two-thread H2 race (`LocationService.kt:491-555` vs `147/279/623/674/757`) and three
-   non-volatile findings at once. **The change most able to introduce a silent-stop regression** —
-   lands with unit tests for the race and a phone check (drive, red-light hold, park, BT
-   connect/disconnect, OBD drive) before it reaches testers.
-2. **`ObdSession`** — extract the loop + socket lifecycle (1.1 shipped surgically; this makes it
-   testable).
+- **5.6 first** because there is no JDK on this host, so a work branch had no compiler at all.
+- **5.4 before 5.1** because 5.4 *is* the net, and 5.1 is named right here as "the change most
+  able to introduce a silent-stop regression". Building the net after walking the wire is
+  backwards.
+
+*Phone check owed before testers (guardrail below):* drive, red-light hold, park, BT
+connect/disconnect, OBD drive.
+
+1. **`TierReconciler`** — ✅ the keystone. Six things could change the tier and they did not agree
+   on a thread: fixes arrived on the locator `HandlerThread` (they must — a fix does disk I/O, and
+   doing that on the WebView's UI thread was a real ANR source), while car-BT, OBD up/down, routine
+   commands, motion-onset and the dashboard toggle all arrived on **main**. Both ran the same
+   `reevaluate()` → `applyTier()` over a dozen plain non-volatile fields. Every consequence was
+   silent, which is why it was the #1 bug class and not a crash:
+   - **A lost subscription.** `requestUpdates` skips a re-request when the interval *and* priority
+     it last recorded are unchanged. Interleave two callers and that memo can describe a request
+     that was superseded — the service believes it is sampling at 1 Hz while the provider delivers
+     a fix a minute. Nothing throws; you find out from the shape of the drive, days later.
+   - **A drive that starts or ends twice** — two completion notifications, two after-drive backups,
+     two battery stamps, or a lost start mark that takes the drive's miles with it.
+   - **Stale reads of the tier**, which decide whether a fix carries OBD telemetry and whether its
+     distance counts as mileage.
+
+   The fix is **confinement, not locking**: a lock per field would have made each *access* safe
+   while leaving the sequences racy, and the races here are all read-decide-write. One thread; every
+   trigger `submit`s. Fixes are delivered straight onto it (its looper is what `requestUpdates` hands
+   the fused provider), so the hot path is not a hop — it *is* the thread.
+   - **Two documented exceptions, and they are the interesting part.** `currentTier` stays volatile:
+     the OBD and upload loops read it from their own coroutines to pick a cadence, and
+     single-writer/many-reader is fine — a stale read costs one poll interval. `pendingSinceFlush`
+     became an `AtomicInteger`: it is incremented on the reconciler thread but **zeroed by
+     `flushNow`**, which fires from the network callback, the charge receiver *and* the upload loop —
+     so calling it "confined" would have been a lie. Atomic rather than submitted because it is a
+     counter, not a decision.
+   - **`obdConnected` is submitted; `engineRunning` is not**, deliberately. `obdConnected` is an
+     *edge* that must be paired with a tier decision (connecting starts a drive, dropping lets a
+     parked one end), so the flip and the reevaluate have to be one atomic event. `engineRunning` is
+     a *level*, resampled every poll, that nothing reevaluates on — it only modulates the `parked`
+     latch, computed on the reconciler thread at the next fix.
+   - **`requireOwnThread` is what keeps this from decaying.** "Nothing mutates tier fields directly"
+     is an invariant, and an invariant nothing enforces is a comment — the next person to flip a
+     detector flag and call `reevaluate()` from a receiver reintroduces the whole bug in silence, and
+     *no outcome-based test can catch that*, because the outcome of a data race is usually "fine".
+     It does **not** throw in production (an app whose purpose is to not stop logging must not
+     acquire a new way to die); it warns, naming the offending thread. Tests set `strict = true`.
+2. **`ObdSession`** — ✅ the loop's *judgement*, separated from its socket. `shouldProbe` (and its
+   structure: `parked` vetoes every other arm rather than being one more term in the `or` — an
+   OBD-II port is permanently powered, so "we can reach it" was being read as evidence that we
+   should), `onFailure(everConnected)` (a socket that opened and never spoke is a wedged clone;
+   a link that worked and then dropped is a dongle out of range — counting the drop would let an
+   ordinary drive escalate itself into a 20-second cold reset), and `recovery(driving)`.
+   - **Socket lifecycle deliberately NOT moved.** Making `Elm327Client`'s connect/teardown
+     "testable" means faking Bluetooth, and 1.1 already made the thing that was actually broken —
+     a throwing init stranding an fd — atomic at the source. Extracting it buys a mock, not a
+     guarantee.
 3. **`JsonlRing`** — ✅ done. The four `Web*Buffer` objects are now thin wrappers over one
    `JsonlRing(fileName, maxLines, inclusive, trimEvery, label)`; each keeps its filename, its cap,
    its trim cadence, and its own lock (contract #2 intact — no on-disk change at all). The
@@ -285,11 +336,66 @@ every other item here cheaper to attempt, so it went first.
    - `selectSince(lines, sinceTs, inclusive)` takes no default for `inclusive`, on purpose: a
      caller that hasn't decided whether its events can share a second is a caller for whom either
      answer is silently wrong.
-4. **`Clock` seam + the five missing safety-net tests** — `Watchdog.doWork`, the `onStartCommand`
-   OFF path, `markDriveStart` resume, `Health` kill-classification, the `startForeground`
-   degrade. This is the net built to prevent silent-stop and is currently almost untested.
-5. **`BridgeSerializer` / `DriveEndProcessor` / `DriveNotification`** — pure-logic extractions,
-   low risk once the above are in. `DriveEndProcessor` finally tests the gas-stop heuristic.
+4. **`Clock` seam + the safety-net tests** — ✅ **and built before 5.1, not after.** Every rule in
+   the spine is elapsed-time logic (is this gap an outage, is this drive-start mark stale) and none
+   of it was reachable from a test, because the clock was a static call and the intervals are tens
+   of minutes. `Clock.now()` / `Clock.sinceBoot()` are the two clocks the app actually reasons
+   about — the wall clock, which jumps, and time-since-boot, which cannot, and which is the **only**
+   reason `Health` can tell an ordinary reboot from an OEM kill. Scope is deliberately the spine
+   (`Health`, `Watchdog`, `LocationService`'s drive session) and nothing else: a clock no test needs
+   to move is not worth a seam.
+   - **`Watchdog.reconcile` was lifted out of `Worker.doWork`.** A `Worker` can only be built with a
+     `WorkerParameters`, which is `@RestrictTo` — so the one piece of code whose whole job is to
+     notice that logging has silently stopped was itself the least reachable code in the app.
+     `running` is now a parameter, so a test can state the world instead of faking a static.
+   - **`DriveSession.resumable`** — the mid-drive resume rule, which `onCreate`'s tier latch and
+     `markDriveStart` had each written out separately. They are two halves of one decision (the latch
+     holds DRIVING open *precisely so* `markDriveStart` finds the mark still there), so a drift
+     between them would hold the drive open and then throw away the mark it was held open for.
+   - **`LocationService.enterForeground`** — a seam, not a strategy. The degrade it guards (Android
+     14 refusing an FGS whose type prerequisites aren't met) cannot be provoked in any unit-test
+     runtime, so the crash-loop guard was untestable — and an unreachable safety net is one a future
+     refactor deletes quietly. It also made explicit what was only implicit: the degrade must **not**
+     clear `loggingEnabled`, because a start we could not perform is not a stop the user asked for.
+   - Tests: `DriveSessionTest`, `HealthLedgerTest` (a kill is a fault and is announced; a clean stop
+     and an ordinary reboot are neither; a 2-min bounce is not an outage at all; a 5-min one is
+     recorded but not announced; a watchdog that already spoke mid-episode does not speak twice),
+     `WatchdogTest` (the restart, plus the two ways being *too eager* is worse than being asleep —
+     never resurrect a tracker the user switched off, never hammer a revoked permission — and
+     `isKill` on a phone that has never beaten, which without its `> 0` guard would greet every
+     fresh install by accusing it), `LocationServiceTest` (the OFF path returns `START_NOT_STICKY`
+     *and* clears `loggingEnabled`; the `startForeground` degrade stops cleanly and does **not**;
+     the resume latch holds a live drive but not a stale mark).
+   - `work-testing` joins the test deps (version-locked to `work-runtime`): the OFF path cancels the
+     watchdog, and `WorkManager.getInstance` throws with no WorkManager to cancel it in.
+5. **`BridgeSerializer` / `DriveEndProcessor` / `DriveNotification`** — ✅ pure-logic extractions.
+   - **`DriveEndProcessor`** finally tests the gas-stop heuristic. Its two distance checks are the
+     part that matters: same-spot compares prev's **END** to cur's **START** ("did the car move
+     while it was stopped?"), progress compares prev's **START** to cur's **END** ("did the journey
+     get anywhere?"). They read alike, mean opposite things, and the second is the one people leave
+     out — without it, driving to the station, filling up and driving straight home reads as a
+     gas-stop split, and merging those legs yields one "drive" that begins and ends in your own
+     driveway having gone nowhere. Also pinned: a garbled `prevDriveSummary` must decode to *no
+     previous drive*, not to a leg at 0,0 — which is in the Atlantic, hence 500 m from nothing and
+     1.5 km from nothing, i.e. silently plausible to **both** checks. Robolectric, not plain JUnit:
+     `Location.distanceBetween` is real geodesy and faking it would leave the only interesting part
+     untested.
+   - **`DriveNotification`** — `tierText` (where "a drive sitting at a pump is DRIVING but not
+     moving" is said out loud) and `signature`, whose *precision* is the point and is now pinned both
+     ways: miles compare at the one decimal the card prints (compare raw metres and every fix differs,
+     so nothing coalesces), but a real tenth-of-a-mile change still redraws. The idle card compares on
+     its **channel**, because `notif_driving_only` re-posts the same id at IMPORTANCE_MIN and the
+     status-bar icon vanishing *is* a visible change.
+   - **`BridgeSerializer`** — `getSettings()`, i.e. contract #4. Drop a key and nothing throws,
+     nothing logs, the JSON stays valid, and a settings row shows its default forever. The test
+     enumerates them and pins the trap: `updates_supported` is a hardcoded `false` and the SPA tests
+     `updates_supported !== false`, so an **absent** key reads as *supported* and puts the dead
+     Check-for-updates button back in front of every user. It is the most deletable-looking line in
+     the file and the one that must never be deleted. The sweep also turned up two bridge keys that
+     don't match their kind name — `check_engine` is gated by the shared `alerts_enabled` master
+     switch, and `weekly_digest`'s pref key predates the kind's name (`notify_digest`). Both are
+     historical rather than principled, so the test spells them out instead of special-casing them
+     away.
 6. **Fast Kotlin-compile CI job** — ✅ done, and done **first**, because it is what makes the rest
    of this phase affordable. There is no JDK on the dev host, so CI is the only Kotlin compiler in
    existence for this repo — and it only ran on `main`, which meant a work branch had *no compiler
@@ -297,6 +403,10 @@ every other item here cheaper to attempt, so it went first.
    (`compileGithubDebugKotlin` + `compileGithubDebugUnitTestKotlin`, ~2 min) runs on **every**
    branch; the full `build` still runs on main, PRs and dispatch, exactly as before. Test sources
    are compiled too — a test that doesn't compile is indistinguishable from one that doesn't exist.
+   - **Note for the next work branch:** `compile` runs everywhere, but the job that actually *runs
+     the unit tests* is `build`, which is still gated to main/PR/dispatch. On a branch, use
+     `gh workflow run android.yml --ref <branch>` to get the tests to run — a green push to a branch
+     means "it compiles", not "it passes".
 
 ## Phase 6 — targetSdk 36 + edge-to-edge (hard deadline 2026-08-31, needs device)
 
@@ -315,7 +425,12 @@ bump, and keep it off the testers' build until it's been seen to render.
 - Turn on R8/minify without first adding `@JavascriptInterface` keep rules (minify-off is
   currently load-bearing for the bridge).
 - Ship `TierReconciler` (5.1) or the edge-to-edge change (Phase 6) to testers without a phone
-  check first.
+  check first. **5.1 is in the tree and this check is still owed.**
+- Touch tier state from anywhere but the reconciler thread. `TierReconciler.requireOwnThread`
+  warns rather than throws, so the app will keep running while quietly racing again — the warning
+  in the Activity log is the only thing that will tell you.
+- Delete `updates_supported` from `BridgeSerializer` because it is "a constant". An absent key
+  reads as *supported* and puts the dead update button back (see 5.5).
 
 ## Follow-ups this raised (decisions, not chores)
 
@@ -331,6 +446,25 @@ bump, and keep it off the testers' build until it's been seen to render.
 ## Verification model
 
 No JDK/SDK/device on the dev host — CI compiles, the phone verifies. Keep commits small and
-CI-green, lean on the unit tests (especially the new safety-net ones in 5.4), and gate the two
+CI-green, lean on the unit tests (especially the safety-net ones in 5.4), and gate the two
 behavior-changing structural items (5.1, Phase 6) on a device check before they reach the
 internal track. Phases 1–4 are safe to let CI + tests carry.
+
+**What is on `hardening-phase-3` now:** Phases 1–5 complete, CI-green (compile, unit tests, lint,
+both artifacts), unshipped. The one thing standing between it and testers is the 5.1 phone check —
+drive, red-light hold, park, BT connect/disconnect, OBD drive — because a `TierReconciler`
+regression would look exactly like the bug class it was built to end: nothing crashes, the logger
+just quietly stops being right.
+
+Phone checks accumulated across the phases, none of them blocking on their own:
+
+- **1.1** — drive with a mute/clone dongle; fd count stable across retries.
+- **2.1 / 2.4** — a real SAF folder backup (write + rename + retention on a real provider; the
+  extension-append behaviour is provider-specific), and a Drive backup while offline (defers,
+  doesn't fail).
+- **3.1 / 3.3** — an external link (privacy policy, Play link) now opens in the browser rather than
+  in-app, and the About card reads "Updates arrive through Google Play" with no update button.
+- **4.1 / 4.4 / 4.6** — the header light going amber after a real kill (force-stop, drive, reopen),
+  Mark still one-handed at 44px, and a sheet opened from a Modal (Mileage → Tags → New tag) still
+  behaving with the focus trap.
+- **5.1** — the one above. This is the blocking one.

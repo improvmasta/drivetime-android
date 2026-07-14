@@ -230,11 +230,32 @@ CI is the only Kotlin compiler, so a syntax error costs a full CI round-trip. Re
 have bitten us: `*/` inside a comment closes the block early, and a bare `return` in a function
 declared to return `Boolean` won't compile.
 
-CI (`.github/workflows/android.yml`) runs unit tests + lint, builds the sideload APK and the
-Play AAB, publishes the APK as a GitHub release, and uploads the AAB to Play internal testing.
-Tests worth knowing about: `AutomationHelpTest` holds the in-app cheat-sheet to
-`Control.SET_KEYS`, and `Uploader`/`DriveDetector`/`ControlParse` have real coverage. There is
-no device on the dev host, so CI *is* the safety net.
+CI (`.github/workflows/android.yml`) has two jobs. `compile` (Kotlin, app **and** test sources,
+~2 min) runs on **every branch** — a test that doesn't compile is indistinguishable from one that
+doesn't exist. `build` — unit tests, lint, the sideload APK, the Play AAB, the GitHub release, the
+Play internal upload — runs only on **main, PRs and `workflow_dispatch`**. So a green push to a
+work branch means "it compiles", *not* "it passes": to actually run the tests on a branch, use
+`gh workflow run android.yml --ref <branch>`.
+
+There is no device on the dev host, so the unit tests *are* the safety net. The ones that exist
+because the thing they cover fails **silently**, which is this app's whole bug class:
+
+- `WatchdogTest` / `HealthLedgerTest` / `LocationServiceTest` / `DriveSessionTest` — the
+  silent-stop spine. Is a gap an outage or a parked car; is a dead service a kill, a reboot, or the
+  user switching it off; does the OFF path really clear `loggingEnabled` (and does the
+  `startForeground` degrade really *not*); is a surviving drive-start mark the same drive.
+- `TierReconcilerTest` — the tier race. It pins the *invariant*, not an outcome, because the
+  outcome of a data race is usually "fine".
+- `BridgeSerializerTest` — contract #4. A dropped bridge key throws nothing and logs nothing; a
+  settings row just quietly shows its default forever.
+- `DriveEndProcessorTest` — the gas-stop heuristic, whose two distance checks read alike and mean
+  opposite things.
+- `AutomationHelpTest` holds the in-app cheat-sheet to `Control.SET_KEYS`; `Uploader`,
+  `DriveDetector`, `ControlParse`, `JsonlRing`, `BackupStore` and `ObdSession` have real coverage.
+
+Time in the spine goes through `Clock` (wall clock + time-since-boot), so tests can move it instead
+of waiting twenty minutes. Everything outside the spine still calls `System.currentTimeMillis()`
+directly, on purpose — a clock no test needs to move is not worth a seam.
 
 The toolchain moves as a unit: **compileSdk 36 needs AGP ≥ 8.9.1, and AGP 8.10 needs Gradle
 ≥ 8.11.1** (CI generates the wrapper). Bumping one without the other fails at configuration.
@@ -264,7 +285,13 @@ ship log to stamp, no local build to gate on); CI plus `--watch` are the pre-pub
 - **Low-accuracy / no-fix handling** — flag or drop poor fixes. (The "location services off" half
   is done: `Health` records it as a `cond` transition and the Drives timeline names it as the
   cause of a gap.)
-- **One logging state machine** — manual, detector, and routine commands can still race.
+- **~~One logging state machine~~ — done (hardening 5.1).** `TierReconciler` is the single
+  thread tier state lives on; manual, detector and routine commands all `submit` to it and are
+  applied serially, in order. Fixes are delivered straight onto that thread, so the hot path is
+  not a hop — it *is* the thread. The invariant ("nothing mutates tier fields directly") is
+  enforced by `requireOwnThread`, which **warns rather than throws** in production: an app whose
+  purpose is to not stop logging must not acquire a new way to die. If you see
+  "touched tier state on '<thread>'" in the Activity log, something is racing again.
 - **Credentials in Keystore** — the five secrets (`Settings.SECRET_KEYS`: device token, control
   token, legacy username/password, Drive refresh + access token) still sit in plain
   `SharedPreferences`, and `SettingsExport` writes them in cleartext — deliberately, because the
