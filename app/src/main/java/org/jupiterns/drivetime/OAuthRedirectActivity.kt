@@ -24,8 +24,12 @@ class OAuthRedirectActivity : Activity() {
         val main = Handler(Looper.getMainLooper())
         when {
             !code.isNullOrBlank() -> Thread {
-                val err = DriveAuth.finishAuth(Settings(app), code)
+                val settings = Settings(app)
+                val err = DriveAuth.finishAuth(settings, code)
                 val msg = if (err == null) {
+                    // Drive is now a destination, so the scheduled backup needs the network
+                    // constraint it didn't need a moment ago (BackupWorker.constraints).
+                    runCatching { BackupWorker.reschedule(app, settings) }
                     EventLog.info("Google Drive connected")
                     "Google Drive connected"
                 } else {

@@ -6,7 +6,24 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /** Server connection settings, backed by SharedPreferences. */
 class Settings(context: Context) {
-    private val prefs = context.getSharedPreferences("drivetime", Context.MODE_PRIVATE)
+    private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    /**
+     * The **secrets**, in their own prefs file — see [SECRET_KEYS] for what and [migrateSecrets]
+     * for how existing installs get here.
+     *
+     * They are split out for exactly one reason: Android's backup rules can exclude a whole
+     * SharedPreferences *file* but **cannot exclude individual keys**. Leaving the tokens in
+     * `drivetime.xml` therefore forced a choice between "Google's cloud holds your credentials"
+     * and "a restore loses every setting you have". A second file dissolves the choice —
+     * `drivetime.xml` backs up normally, `drivetime_secrets.xml` never leaves the device by any
+     * route the user didn't pick (`res/xml/data_extraction_rules.xml`).
+     *
+     * The key *names* are unchanged, so [SettingsExport] (which round-trips them by name, and
+     * still carries them deliberately — the app's own backup is the full-fidelity restore path)
+     * and every other caller are unaffected. Only the file underneath moved.
+     */
+    private val secrets = context.getSharedPreferences(SECRET_PREFS, Context.MODE_PRIVATE)
 
     /** Server URL. **Empty by default → standalone/local mode** (STANDALONE.md A3): a fresh
      *  install runs entirely on-device against the bundled SPA + replica, no server required.
@@ -36,51 +53,63 @@ class Settings(context: Context) {
      *  QR on the server's dashboard, or paste the code); sent as `Bearer <token>` on every
      *  API call. Replaces the old username/password login *and* the separate ingest token. */
     var deviceToken: String
-        get() = prefs.getString("device_token", "") ?: ""
-        set(v) = prefs.edit().putString("device_token", v.trim()).apply()
+        get() = secrets.getString("device_token", "") ?: ""
+        set(v) = secrets.edit().putString("device_token", v.trim()).apply()
 
     /** Legacy dashboard login (username/password → HTTP Basic). Kept only so an app that
      *  paired before the device-token model keeps syncing until it re-pairs (AUTH.md →
      *  Migration). New pairings set [deviceToken] and leave these blank. */
     var username: String
-        get() = prefs.getString("username", "") ?: ""
-        set(v) = prefs.edit().putString("username", v.trim()).apply()
+        get() = secrets.getString("username", "") ?: ""
+        set(v) = secrets.edit().putString("username", v.trim()).apply()
 
     var password: String
-        get() = prefs.getString("password", "") ?: ""
-        set(v) = prefs.edit().putString("password", v).apply()
+        get() = secrets.getString("password", "") ?: ""
+        set(v) = secrets.edit().putString("password", v).apply()
+
+    /**
+     * Every numeric cadence/threshold below is bounds-checked through [ControlParse.clampSetting]
+     * on **both** sides of the pref.
+     *
+     * On write, so the value the user sees stored is the one that takes effect, and no writer —
+     * routine `SET`, a [SettingsExport] import, or the SPA bridge — can install a cadence the
+     * logger can't act on (`0` spins GPS flat out; `2000000000` is a fix every 63 years, which
+     * silently ends drive detection). On read, so a value a previous build already wrote to prefs
+     * can't outlive this fix on a phone that merely updates the app.
+     */
+    private fun bound(key: String, v: Int) = ControlParse.clampSetting(key, v)
 
     /** Seconds between GPS fixes while *driving and moving* (the dense tier). */
     var intervalSec: Int
-        get() = prefs.getInt("interval_sec", 3)
-        set(v) = prefs.edit().putInt("interval_sec", v).apply()
+        get() = bound("interval_sec", prefs.getInt("interval_sec", 3))
+        set(v) = prefs.edit().putInt("interval_sec", bound("interval_sec", v)).apply()
 
     /** Seconds between fixes while *driving but stopped* (red light / traffic):
      *  adaptive back-off so a stop doesn't flood at the moving rate. */
     var idleIntervalSec: Int
-        get() = prefs.getInt("idle_interval_sec", 20)
-        set(v) = prefs.edit().putInt("idle_interval_sec", v).apply()
+        get() = bound("idle_interval_sec", prefs.getInt("idle_interval_sec", 20))
+        set(v) = prefs.edit().putInt("idle_interval_sec", bound("idle_interval_sec", v)).apply()
 
     /** Seconds between fixes when *not driving* (the light background tier):
      *  a sparse, low-power everyday-location pulse that ramps to dense on a drive. */
     var lightIntervalSec: Int
-        get() = prefs.getInt("light_interval_sec", 60)
-        set(v) = prefs.edit().putInt("light_interval_sec", v).apply()
+        get() = bound("light_interval_sec", prefs.getInt("light_interval_sec", 60))
+        set(v) = prefs.edit().putInt("light_interval_sec", bound("light_interval_sec", v)).apply()
 
     /** Seconds between *batched* upload flushes while in **LIGHT** tier. Fixes are
      *  buffered to the on-disk queue and sent in bursts on this cadence (radio-friendly)
      *  instead of one POST per fix; a regained connection or a full batch flushes early. */
     var uploadIntervalSec: Int
-        get() = prefs.getInt("upload_interval_sec", 45)
-        set(v) = prefs.edit().putInt("upload_interval_sec", v).apply()
+        get() = bound("upload_interval_sec", prefs.getInt("upload_interval_sec", 45))
+        set(v) = prefs.edit().putInt("upload_interval_sec", bound("upload_interval_sec", v)).apply()
 
     /** Seconds between flushes while **DRIVING** — short, so the dashboard / live ETA
      *  see near-real-time position instead of the battery-friendly LIGHT cadence.
      *  Foreground UI and charge-connected events also trigger an immediate flush
      *  regardless of this. */
     var drivingUploadIntervalSec: Int
-        get() = prefs.getInt("driving_upload_interval_sec", 10)
-        set(v) = prefs.edit().putInt("driving_upload_interval_sec", v).apply()
+        get() = bound("driving_upload_interval_sec", prefs.getInt("driving_upload_interval_sec", 10))
+        set(v) = prefs.edit().putInt("driving_upload_interval_sec", bound("driving_upload_interval_sec", v)).apply()
 
     /**
      * Tracking mode = the *desired* behaviour, set by the user or a routine:
@@ -110,25 +139,25 @@ class Settings(context: Context) {
     /** Probationary GPS cadence (seconds) after a significant-motion trigger, so the
      *  speed backstop has dense fixes to confirm a real start. */
     var onsetProbeIntervalSec: Int
-        get() = prefs.getInt("onset_probe_interval_sec", 3)
-        set(v) = prefs.edit().putInt("onset_probe_interval_sec", v).apply()
+        get() = bound("onset_probe_interval_sec", prefs.getInt("onset_probe_interval_sec", 3))
+        set(v) = prefs.edit().putInt("onset_probe_interval_sec", bound("onset_probe_interval_sec", v)).apply()
 
     /** How long (seconds) the probationary dense GPS runs before falling back to LIGHT
      *  if no drive was confirmed. */
     var onsetProbeWindowSec: Int
-        get() = prefs.getInt("onset_probe_window_sec", 25)
-        set(v) = prefs.edit().putInt("onset_probe_window_sec", v).apply()
+        get() = bound("onset_probe_window_sec", prefs.getInt("onset_probe_window_sec", 25))
+        set(v) = prefs.edit().putInt("onset_probe_window_sec", bound("onset_probe_window_sec", v)).apply()
 
     /** Doppler speed (m/s) at/above which a motion-onset wake is unambiguously vehicular. */
     var onsetSpeedMps: Int
-        get() = prefs.getInt("onset_speed_mps", 4)
-        set(v) = prefs.edit().putInt("onset_speed_mps", v).apply()
+        get() = bound("onset_speed_mps", prefs.getInt("onset_speed_mps", 4))
+        set(v) = prefs.edit().putInt("onset_speed_mps", bound("onset_speed_mps", v)).apply()
 
     /** Accelerometer-energy RMS threshold (×100 m/s²) separating a smooth vehicle from an
      *  on-foot bounce in the ambiguous low-speed band; below it ⇒ vehicle. */
     var onsetAccelRms: Int
-        get() = prefs.getInt("onset_accel_rms", 250)
-        set(v) = prefs.edit().putInt("onset_accel_rms", v).apply()
+        get() = bound("onset_accel_rms", prefs.getInt("onset_accel_rms", 250))
+        set(v) = prefs.edit().putInt("onset_accel_rms", bound("onset_accel_rms", v)).apply()
 
     /** Car Bluetooth device (stereo / head unit). Its connection is the #1 "I'm
      *  driving" signal — deterministic, no activity-recognition guessing. */
@@ -159,8 +188,8 @@ class Settings(context: Context) {
     /** End a trip after this many minutes stationary, as a backstop for a missed
      *  activity-recognition "exited vehicle". 0 disables; only used with autoTrip. */
     var stationaryStopMin: Int
-        get() = prefs.getInt("stationary_stop_min", 5)
-        set(v) = prefs.edit().putInt("stationary_stop_min", v).apply()
+        get() = bound("stationary_stop_min", prefs.getInt("stationary_stop_min", 5))
+        set(v) = prefs.edit().putInt("stationary_stop_min", bound("stationary_stop_min", v)).apply()
 
     /** Whether the logging service is currently meant to be running. */
     var loggingEnabled: Boolean
@@ -282,6 +311,19 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("notify_tracking_health", true)
         set(v) = prefs.edit().putBoolean("notify_tracking_health", v).apply()
 
+    /**
+     * Post [Notify.KIND_BACKUP_HEALTH] after [BackupWorker.FAIL_STREAK] consecutive failed
+     * automatic backups.
+     *
+     * Defaults **ON** for the same reason as [notifyTrackingHealth]: a backup that has been
+     * failing for a month is only discovered on the day it's needed, and the app is the only
+     * thing that knows. An error report, not a nag — it fires once per failing streak, and the
+     * first successful run retracts it.
+     */
+    var notifyBackupHealth: Boolean
+        get() = prefs.getBoolean("notify_backup_health", true)
+        set(v) = prefs.edit().putBoolean("notify_backup_health", v).apply()
+
     // ---- event notifications (NOTIFICATIONS.md P3) — decision prompts, all default OFF ----
 
     /** Post a system notification when a drive seals still untagged ("drive completed —
@@ -301,6 +343,88 @@ class Settings(context: Context) {
     var notifyDigest: Boolean
         get() = prefs.getBoolean("notify_digest", false)
         set(v) = prefs.edit().putBoolean("notify_digest", v).apply()
+
+    /**
+     * Post a system notification when drives are sitting on a route default they could just be
+     * given ([Notify.KIND_APPLY_USUAL] — "3 drives match a usual tag"). The count comes from the
+     * SPA's attention payload, which is the only thing that knows what a route default IS; the
+     * phone just reports the number it was handed. Default OFF, like every other nag.
+     */
+    var notifyApplyUsual: Boolean
+        get() = prefs.getBoolean("notify_apply_usual", false)
+        set(v) = prefs.edit().putBoolean("notify_apply_usual", v).apply()
+
+    /**
+     * Post a system notification when the tracker RECORDS a fault outage — a window it has
+     * stated it was not running ([Notify.KIND_COVERAGE_GAP], from [Health]'s ledger).
+     *
+     * Overlaps [notifyTrackingHealth] on purpose: that one fires when a kill is *detected*, this
+     * one when the lost window is *written down* and its length is known ("you lost 14:02–15:10").
+     * Default OFF precisely because of that overlap — a user who wants both opts in.
+     */
+    var notifyCoverageGap: Boolean
+        get() = prefs.getBoolean("notify_coverage_gap", false)
+        set(v) = prefs.edit().putBoolean("notify_coverage_gap", v).apply()
+
+    /**
+     * Post a system notification when the server rejects our credentials ([Notify.KIND_AUTH_FAILED]
+     * — the device token was rotated or revoked, so nothing is reaching the server). Retracted by
+     * the first upload that succeeds.
+     *
+     * Default OFF: the app is standalone (STANDALONE.md), the queue is durable, and a server that
+     * has stopped accepting us costs the user nothing until they go looking for the website.
+     */
+    var notifyAuthFailed: Boolean
+        get() = prefs.getBoolean("notify_auth_failed", false)
+        set(v) = prefs.edit().putBoolean("notify_auth_failed", v).apply()
+
+    // ---- in-app notifications (the bell inside the SPA) ----
+    //
+    // The SECOND toggle every kind now has. The pref above decides whether the OS shows a
+    // notification; the pref here decides whether the kind appears in the app's own notification
+    // centre. They are genuinely independent — "tell me in the app but don't buzz my phone" is the
+    // default posture, and it is what the app has always done (the bell has never consulted a
+    // setting; it showed everything).
+    //
+    // So these all default **ON**: that IS the current behaviour, and a default of OFF would
+    // silently empty the bell for every installed phone on upgrade.
+    //
+    // NOTHING IN THE ANDROID CODE READS THESE. They are stored here — rather than in the SPA's own
+    // localStorage — for exactly two reasons: they ride [SettingsExport] with every other setting
+    // (so a backup/restore carries them), and Settings is one screen with one storage. `notify.js`
+    // reads them over `getSettings()` and gates the feed; a plain browser gets no bridge, no
+    // settings, and therefore every kind — which is the honest answer, since the website has no
+    // notification settings UI to have turned one off with.
+    private fun inApp(key: String) = prefs.getBoolean(key, true)
+    private fun setInApp(key: String, v: Boolean) = prefs.edit().putBoolean(key, v).apply()
+
+    var inAppDriveComplete: Boolean
+        get() = inApp("notify_drive_complete_inapp")
+        set(v) = setInApp("notify_drive_complete_inapp", v)
+    var inAppGasStop: Boolean
+        get() = inApp("notify_gas_stop_inapp")
+        set(v) = setInApp("notify_gas_stop_inapp", v)
+    var inAppApplyUsual: Boolean
+        get() = inApp("notify_apply_usual_inapp")
+        set(v) = setInApp("notify_apply_usual_inapp", v)
+    var inAppDigest: Boolean
+        get() = inApp("notify_digest_inapp")
+        set(v) = setInApp("notify_digest_inapp", v)
+    var inAppCheckEngine: Boolean
+        get() = inApp("notify_check_engine_inapp")
+        set(v) = setInApp("notify_check_engine_inapp", v)
+    var inAppTrackingHealth: Boolean
+        get() = inApp("notify_tracking_health_inapp")
+        set(v) = setInApp("notify_tracking_health_inapp", v)
+    var inAppCoverageGap: Boolean
+        get() = inApp("notify_coverage_gap_inapp")
+        set(v) = setInApp("notify_coverage_gap_inapp", v)
+    var inAppBackupHealth: Boolean
+        get() = inApp("notify_backup_health_inapp")
+        set(v) = setInApp("notify_backup_health_inapp", v)
+    var inAppAuthFailed: Boolean
+        get() = inApp("notify_auth_failed_inapp")
+        set(v) = setInApp("notify_auth_failed_inapp", v)
 
     /** Day the weekly digest fires, in the SPA's `Date.getDay()` numbering (0 = Sunday …
      *  6 = Saturday). Default Monday — the week's drives are in, the week ahead isn't. */
@@ -330,14 +454,16 @@ class Settings(context: Context) {
         get() = prefs.getString("prev_drive_summary", "") ?: ""
         set(v) = prefs.edit().putString("prev_drive_summary", v).apply()
 
-    /** Optional shared secret gating *parameter-setting* control intents (SET, QUERY).
-     *  Blank → open (the default; this is a private app on the user's own phone). When
-     *  set, a routine must include `token=<this>` in its intent extras or the action is
-     *  silently ignored. START/STOP/TOGGLE remain open per the roadmap — they're
-     *  low-risk and routines should be able to stop the app even if the token rotates. */
+    /** Optional shared secret gating the *exported* control surface. Blank → fully open (the
+     *  default; this is a private app on the user's own phone). When set, an intent from
+     *  outside the app must carry `token=<this>` to use SET, QUERY, MARK, **STOP or TOGGLE**
+     *  (hardening 3.2 — an app that can silently stop your tracking is the thing worth
+     *  gating). START and the MODE_* verbs stay open: they cannot stop logging, so a routine
+     *  can always recover tracking without the secret. Enforced in [Control.applyExternal];
+     *  the app's own switches never need it. See AUTOMATION.md. */
     var controlToken: String
-        get() = prefs.getString("control_token", "") ?: ""
-        set(v) = prefs.edit().putString("control_token", v.trim()).apply()
+        get() = secrets.getString("control_token", "") ?: ""
+        set(v) = secrets.edit().putString("control_token", v.trim()).apply()
 
     /** Last thing that changed tracking state — "user", "shortcut", "routine",
      *  "watchdog", "boot", "auto", … — surfaced in the STATE_CHANGED broadcast so a
@@ -404,14 +530,53 @@ class Settings(context: Context) {
         get() = prefs.getLong("last_kill_notified_at", 0L)
         set(v) = prefs.edit().putLong("last_kill_notified_at", v).apply()
 
-    /** Auto-check the server for a newer APK when the app comes to the foreground
-     *  (throttled). Off = only the manual "Check for updates" button checks. */
+    // ---- the logger's liveness ledger ([Health]) ----
+    //
+    // These three describe the CURRENT logging process while it runs, and its corpse once it
+    // doesn't. `onCreate` reads them before writing any of them, so whatever they hold at that
+    // moment can only describe a *predecessor* — which is what lets the tracker state "I was
+    // down from X to Y" as a fact instead of inferring it from an absence of GPS fixes.
+
+    /** Wall-clock (ms) of the last proof that the logging process was ALIVE — bumped from a fix,
+     *  an upload flush, or a watchdog pass, at most once a minute. Distinct from [lastFixAt] in the
+     *  way that matters: a parked phone stops producing fixes but keeps beating, so a stale beat
+     *  means the tracker was *gone*, where a stale fix only ever meant the car wasn't moving. */
+    var lifeBeatAt: Long
+        get() = prefs.getLong("life_beat_at", 0L)
+        set(v) = prefs.edit().putLong("life_beat_at", v).apply()
+
+    /** Wall-clock (ms) the service's `onDestroy` ran; 0 when it is running — or when it was killed
+     *  outright and never got to run one, which is exactly the case worth knowing about. */
+    var lifeEndedAt: Long
+        get() = prefs.getLong("life_ended_at", 0L)
+        set(v) = prefs.edit().putLong("life_ended_at", v).apply()
+
+    /** Why the last life ended: "stop" (the user turned tracking off) or "system" (the OS stopped
+     *  the service while logging was still meant to be on). Blank when it never said. */
+    var lifeEndReason: String
+        get() = prefs.getString("life_end_reason", "") ?: ""
+        set(v) = prefs.edit().putString("life_end_reason", v).apply()
+
+    /** Signature of the last recorded tracker-condition tuple (location on / permissions / power
+     *  saver), so [Health] writes a row when the conditions CHANGE and stays silent otherwise. */
+    var healthCond: String
+        get() = prefs.getString("health_cond", "") ?: ""
+        set(v) = prefs.edit().putString("health_cond", v).apply()
+
+    /**
+     * Vestigial: both of these drove the in-app APK updater, which is deleted (Play forbids
+     * an app updating itself). Nothing reads them to make a decision any more — the SPA hides
+     * the whole affordance when the bridge reports `updates_supported=false`.
+     *
+     * The keys stay because they are still *written*: `updates_enabled` round-trips through
+     * `SettingsExport`, so an older exported settings file must still import, and a phone
+     * that already has these prefs must not choke on them. Cheap to keep, and removing them
+     * buys nothing. Do not build anything new on them.
+     */
     var updatesEnabled: Boolean
         get() = prefs.getBoolean("updates_enabled", true)
         set(v) = prefs.edit().putBoolean("updates_enabled", v).apply()
 
-    /** Wall-clock (ms) of the last in-app update check, so the foreground auto-check
-     *  throttles instead of hitting the server every resume. */
     var lastUpdateCheckAt: Long
         get() = prefs.getLong("last_update_check_at", 0L)
         set(v) = prefs.edit().putLong("last_update_check_at", v).apply()
@@ -450,17 +615,19 @@ class Settings(context: Context) {
     val driveClientId: String
         get() = backupDriveClientId.ifBlank { DEFAULT_DRIVE_CLIENT_ID }
 
-    /** Long-lived Drive credential; non-blank = connected. */
+    /** Long-lived Drive credential; non-blank = connected. Scope is `drive.file`, so it reaches
+     *  only the files this app created — but it is still a credential, and lives with them. */
     var backupDriveRefreshToken: String
-        get() = prefs.getString("backup_drive_refresh_token", "") ?: ""
-        set(v) = prefs.edit().putString("backup_drive_refresh_token", v).apply()
+        get() = secrets.getString("backup_drive_refresh_token", "") ?: ""
+        set(v) = secrets.edit().putString("backup_drive_refresh_token", v).apply()
     var backupDriveAccessToken: String
-        get() = prefs.getString("backup_drive_access_token", "") ?: ""
-        set(v) = prefs.edit().putString("backup_drive_access_token", v).apply()
-    /** Epoch-ms the access token dies (refreshed a bit early). */
+        get() = secrets.getString("backup_drive_access_token", "") ?: ""
+        set(v) = secrets.edit().putString("backup_drive_access_token", v).apply()
+    /** Epoch-ms the access token dies (refreshed a bit early). Not a secret itself, but it is
+     *  meaningless without the token it describes, so it moves with it. */
     var backupDriveTokenExpiry: Long
-        get() = prefs.getLong("backup_drive_token_expiry", 0L)
-        set(v) = prefs.edit().putLong("backup_drive_token_expiry", v).apply()
+        get() = secrets.getLong("backup_drive_token_expiry", 0L)
+        set(v) = secrets.edit().putLong("backup_drive_token_expiry", v).apply()
     /** The connected account's email, for the Settings card. */
     var backupDriveAccount: String
         get() = prefs.getString("backup_drive_account", "") ?: ""
@@ -485,6 +652,12 @@ class Settings(context: Context) {
     var backupLastResult: String
         get() = prefs.getString("backup_last_result", "") ?: ""
         set(v) = prefs.edit().putString("backup_last_result", v).apply()
+
+    /** Consecutive *automatic* backup runs that failed. Reset by any run that succeeds; drives
+     *  [Notify.KIND_BACKUP_HEALTH] once it reaches [BackupWorker.FAIL_STREAK]. */
+    var backupFailStreak: Int
+        get() = prefs.getInt("backup_fail_streak", 0)
+        set(v) = prefs.edit().putInt("backup_fail_streak", v.coerceAtLeast(0)).apply()
 
     /** Epoch-ms the SPA last pushed its data snapshot over the bridge — the freshness of
      *  the app-data half of any archive a background worker builds. */
@@ -516,6 +689,70 @@ class Settings(context: Context) {
 
     companion object {
         val BACKUP_SCHEDULES = setOf("off", "daily", "weekly", "drive")
+
+        const val PREFS = "drivetime"
+        const val SECRET_PREFS = "drivetime_secrets"
+
+        /** Every key that lives in [SECRET_PREFS] instead of [PREFS]. All are strings except
+         *  `backup_drive_token_expiry`, which is a Long — hence [SECRET_LONG_KEYS]. */
+        val SECRET_KEYS = listOf(
+            "device_token",                 // Bearer credential for the paired server
+            "username", "password",         // legacy Basic-auth login it replaced
+            "control_token",                // the routine/automation shared secret
+            "backup_drive_refresh_token",   // long-lived Drive credential
+            "backup_drive_access_token",    // short-lived, derived from it
+            "backup_drive_token_expiry",
+        )
+        private val SECRET_LONG_KEYS = setOf("backup_drive_token_expiry")
+
+        /**
+         * Move the secrets out of `drivetime.xml` and into `drivetime_secrets.xml` on an install
+         * that predates the split. Called once from [DrivetimeApp.onCreate] — single process, so
+         * it completes before anything reads a [Settings].
+         *
+         * The failure this is written against is the one that actually hurts: **losing the device
+         * token**, which silently unpairs a phone that was working. So it copies, *verifies the
+         * copy landed*, and only then clears the originals — and any step failing leaves the
+         * originals exactly where they are, so the next launch simply tries again. A phone that
+         * dies mid-migration comes up with its credentials intact in the old file and re-runs
+         * this; the worst case is one more launch spent unmigrated, never a lost token.
+         *
+         * Idempotent with no "migrated" flag to get out of sync, and safe to re-run against a
+         * partially-migrated install: a key already present in the secrets file is treated as
+         * authoritative and is *never* overwritten from the old one. Without that rule, a
+         * migration that copied but failed to clear would let a later launch resurrect a stale
+         * token over a newer one.
+         */
+        fun migrateSecrets(context: Context) {
+            val main = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val secrets = context.getSharedPreferences(SECRET_PREFS, Context.MODE_PRIVATE)
+
+            val stale = SECRET_KEYS.filter { main.contains(it) }
+            if (stale.isEmpty()) return   // fresh install, or already migrated
+
+            val edit = secrets.edit()
+            for (key in stale) {
+                if (secrets.contains(key)) continue   // the secrets file wins, always
+                if (key in SECRET_LONG_KEYS) edit.putLong(key, main.getLong(key, 0L))
+                else edit.putString(key, main.getString(key, "") ?: "")
+            }
+            // commit(), not apply(): the clear below must not race ahead of the write.
+            if (!edit.commit()) {
+                EventLog.warn("Secret migration: write failed — credentials left in place, will retry")
+                return
+            }
+
+            val missing = stale.filterNot { secrets.contains(it) }
+            if (missing.isNotEmpty()) {
+                EventLog.warn("Secret migration: ${missing.size} key(s) did not land — left in place, will retry")
+                return
+            }
+
+            val clear = main.edit()
+            for (key in stale) clear.remove(key)
+            if (clear.commit()) EventLog.info("Secrets moved to their own prefs file (${stale.size} keys)")
+            else EventLog.warn("Secret migration: copied, but the old copy could not be cleared — will retry")
+        }
 
         /** Built-in Google Drive OAuth client (BACKUP.md). A client ID is a public app
          *  identifier, not a secret — safe to commit — so a tester's whole Drive setup is

@@ -4,53 +4,53 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Pure-JVM tests for the WebView shell's link routing (no Android needed). */
+/**
+ * Pure-JVM tests for the WebView shell's link routing (no Android needed).
+ *
+ * This is a security boundary, not a UX preference: the WebView these URLs load into carries
+ * the `DrivetimeNative` bridge, so "loads in-app" means "gets the bridge". Only the bundled
+ * SPA origin may (hardening 3.3).
+ */
 class WebAuthTest {
 
-    private val server = "https://drivetime.jupiterns.org"
-
-    @Test fun sameHostLoadsInApp() {
-        assertTrue(WebAuth.isInAppUrl(server, "https://drivetime.jupiterns.org/"))
-        assertTrue(WebAuth.isInAppUrl(server, "https://drivetime.jupiterns.org/drive/42"))
-        assertTrue(WebAuth.isInAppUrl(server, "https://drivetime.jupiterns.org/api/mileage/export.csv?range=year"))
+    @Test fun bundledSpaOriginIsInApp() {
+        assertTrue(WebAuth.isInAppUrl("https://appassets.androidplatform.net/assets/web/index.html"))
+        assertTrue(WebAuth.isInAppUrl("https://appassets.androidplatform.net/assets/web/drive/42"))
+        assertTrue(WebAuth.isInAppUrl("https://APPASSETS.ANDROIDPLATFORM.NET/assets/web/index.html"))
     }
 
-    @Test fun hostMatchIsCaseInsensitive() {
-        assertTrue(WebAuth.isInAppUrl(server, "https://Drivetime.Jupiterns.Org/commute"))
-    }
-
-    @Test fun serverUrlWithoutSchemeHostStillWorks() {
-        // Settings trims the trailing slash; a plain https root still parses.
-        assertTrue(WebAuth.isInAppUrl("https://drivetime.jupiterns.org", "https://drivetime.jupiterns.org/places"))
+    /** The change 3.3 made. The server is a cross-origin sync target, never a page — so a link
+     *  to it opens in the browser instead of loading into the bridge's WebView. These used to
+     *  be in-app, which meant a compromised / MITM'd / lookalike server page would have been
+     *  handed every @JavascriptInterface method the bridge exposes. */
+    @Test fun theServerIsExternalNow() {
+        assertFalse(WebAuth.isInAppUrl("https://drivetime.jupiterns.org/"))
+        assertFalse(WebAuth.isInAppUrl("https://drivetime.jupiterns.org/drive/42"))
+        // Including the privacy-policy link the About card points at — same host, and the most
+        // likely way this would have been tripped by accident rather than by an attacker.
+        assertFalse(WebAuth.isInAppUrl("https://drivetime.jupiterns.org/privacy"))
+        // And a self-hosted server on plain HTTP, where MITM is trivial.
+        assertFalse(WebAuth.isInAppUrl("http://192.168.1.10:8200/"))
     }
 
     @Test fun otherHostsAreExternal() {
-        assertFalse(WebAuth.isInAppUrl(server, "https://www.openstreetmap.org/"))
-        assertFalse(WebAuth.isInAppUrl(server, "https://evil.example.com/drivetime.jupiterns.org"))
-        assertFalse(WebAuth.isInAppUrl(server, "https://sub.drivetime.jupiterns.org/"))
+        assertFalse(WebAuth.isInAppUrl("https://www.openstreetmap.org/"))
+        assertFalse(WebAuth.isInAppUrl("https://evil.example.com/appassets.androidplatform.net"))
+        assertFalse(WebAuth.isInAppUrl("https://appassets.androidplatform.net.evil.example.com/"))
+        assertFalse(WebAuth.isInAppUrl("https://sub.appassets.androidplatform.net/"))
     }
 
     @Test fun nonHttpSchemesAreExternal() {
-        assertFalse(WebAuth.isInAppUrl(server, "mailto:lindsay@jupiterns.org"))
-        assertFalse(WebAuth.isInAppUrl(server, "tel:+15551234567"))
-        assertFalse(WebAuth.isInAppUrl(server, "geo:40.7,-74.0"))
+        assertFalse(WebAuth.isInAppUrl("mailto:lindsay@jupiterns.org"))
+        assertFalse(WebAuth.isInAppUrl("tel:+15551234567"))
+        assertFalse(WebAuth.isInAppUrl("geo:40.7,-74.0"))
+        assertFalse(WebAuth.isInAppUrl("javascript:alert(1)"))
+        assertFalse(WebAuth.isInAppUrl("intent://foo#Intent;scheme=http;end"))
+        assertFalse(WebAuth.isInAppUrl("file:///android_asset/web/index.html"))
     }
 
     @Test fun garbageIsNotInApp() {
-        assertFalse(WebAuth.isInAppUrl(server, "not a url"))
-        assertFalse(WebAuth.isInAppUrl(server, ""))
-    }
-
-    @Test fun bundledSpaOriginIsInApp() {
-        // The standalone shell serves the SPA from the appassets origin; its own navigation
-        // must stay in the WebView even though there's no server host configured.
-        assertTrue(WebAuth.isInAppUrl("", "https://appassets.androidplatform.net/assets/web/index.html"))
-        assertTrue(WebAuth.isInAppUrl(server, "https://appassets.androidplatform.net/assets/web/index.html"))
-    }
-
-    @Test fun noServerAndNonBundledIsExternal() {
-        // Local mode (no server) → only the bundled origin is in-app; everything else opens out.
-        assertFalse(WebAuth.isInAppUrl("", "https://drivetime.jupiterns.org/"))
-        assertFalse(WebAuth.isInAppUrl("", "https://www.openstreetmap.org/"))
+        assertFalse(WebAuth.isInAppUrl("not a url"))
+        assertFalse(WebAuth.isInAppUrl(""))
     }
 }

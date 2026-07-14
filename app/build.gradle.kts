@@ -57,12 +57,16 @@ android {
 
     // Two distribution channels from one source tree.
     //
-    //   github — the sideload/self-update channel this app was born on. Keeps the in-app
-    //            Updater and REQUEST_INSTALL_PACKAGES (declared in src/github's manifest).
-    //   play   — Google Play. The updater is COMPILED OUT, because Play's Device and
-    //            Network Abuse policy forbids an app updating itself by any route other
-    //            than Play, and REQUEST_INSTALL_PACKAGES may not be used for self-updates.
-    //            Shipping the updater here is not a lint nit; it is a removal.
+    //   github — the sideload channel this app was born on: CI attaches an APK to a GitHub
+    //            release, and you install it by hand. It no longer self-updates.
+    //   play   — Google Play, and the channel every real install is on.
+    //
+    // The in-app updater is GONE from both (it used to live behind a per-flavor
+    // UPDATER_ENABLED flag, on for github and off for play). Play's Device and Network Abuse
+    // policy forbids an app updating itself by any route other than Play, and
+    // REQUEST_INSTALL_PACKAGES may not be used for self-updates — so the flag only ever had
+    // one safe setting, and keeping the code meant keeping a downloader-and-installer that
+    // no shipped build was allowed to run. Deleted rather than disabled. Do not re-add it.
     //
     // Same applicationId on purpose — one app, two ways of getting it. But Play re-signs
     // with its own app signing key, so a Play install and a sideload install have DIFFERENT
@@ -81,20 +85,18 @@ android {
     productFlavors {
         create("github") {
             dimension = "channel"
-            buildConfigField("boolean", "UPDATER_ENABLED", "true")
             driveClient("722912277751-82ls1e1guemrjkc3kbjq0pjlrnkhjgvu.apps.googleusercontent.com")
         }
         create("play") {
             dimension = "channel"
-            buildConfigField("boolean", "UPDATER_ENABLED", "false")
             driveClient("722912277751-7g4l57drsgijokbd9itfdn8o9qo5t4co.apps.googleusercontent.com")
         }
     }
 
     buildFeatures {
         viewBinding = true
-        // The in-app updater compares the server's advertised versionCode against this
-        // build's own (BuildConfig.VERSION_CODE), so BuildConfig must be generated.
+        // BuildConfig carries the per-flavor Drive OAuth client id (driveClient above) and
+        // the version the SPA's About card shows, so it must be generated.
         buildConfig = true
     }
 
@@ -152,4 +154,12 @@ dependencies {
     testImplementation("org.robolectric:robolectric:4.16.1")
     testImplementation("androidx.test:core:1.6.1")
     testImplementation("androidx.test.ext:junit:1.2.1")
+    // Version-locked to the okhttp above (same artifact family) — a mismatched pair is the
+    // one way this dependency bites. Lets UploaderQueueTest drive a real flush(), which is
+    // the only route to the verify-before-delete + atomic-rewrite code that guards the queue.
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    // Version-locked to work-runtime above, same reason. LocationServiceTest drives the OFF path,
+    // which cancels the watchdog — and WorkManager.getInstance() throws unless a WorkManager
+    // exists to cancel it in. This provides the test one.
+    testImplementation("androidx.work:work-testing:2.9.1")
 }

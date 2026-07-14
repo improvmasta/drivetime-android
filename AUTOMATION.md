@@ -91,9 +91,33 @@ The event-notification toggles (`notify_drive_complete`, `notify_gas_stop`,
 in-app settings only. A routine that needs them can still ship a whole settings
 file (§6).
 
-If `controlToken` is set in Settings, every `SET` and `QUERY` must include a
-matching `token` extra. `START` / `STOP` / `TOGGLE` / mode-actions ignore the
-token so a routine can always stop the app even if you rotate the secret.
+### The control token
+
+`controlToken` (Settings → Advanced) is blank by default, and **while it is blank every verb
+is open** — exactly as it has always been, so no existing recipe changes behaviour.
+
+Once you set one, an intent arriving from **outside the app** must carry a matching `token`
+extra to use `SET`, `QUERY`, `MARK`, **`STOP` or `TOGGLE`**. `START` and the `MODE_*` verbs
+stay open on purpose: they cannot stop logging — the worst they do is start it or change the
+sampling tier — so leaving them open keeps a routine able to *recover* tracking without the
+secret, while the verbs that can silently kill it are protected.
+
+`STOP`/`TOGGLE` were open regardless of the token until hardening 3.2. That meant any app on
+the phone could stop your tracking with one broadcast and no permission — and "the app quietly
+stopped logging" is this project's #1 bug class, so a token that locked the settings but left
+that open was protecting the wrong thing.
+
+Two consequences worth knowing before you set a token:
+
+- **The built-in "Stop" App Shortcut stops working.** It is static XML (`res/xml/shortcuts.xml`)
+  and cannot carry a runtime secret. Stop logging with a `STOP` intent that sends the `token`
+  extra instead. The Auto / Driving / Eco shortcuts are unaffected.
+- **The app itself never needs the token.** The in-app Tracking switch, the resume alarm and
+  the drive detector are inside the trust boundary; only the exported intent/broadcast surface
+  is gated. You can always turn tracking off by opening the app.
+
+A rejected intent is written to the in-app **Activity log** ("rejected — bad/missing token"),
+never silently dropped.
 
 ---
 

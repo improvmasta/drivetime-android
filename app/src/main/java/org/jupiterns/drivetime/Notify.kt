@@ -22,10 +22,11 @@ import kotlin.math.abs
  * Two families share this one door:
  *  - **Decision prompts** (NOTIFICATIONS.md P3/P4) — "drive completed, tag it", "gas-stop
  *    split detected", the weekly digest. One-shot, tappable, and **default OFF**.
- *  - **Health alerts** (P5) — [KIND_CHECK_ENGINE] and [KIND_TRACKING_HEALTH]. These used to
- *    post themselves from LocationService and Watchdog, each inventing its own channel, id
- *    scheme, and (non-)retraction. They now come through here, which is what buys them a
- *    channel in the group, a toggle, a deep link, and honest retraction.
+ *  - **Health alerts** (P5) — [KIND_CHECK_ENGINE], [KIND_TRACKING_HEALTH] and
+ *    [KIND_BACKUP_HEALTH]. The first two used to post themselves from LocationService and
+ *    Watchdog, each inventing its own channel, id scheme, and (non-)retraction. They now come
+ *    through here, which is what buys them a channel in the group, a toggle, a deep link, and
+ *    honest retraction.
  *
  * One OS channel per kind, so the system's own channel controls map 1:1 to the app's
  * toggles. [post] is the single gate: it silently no-ops unless the kind's toggle is on AND
@@ -54,9 +55,32 @@ object Notify {
      *  so a user who already silenced or tuned check-engine alerts keeps that setting. */
     const val KIND_CHECK_ENGINE = "check_engine"
     const val KIND_TRACKING_HEALTH = "tracking_health"
+    /** Scheduled backups have been failing ([BackupWorker.FAIL_STREAK] in a row). */
+    const val KIND_BACKUP_HEALTH = "backup_health"
+
+    // ---- the three kinds that used to exist only inside the app ----
+    //
+    // The notification centre (the bell) has always shown these, and the OS never could — so
+    // "every setting has both a system and an in-app toggle" was not true for them. Each now has a
+    // real background producer using data the phone already had, rather than a stub:
+    //   - APPLY_USUAL  <- the SPA's attention payload already carries the route-default count.
+    //   - COVERAGE_GAP <- Health's ledger already records fault outages with both ends.
+    //   - AUTH_FAILED  <- Uploader already sees the 401.
+    // All three default OFF (see Settings), so no installed phone starts buzzing on upgrade.
+
+    /** Drives are sitting on a route default they could just be given ("3 drives match a usual tag"). */
+    const val KIND_APPLY_USUAL = "apply_usual"
+
+    /** The tracker recorded a window it was NOT running, and it was long enough to have cost a drive. */
+    const val KIND_COVERAGE_GAP = "coverage_gap"
+
+    /** The server rejected our credentials — the device token was rotated or revoked. */
+    const val KIND_AUTH_FAILED = "auth_failed"
 
     /** The kill warning is a singleton — one "we lost your drives" at a time, replaced in
-     *  place rather than stacked, and cancelled by this id when the user acknowledges it. */
+     *  place rather than stacked, and cancelled by this id when the user acknowledges it.
+     *  A failing backup is a singleton condition in exactly the same way, so it shares the id
+     *  (the ids are per-kind — [notifId] hashes kind+id — so they never collide). */
     const val HEALTH_ID = "1"
 
     /** Native drive boundaries vs the SPA's segmented ones: same drive, seconds apart. */
@@ -100,8 +124,26 @@ object Notify {
         KIND_WEEKLY_DIGEST -> s.notifyDigest
         KIND_CHECK_ENGINE -> s.alertsEnabled
         KIND_TRACKING_HEALTH -> s.notifyTrackingHealth
+        KIND_BACKUP_HEALTH -> s.notifyBackupHealth
+        KIND_APPLY_USUAL -> s.notifyApplyUsual
+        KIND_COVERAGE_GAP -> s.notifyCoverageGap
+        KIND_AUTH_FAILED -> s.notifyAuthFailed
         else -> false
     }
+
+    /**
+     * Every kind, paired with its two toggles: the SYSTEM pref (read by [enabledFor] above, the
+     * only thing that gates [post]) and the IN-APP pref (read by the SPA's `notify.js`, which
+     * gates the bell). This is the list Settings renders, and the one NOTIFICATIONS.md documents;
+     * having it in one place is what stops the two toggles from drifting apart per kind.
+     *
+     * Nothing here reads the in-app column — the phone only stores it. See Settings' in-app block.
+     */
+    val KINDS: List<String> = listOf(
+        KIND_DRIVE_COMPLETE, KIND_GAS_STOP, KIND_APPLY_USUAL, KIND_WEEKLY_DIGEST,
+        KIND_CHECK_ENGINE, KIND_TRACKING_HEALTH, KIND_COVERAGE_GAP, KIND_BACKUP_HEALTH,
+        KIND_AUTH_FAILED,
+    )
 
     private fun canPost(ctx: Context): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -122,13 +164,25 @@ object Notify {
         m.createNotificationChannelGroup(NotificationChannelGroup(GROUP_ID, "Events"))
         // A decision prompt is DEFAULT (it can wait for the next glance at the phone); a
         // health alert is HIGH (a fault light and a tracker the OS killed are both "you are
-        // losing data right now" — they earn the heads-up).
+        // losing data right now" — they earn the heads-up). Backup health is the exception
+        // that proves the rule: it reports a safety net that is down, not data being lost as
+        // you read it, and it has already been true for days by the time it posts — so it
+        // takes DEFAULT and waits for the next glance.
         for ((id, spec) in listOf(
             KIND_DRIVE_COMPLETE to ("Drive completed" to NotificationManager.IMPORTANCE_DEFAULT),
             KIND_GAS_STOP to ("Gas-stop detected" to NotificationManager.IMPORTANCE_DEFAULT),
             KIND_WEEKLY_DIGEST to ("Weekly digest" to NotificationManager.IMPORTANCE_DEFAULT),
             KIND_CHECK_ENGINE to ("Check-engine alerts" to NotificationManager.IMPORTANCE_HIGH),
             KIND_TRACKING_HEALTH to ("Tracking health" to NotificationManager.IMPORTANCE_HIGH),
+            KIND_BACKUP_HEALTH to ("Backup problems" to NotificationManager.IMPORTANCE_DEFAULT),
+            // The three that were in-app only until now. Apply-usual is a nag (DEFAULT). A
+            // recorded coverage gap is data already lost, not data being lost as you read it, so
+            // unlike the kill warning it does NOT earn a heads-up — DEFAULT. Auth-failed is
+            // likewise not urgent: the queue is durable and the phone stands alone, so nothing is
+            // being lost while the server sulks.
+            KIND_APPLY_USUAL to ("Route defaults" to NotificationManager.IMPORTANCE_DEFAULT),
+            KIND_COVERAGE_GAP to ("Coverage gaps" to NotificationManager.IMPORTANCE_DEFAULT),
+            KIND_AUTH_FAILED to ("Server sign-in" to NotificationManager.IMPORTANCE_DEFAULT),
         )) {
             val ch = NotificationChannel(id, spec.first, spec.second)
             ch.group = GROUP_ID
@@ -229,10 +283,17 @@ object Notify {
                 // The digest isn't about one drive: it stands until the backlog is empty, so
                 // tagging the last untagged drive clears last week's digest from the shade.
                 KIND_WEEKLY_DIGEST -> att.untagged > 0
+                // Route defaults are the same shape as the digest — a count, not a drive. The
+                // prompt stands while any drive still has a suggestion going spare, and applying
+                // the last one (in the app, or from the notification) clears it.
+                KIND_APPLY_USUAL -> att.suggested > 0
                 // The health alerts are none of the SPA's business — its replica has no idea
-                // whether a trouble code is still standing or the logger is running. Their
-                // own producers retract them; the attention push must never touch them.
-                KIND_CHECK_ENGINE, KIND_TRACKING_HEALTH -> true
+                // whether a trouble code is still standing, the logger is running, last night's
+                // backup reached the folder, or the server is still refusing our token. Their own
+                // producers retract them; the attention push must never touch them. (A coverage
+                // gap is a recorded historical fact and is never retracted at all — it did happen.)
+                KIND_CHECK_ENGINE, KIND_TRACKING_HEALTH, KIND_BACKUP_HEALTH,
+                KIND_AUTH_FAILED, KIND_COVERAGE_GAP -> true
                 else -> true
             }
             if (!still) {

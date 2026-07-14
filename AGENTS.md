@@ -49,8 +49,17 @@ Three things the detector keeps deliberately separate — collapsing them is wha
 shows), **`tier`** (how fast to sample; holds through a red light, ends at `parked`), and the
 **drive session** (`markDriveStart`, which still ends when the tier leaves DRIVING). `STOP_MS` is
 one 5-minute constant for every latch, the same 5 minutes `segment.js` calls a park, so the live
-app, the drive log and segmentation agree on what a stop is. OBD `rpm > 0` (`engineRunning`) is the
-only thing that extends the hold — idling with the engine on is not parked. *(The old
+app, the drive log and segmentation agree on what a stop is. A plausible OBD rpm (`engineRunning`,
+`ObdSession.engineRunning` — a band, **not** `rpm > 0`, which a garbled frame satisfies) is the only
+thing that extends the hold: idling with the engine on is not parked. **That extension is itself
+bounded** (`ENGINE_HOLD_MAX_MS`, 30 min), and the bound is the point — OBD is *additive*, never
+authoritative. An OBD-II port stays powered with the ignition off, so a cheap clone keeps its socket
+and can keep serving a stale nonzero rpm; unbounded, one such frame every five minutes resets
+`parkedSince` forever, so the car never parks, the tier never leaves DRIVING, and the OBD loop
+(which exits on `!isParked`) never lets go either — a closed loop with no exit, which is the very
+bug `parked` was added to kill. The stationary clock behind the ceiling is driven by motion alone,
+so a *flickering* dongle cannot wind it back. GPS decides whether the wheels turned; OBD only ever
+adds to what GPS already knows. *(The old
 activity-recognition `TripDetector` is retired — opt-in behind `auto_trip`, not armed by default.)*
 
 **Fixes are durable.** `Uploader` writes an on-disk queue that is atomic, size-capped (16 MB,
@@ -62,19 +71,32 @@ on regained connectivity, on app-foreground, and on charge-connected.
 at `https://appassets.androidplatform.net/assets/web/` — a secure origin, so the service worker
 and IndexedDB replica work with no server. Settings are the SPA's own tabs (General / Tracking /
 Sync & Backup / Advanced) over the `DrivetimeNative` bridge; native flows (permissions, BT/OBD
-pairing, QR pairing, backup pickers, updater) fire in place from their tab.
+pairing, QR pairing, backup pickers) fire in place from their tab.
 
 **Everything else, briefly:** `Notify` is the single door for every notification except the
 ongoing drive card (drive-complete, gas-stop, weekly digest, check-engine, tracking-interrupted
 — one channel per kind, each with a toggle, deep link, and retraction).
 `BackupStore`/`BackupWorker`/`DriveClient` take scheduled full-data snapshots to a SAF folder
-and/or the user's own Google Drive. `Updater` polls GitHub Releases for one-tap APK updates.
+and/or the user's own Google Drive.
 `Control` + `ControlReceiver` + `StateBroadcaster` are the routine API (`AUTOMATION.md`).
 **Android Auto was removed** before the first Play upload — Play rejects a manifest carrying
 both the `automotive` feature and the Auto meta-data, and an Auto app draws review scrutiny we
 can't verify without a head unit. Don't re-add it casually; git has it.
 `Permissions.snapshot`/`checklist` is the one gate every "can we log right now?" question goes
 through.
+
+**`Health` is the tracker's liveness ledger — silence proves nothing.** The only thing that writes
+a fix is the location callback, so a parked car and a killed tracker look identical (no fixes). The
+app used to read that silence as failure and accused itself of dying every time the car sat parked.
+`Health` fixes it, but **not** with a row every 60s — a `delay` doesn't tick in deep sleep, so a
+missing row would still mean *dead OR asleep*. The beat is a continuously-updated **proof of life**
+(`Settings.lifeBeatAt`, stamped from a fix, an upload, or a `Watchdog` pass), and the unit of
+identity is the **process**: anything `startLife` finds in prefs during `onCreate` describes a
+predecessor, so one that never ran `onDestroy` was *killed*, and the time since its last beat is
+downtime stated as fact. Outages become `down` rows in `web_health.jsonl` with a cause
+(`killed`/`system` are faults; `stop`/`reboot` are not), plus `cond` rows for transitions in what
+the tracker needs (location off, permission revoked, power saver). The SPA drains them over
+`pullHealth`. Never read a gap in the fixes as a failure — read the ledger.
 
 ## The web assets are generated — never hand-edit them
 
@@ -106,9 +128,11 @@ cd ../drivetime-android
 bash ship.sh "message"                  # 3. commit+push, await CI APK, publish to /dl
 ```
 
-Step 3 blocks on the "Build APK" CI run then calls `drivetime/publish-apk.sh --watch <sha>`, so
-a ship is not finished until the in-app updater offers the new APK. Shipping `drivetime` alone
-leaves the phone on the old snapshot — the single most common way a "fixed" bug survives a ship.
+Step 3 blocks on the "Build APK" CI run then calls `drivetime/publish-apk.sh --watch <sha>`.
+What actually reaches a phone is the **Play internal-track upload** the same CI run does — the
+app no longer self-updates, so the published APK/`/dl` pair is an artifact nobody polls and that
+half of the ship is vestigial. Shipping `drivetime` alone leaves the phone on the old snapshot —
+the single most common way a "fixed" bug survives a ship.
 
 The one exception: a commit here that changes **nothing the app runs** (docs, CI config) can go
 up with `SHIP_SKIP_PUBLISH=1 bash ship.sh "…"` — pushed, no APK built for users. Anything
@@ -122,13 +146,17 @@ bridge. Where phone and desktop pull apart, the phone wins.
 
 `github` and `play` are build flavors (`app/build.gradle.kts`):
 
-- **`github`** (sideload) — `assembleGithubDebug` → APK, published as a GitHub release. Keeps
-  the in-app `Updater` and declares `REQUEST_INSTALL_PACKAGES` (`src/github/AndroidManifest.xml`).
-- **`play`** — `bundlePlayRelease` → AAB. The updater is **compiled out**
-  (`BuildConfig.UPDATER_ENABLED=false`) and the permission is absent, because Play's Device
-  and Network Abuse policy forbids an app updating itself outside Play. Putting either back
-  gets the app taken down. The SPA hides the affordance when the bridge reports
-  `updates_supported=false`.
+- **`github`** (sideload) — `assembleGithubDebug` → APK, published as a GitHub release. A build
+  artifact you install by hand; nobody is served updates from it.
+- **`play`** — `bundlePlayRelease` → AAB, uploaded to internal testing by CI. **Every real
+  install is here.**
+
+The flavors now differ only by their Drive OAuth client. **There is no in-app updater, and
+adding one back gets the app taken down:** `Updater.kt`, `REQUEST_INSTALL_PACKAGES` and the
+`UPDATER_ENABLED` flag are deleted (hardening 3.1), because Play's Device and Network Abuse
+policy forbids an app updating itself outside Play. The bridge reports a constant
+`updates_supported=false` and the SPA hides the affordance; `checkForUpdate()` stays on the
+bridge as an honest no-op toast, for WebViews on a stale cached snapshot that still call it.
 
 Flavors rename every task: `testGithubDebugUnitTest`, `lintGithubDebug`, `assembleGithubDebug`.
 
@@ -161,9 +189,32 @@ CI is the only Kotlin compiler, so a syntax error costs a full CI round-trip. Re
 have bitten us: `*/` inside a comment closes the block early, and a bare `return` in a function
 declared to return `Boolean` won't compile.
 
-CI (`.github/workflows/android.yml`) runs unit tests + lint, builds the APK, and publishes it
-as the GitHub release the in-app updater reads. `AutomationHelpTest` holds the in-app
-cheat-sheet to `Control.SET_KEYS`. There is no device on the dev host, so CI *is* the safety net.
+CI (`.github/workflows/android.yml`) has two jobs. `compile` (Kotlin, app **and** test sources,
+~2 min) runs on **every branch** — a test that doesn't compile is indistinguishable from one that
+doesn't exist. `build` — unit tests, lint, the APK, the Play AAB, the GitHub release, the Play
+internal upload — runs only on **main, PRs and `workflow_dispatch`**. So a green push to a work
+branch means "it compiles", *not* "it passes": to run the tests on a branch, use
+`gh workflow run android.yml --ref <branch>`.
+
+There is no device on the dev host, so the unit tests *are* the safety net. The ones that exist
+because the thing they cover fails **silently**, which is this app's whole bug class:
+
+- `WatchdogTest` / `HealthLedgerTest` / `LocationServiceTest` / `DriveSessionTest` — the
+  silent-stop spine. Is a gap an outage or a parked car; is a dead service a kill, a reboot, or the
+  user switching it off; does the OFF path really clear `loggingEnabled` (and does the
+  `startForeground` degrade really *not*); is a surviving drive-start mark the same drive.
+- `TierReconcilerTest` — the tier race. It pins the *invariant*, not an outcome, because the
+  outcome of a data race is usually "fine".
+- `BridgeSerializerTest` — contract #4. A dropped bridge key throws nothing and logs nothing; a
+  settings row just quietly shows its default forever.
+- `DriveEndProcessorTest` — the gas-stop heuristic, whose two distance checks read alike and mean
+  opposite things.
+- `AutomationHelpTest` holds the in-app cheat-sheet to `Control.SET_KEYS`; `Uploader`,
+  `DriveDetector`, `ControlParse`, `JsonlRing`, `BackupStore` and `ObdSession` have real coverage.
+
+Time in the spine goes through `Clock` (wall clock + time-since-boot), so tests can move it instead
+of waiting twenty minutes. Everything outside the spine still calls `System.currentTimeMillis()`
+directly, on purpose — a clock no test needs to move is not worth a seam.
 
 `ship.sh` here is intentionally leaner than the generic `/home/lindsay/scripts/ship.sh` (no
 ship log to stamp, no local build to gate on); CI plus `--watch` are the pre-publish gate.
@@ -173,8 +224,25 @@ ship log to stamp, no local build to gate on); CI plus `--watch` are the pre-pub
 
 - **Quick Settings tile** (`TileService`) — the last unbuilt entry-point in the control API.
 - **OBD reconnect** — backoff retry on a dongle drop (GPS already continues regardless).
-- **Low-accuracy / no-fix handling** — flag or drop poor fixes; notice "location services off".
-- **One logging state machine** — manual, detector, and routine commands can still race.
-- **Credentials in Keystore** — the device token is in plain `SharedPreferences` today.
+- **"Alive but blind" alarm** — what `Health` was built for, still unbuilt: heartbeat + engine
+  running + no fixes for minutes = a drive is being lost right now. `cond` rows are already being
+  recorded to tune it against, so the alarm isn't wired on a guess.
+- **Low-accuracy / no-fix handling** — flag or drop poor fixes. ("Location services off" is done:
+  `Health` records it and the Drives timeline names it as a gap's cause.)
+- **~~One logging state machine~~ — done (hardening 5.1).** `TierReconciler` is the single
+  thread tier state lives on; manual, detector and routine commands all `submit` to it and are
+  applied serially, in order. Fixes are delivered straight onto that thread, so the hot path is
+  not a hop — it *is* the thread. The invariant ("nothing mutates tier fields directly") is
+  enforced by `requireOwnThread`, which **warns rather than throws** in production: an app whose
+  purpose is to not stop logging must not acquire a new way to die. If you see
+  "touched tier state on '<thread>'" in the Activity log, something is racing again.
+- **Credentials in Keystore** — the secrets (`Settings.SECRET_KEYS`) are still plaintext
+  `SharedPreferences` at rest. Hardening 3.4 moved them into their own file
+  (`drivetime_secrets.xml`) so the backup rules can exclude them — Android can exclude a prefs
+  **file** but not a **key** — keeping tokens out of Google's cloud backup while the ordinary
+  settings still restore, and letting a device-to-device transfer carry everything. The two rule
+  files (`data_extraction_rules.xml` API 31+, `backup_rules.xml` ≤ 30) must agree. A new secret
+  goes in `SECRET_KEYS` *and* gets its accessor pointed at `secrets`; `SecretsMigrationTest`
+  catches half a job.
 - **A pre-release checklist** — permissions, FGS, boot, queue, OEM battery (sideload-only
   validation means the checklist is the only gate a device would otherwise provide).

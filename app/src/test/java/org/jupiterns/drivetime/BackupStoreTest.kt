@@ -30,10 +30,12 @@ class BackupStoreTest {
 
     @Before fun setup() {
         ctx = ApplicationProvider.getApplicationContext()
-        ctx.getSharedPreferences("drivetime", Context.MODE_PRIVATE).edit().clear().commit()
+        ctx.getSharedPreferences(Settings.PREFS, Context.MODE_PRIVATE).edit().clear().commit()
+        ctx.getSharedPreferences(Settings.SECRET_PREFS, Context.MODE_PRIVATE).edit().clear().commit()
         settings = Settings(ctx)
         BackupStore.snapshotFile(ctx).delete()
         BackupStore.stagedFile(ctx).delete()
+        BackupStore.preRestoreFile(ctx).delete()
         File(ctx.filesDir, "web_fixes.jsonl").delete()
         File(ctx.filesDir, "web_markers.jsonl").delete()
         File(ctx.filesDir, "web_vehicles.jsonl").delete()
@@ -119,8 +121,10 @@ class BackupStoreTest {
                 "pending_fixes.jsonl", "pending_markers.jsonl", "pending_vehicles.jsonl"),
             entries)
 
-        // …restored onto a clean install
-        ctx.getSharedPreferences("drivetime", Context.MODE_PRIVATE).edit().clear().commit()
+        // …restored onto a clean install. Clear the secrets file too, or "the restore brought the
+        // pairing back" would be proved by a token the test never actually removed.
+        ctx.getSharedPreferences(Settings.PREFS, Context.MODE_PRIVATE).edit().clear().commit()
+        ctx.getSharedPreferences(Settings.SECRET_PREFS, Context.MODE_PRIVATE).edit().clear().commit()
         val fresh = Settings(ctx)
         File(ctx.filesDir, "web_fixes.jsonl").delete()
         File(ctx.filesDir, "web_markers.jsonl").delete()
@@ -166,5 +170,71 @@ class BackupStoreTest {
         // garbage → a readable error, not a crash
         val r3 = BackupStore.restore(ctx, settings, "not a backup".toByteArray().inputStream())
         assertEquals("unknown", r3.kind)
+    }
+
+    // ---- half-written archives (the .part rename) ----
+
+    @Test fun tempName_isNeverCountedAsAnArchive_andIsAlwaysPruned() {
+        val real = BackupStore.archiveName(1752332400000L)
+        val tmp = BackupStore.tempName(real)
+        assertTrue(BackupStore.isTempName(tmp))
+        // The whole point: a half-written file must not be eligible to be one of the kept N.
+        // (It still ends in .zip — a SAF provider appends an extension that matches the MIME
+        // type, so the temp-ness has to live in the prefix.)
+        assertFalse(BackupStore.isArchiveName(tmp))
+        assertTrue(tmp.endsWith(BackupStore.ARCHIVE_SUFFIX))
+
+        val names = listOf(
+            "drivetime-backup-2026-07-10-090000.zip",
+            "drivetime-backup-2026-07-11-090000.zip",
+            "tmp-drivetime-backup-2026-07-12-090000.zip",   // a run that died mid-write
+            "holiday-photos.jpg",
+        )
+        // keep=2 keeps both real archives; the corpse is swept regardless, and the stray
+        // user file is still untouchable.
+        assertEquals(
+            listOf("tmp-drivetime-backup-2026-07-12-090000.zip"),
+            BackupStore.namesToPrune(names, 2))
+        assertTrue(BackupStore.namesToPrune(names, 2).none { it == "holiday-photos.jpg" })
+    }
+
+    // ---- the undo for a restore ----
+
+    @Test fun restore_archivesTheCurrentInstallFirst_andThatArchiveRestores() {
+        BackupStore.preRestoreFile(ctx).delete()
+        // what's on the phone now
+        settings.serverUrl = "https://before.example.org"
+        WebFixBuffer.append(ctx, 40.0, -83.0, 100L, 5.0f)
+        BackupStore.beginSnapshot(ctx)
+        BackupStore.appendChunk("{\"kind\":\"drivetime-data\",\"stores\":{\"before\":1}}")
+        BackupStore.endSnapshot(ctx, settings, 1L)
+
+        // the incoming (wrong) archive: a different phone entirely. Settings is a view onto one
+        // SharedPreferences, so the archive is built from a state we then put back.
+        settings.serverUrl = "https://after.example.org"
+        val incoming = ByteArrayOutputStream()
+        BackupStore.writeArchive(ctx, settings, incoming)
+        settings.serverUrl = "https://before.example.org"
+
+        BackupStore.restore(ctx, settings, incoming.toByteArray().inputStream())
+        assertEquals("https://after.example.org", settings.serverUrl)
+
+        val undo = BackupStore.preRestoreFile(ctx)
+        assertTrue("pre-restore archive written", undo.exists() && undo.length() > 0)
+
+        // …and it is a real archive: restoring it puts the phone back
+        val back = BackupStore.restore(ctx, settings, undo.inputStream())
+        assertEquals("archive", back.kind)
+        assertEquals("https://before.example.org", settings.serverUrl)
+        assertTrue(WebFixBuffer.pullSince(ctx, 0.0).contains("\"ts\":100"))
+    }
+
+    @Test fun restore_writesNoUndoForAFileItRefuses() {
+        BackupStore.preRestoreFile(ctx).delete()
+        val r = BackupStore.restore(ctx, settings, "not a backup".toByteArray().inputStream())
+        assertEquals("unknown", r.kind)
+        // Nothing was applied, so there is nothing to undo — and writing a multi-MB archive
+        // every time someone picks the wrong file would be its own bug.
+        assertFalse(BackupStore.preRestoreFile(ctx).exists())
     }
 }

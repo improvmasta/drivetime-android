@@ -5,6 +5,7 @@ import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.File
+import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.io.OutputStreamWriter
@@ -38,6 +39,8 @@ object BackupStore {
     const val ARCHIVE_PREFIX = "drivetime-backup-"
     const val ARCHIVE_SUFFIX = ".zip"
     const val ARCHIVE_MIME = "application/zip"
+    /** Marks a still-being-written archive; see [tempName]. */
+    const val TEMP_PREFIX = "tmp-"
 
     private fun dir(context: Context) = File(context.filesDir, "backup").apply { mkdirs() }
     fun snapshotFile(context: Context) = File(dir(context), "snapshot.json.gz")
@@ -45,18 +48,32 @@ object BackupStore {
     fun restoreDir(context: Context) = File(context.filesDir, "restore").apply { mkdirs() }
     fun stagedFile(context: Context) = File(restoreDir(context), "staged.json")
 
+    /** The undo for a restore: what this install held *before* the incoming file replaced it
+     *  (see [restore]). Lives in cacheDir — the OS may evict it, so it is a short-term
+     *  "that was the wrong file" escape hatch, not a backup destination. */
+    fun preRestoreFile(context: Context) = File(context.cacheDir, "pre-restore.zip")
+
     // ---- snapshot sink (bridge-chunked; single writer, calls arrive on a binder thread) ----
 
     private var writer: Writer? = null
+    private var gzip: GZIPOutputStream? = null
+    private var sink: FileOutputStream? = null
 
     @Synchronized
     fun beginSnapshot(context: Context): Boolean = runCatching {
         writer?.close()
         val tmp = snapshotTmp(context)
         tmp.delete()
-        writer = OutputStreamWriter(GZIPOutputStream(tmp.outputStream()), Charsets.UTF_8)
+        val fos = FileOutputStream(tmp)
+        val gz = GZIPOutputStream(fos)
+        sink = fos
+        gzip = gz
+        writer = OutputStreamWriter(gz, Charsets.UTF_8)
         true
-    }.getOrElse { EventLog.warn("Backup snapshot begin failed: ${it.message}"); false }
+    }.getOrElse {
+        writer = null; gzip = null; sink = null
+        EventLog.warn("Backup snapshot begin failed: ${it.message}"); false
+    }
 
     @Synchronized
     fun appendChunk(chunk: String): Boolean = runCatching {
@@ -64,12 +81,23 @@ object BackupStore {
         true
     }.getOrElse { EventLog.warn("Backup snapshot chunk failed: ${it.message}"); false }
 
-    /** Close + atomically publish the snapshot; stamps [Settings.backupSnapshotAt]. */
+    /** Close + atomically publish the snapshot; stamps [Settings.backupSnapshotAt].
+     *  The temp file is **fsynced before the rename**: a rename is only atomic with respect to
+     *  the bytes the kernel has actually written, so without the sync a power loss can leave a
+     *  snapshot file that exists, is named, and is empty — which is worse than none, because
+     *  every archive built from it would carry it. */
     @Synchronized
     fun endSnapshot(context: Context, settings: Settings, createdAtMs: Long): Boolean = runCatching {
         val w = writer ?: return false
-        writer = null
-        w.close()
+        val gz = gzip
+        val fos = sink
+        writer = null; gzip = null; sink = null
+        w.flush()
+        gz?.finish()            // gzip trailer — the file is only valid once this is out
+        fos?.flush()
+        runCatching { fos?.fd?.sync() }
+            .onFailure { EventLog.warn("Backup snapshot fsync failed: ${it.message}") }
+        w.close()               // finish() is idempotent, so the cascade here is a no-op + close
         val tmp = snapshotTmp(context)
         if (!tmp.exists() || tmp.length() == 0L) return false
         if (!tmp.renameTo(snapshotFile(context))) return false
@@ -90,10 +118,29 @@ object BackupStore {
     fun isArchiveName(name: String?): Boolean =
         name != null && name.startsWith(ARCHIVE_PREFIX) && name.endsWith(ARCHIVE_SUFFIX)
 
+    /**
+     * The name an in-progress archive is written under, renamed to [name] once the last byte
+     * is out (BackupWorker.writeToFolder). Two properties are load-bearing:
+     *  - it is **not** an [isArchiveName], so a half-written file can never be counted as one
+     *    of the [Settings.backupKeep] kept archives — which is the whole bug: the truncated
+     *    file sorts newest, so retention kept *it* and deleted a good archive instead.
+     *  - it still ends in `.zip`, because a SAF provider appends an extension matching the
+     *    MIME type when the display name's own extension disagrees with it — a `.part` suffix
+     *    would come back as `…zip.part.zip`, which *does* match [isArchiveName]. The temp-ness
+     *    has to live in the prefix, where nothing rewrites it.
+     */
+    fun tempName(name: String): String = TEMP_PREFIX + name
+
+    fun isTempName(name: String?): Boolean =
+        name != null && name.startsWith(TEMP_PREFIX) && name.endsWith(ARCHIVE_SUFFIX)
+
     /** Which of [names] retention deletes when keeping the newest [keep] archives.
-     *  Non-archive names are never candidates — a stray user file in the folder is safe. */
+     *  Non-archive names are never candidates — a stray user file in the folder is safe —
+     *  but a temp file **is**: it can only be the corpse of a run that died mid-write (a live
+     *  one is renamed before this runs), and nothing else will ever clean it up. */
     fun namesToPrune(names: List<String>, keep: Int): List<String> =
-        names.filter { isArchiveName(it) }.sortedDescending().drop(keep.coerceAtLeast(1))
+        names.filter { isArchiveName(it) }.sortedDescending().drop(keep.coerceAtLeast(1)) +
+            names.filter { isTempName(it) }
 
     // ---- archive build ----
 
@@ -167,6 +214,12 @@ object BackupStore {
      * Restore from any supported file: a full .zip archive, a bare data snapshot
      * (.json / .json.gz), or a legacy settings-only .json. Native state (settings,
      * fix/marker buffers) is applied here; app data is staged for the SPA.
+     *
+     * A restore is a **full replace** (BACKUP.md) — `replaceAll` on every buffer, and the SPA
+     * wipes its stores for the staged data — so restoring the wrong file, or a stale one, is
+     * an unrecoverable act with a single tap behind it. So the first thing it does is archive
+     * what is here now ([preRestoreFile]); that archive restores like any other. Best-effort:
+     * failing to write the undo never blocks the restore the user actually asked for.
      */
     fun restore(context: Context, settings: Settings, input: InputStream): RestoreResult {
         val buf = BufferedInputStream(input)
@@ -174,11 +227,26 @@ object BackupStore {
         val head = ByteArray(2)
         val n = buf.read(head)
         buf.reset()
-        return when (sniff(if (n > 0) head.copyOf(n) else ByteArray(0))) {
+        val kind = sniff(if (n > 0) head.copyOf(n) else ByteArray(0))
+        // Nothing is applied for an unrecognised file, so it needs no undo.
+        if (kind != "unknown") snapshotBeforeRestore(context, settings)
+        return when (kind) {
             "zip" -> restoreArchive(context, settings, buf)
             "gzip" -> restoreJson(context, settings, GZIPInputStream(buf))
             "json" -> restoreJson(context, settings, buf)
             else -> RestoreResult("unknown", 0, false, "not a drivetime backup file")
+        }
+    }
+
+    /** Archive the current install to cacheDir, so a restore can be walked back. */
+    private fun snapshotBeforeRestore(context: Context, settings: Settings) {
+        val f = preRestoreFile(context)
+        runCatching {
+            f.outputStream().use { writeArchive(context, settings, it) }
+            EventLog.info("Pre-restore archive written (${f.length() / 1024} KB): ${f.name}")
+        }.onFailure {
+            runCatching { f.delete() }   // a truncated undo is worse than none — it would restore
+            EventLog.warn("Pre-restore archive failed: ${it.message}")
         }
     }
 

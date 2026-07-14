@@ -173,8 +173,13 @@ class WebViewActivity : AppCompatActivity() {
 
         // Bridge for the SPA: drain the phone's own GPS into the on-device replica (A2), learn
         // whether we're standalone (A3), and drive/read every native tracker setting + action
-        // from the Settings tabs. Only our own SPA is ever loaded in this WebView (external
-        // links hand off to the system browser), so the surface is trusted.
+        // from the Settings tabs.
+        //
+        // The bridge is attached to the WebView, not to a page, so EVERY document loaded here
+        // gets it. What makes that safe is that only the bundled SPA can ever become the
+        // document: shouldOverrideUrlLoading sends everything that isn't the appassets origin
+        // to the system browser (WebAuth.isInAppUrl). That is the invariant this call depends
+        // on — widen isInAppUrl and you hand DrivetimeNative to whatever you let in.
         web.addJavascriptInterface(NativeBridge(), "DrivetimeNative")
 
         CookieManager.getInstance().setAcceptCookie(true)
@@ -195,8 +200,11 @@ class WebViewActivity : AppCompatActivity() {
 
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val url = request.url.toString()
-                if (WebAuth.isInAppUrl(settings.serverUrl, url)) return false
-                // External link (other host, mailto:, tel:, …) → hand off to the system.
+                if (WebAuth.isInAppUrl(url)) return false
+                // Anything that is not the bundled origin — including the paired server's own
+                // host — hands off to the system browser. This WebView carries the
+                // DrivetimeNative bridge; nothing but the app's own SPA may become its
+                // document (WebAuth.isInAppUrl, hardening 3.3).
                 runCatching {
                     startActivity(Intent(Intent.ACTION_VIEW, request.url)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -205,7 +213,7 @@ class WebViewActivity : AppCompatActivity() {
             }
 
             override fun onPageFinished(view: WebView, url: String?) {
-                if (url != null && WebAuth.isInAppUrl(settings.serverUrl, url)) {
+                if (url != null && WebAuth.isInAppUrl(url)) {
                     loadedOnce = true
                     hideOverlay()
                 }
@@ -301,12 +309,6 @@ class WebViewActivity : AppCompatActivity() {
         // The SPA authenticates to the server per-request with the device token (no cookie
         // session to keep alive), so a resume just retries the load if it never came up.
         if (!loadedOnce) loadDashboard()
-        // Offer a newer build if one's been published (throttled; silent when up to date).
-        // Never on a Play build — Play is the update channel there, and self-updating is a
-        // policy violation, not a preference (BuildConfig.UPDATER_ENABLED).
-        if (BuildConfig.UPDATER_ENABLED && settings.updatesEnabled) {
-            Updater.checkFromUi(this, interactive = false)
-        }
     }
 
 
@@ -553,6 +555,9 @@ class WebViewActivity : AppCompatActivity() {
         settings.backupFolderName = runCatching {
             DocumentFile.fromTreeUri(this, uri)?.name ?: ""
         }.getOrDefault("")
+        // The scheduled work's network constraint is derived from the destination set, so
+        // changing that set has to re-arm it (BackupWorker.constraints).
+        BackupWorker.reschedule(this, settings)
         EventLog.info("Backup folder set: ${settings.backupFolderName.ifBlank { uri.lastPathSegment ?: "?" }}")
         toast("Backup folder set")
     }
@@ -752,6 +757,17 @@ class WebViewActivity : AppCompatActivity() {
         @JavascriptInterface
         fun pullBattery(sinceTs: Double): String = WebBatteryBuffer.pullSince(this@WebViewActivity, sinceTs)
 
+        /** JSON array of tracker-liveness rows at or after [sinceTs] — the `down` windows the
+         *  logger was NOT running (with why), and the `cond` transitions in what it needs to work
+         *  (location services, permissions, power saver). See [Health].
+         *
+         *  This is the row stream that lets the app state "you lost 14:02–15:10" as a FACT. Every
+         *  other signal it has is an absence of GPS fixes, and an absence proves nothing: a parked
+         *  car and a dead tracker look identical in the fix stream. Keyed `kind|ts` on the SPA
+         *  side, so a cursor overlap re-delivering a row is a no-op. */
+        @JavascriptInterface
+        fun pullHealth(sinceTs: Double): String = Health.pullSince(this@WebViewActivity, sinceTs)
+
         /**
          * Stamp a marker from the SPA's own Mark button, through the SAME service path the
          * notification uses. One writer: otherwise an in-app mark would land
@@ -790,54 +806,12 @@ class WebViewActivity : AppCompatActivity() {
 
         // ---- Settings tabs: read ----
 
-        /** Every editable tracker setting + the derived flags the Settings tabs render.
-         *  The device token itself is never surfaced in the WebView (AUTH.md) — only whether
-         *  one is set — so pairing stays a native-only flow. */
+        /** Every editable tracker setting + the derived flags the Settings tabs render — see
+         *  [BridgeSerializer.settings], which owns the payload (and the test that pins its keys;
+         *  the SPA reads them by name, so a dropped key is a silently blank settings row). */
         @JavascriptInterface
-        fun getSettings(): String = runCatching {
-            JSONObject()
-                .put("serverUrl", settings.serverUrl)
-                .put("hasServer", settings.hasServer)
-                .put("server_enabled", settings.serverEnabled)
-                .put("isConfigured", settings.isConfigured)
-                .put("standalone", !settings.isConfigured)
-                .put("deviceTokenSet", settings.deviceToken.isNotBlank())
-                .put("trackingMode", settings.trackingMode)
-                .put("interval_sec", settings.intervalSec)
-                .put("idle_interval_sec", settings.idleIntervalSec)
-                .put("light_interval_sec", settings.lightIntervalSec)
-                .put("upload_interval_sec", settings.uploadIntervalSec)
-                .put("driving_upload_interval_sec", settings.drivingUploadIntervalSec)
-                .put("stationary_stop_min", settings.stationaryStopMin)
-                .put("drive_by_speed", settings.driveBySpeed)
-                .put("motion_onset", settings.motionOnset)
-                .put("auto_trip", settings.autoTrip)
-                .put("alerts_enabled", settings.alertsEnabled)
-                .put("notif_driving_only", settings.notifDrivingOnly)
-                .put("notify_drive_complete", settings.notifyDriveComplete)
-                .put("notify_gas_stop", settings.notifyGasStop)
-                .put("notify_digest", settings.notifyDigest)
-                .put("notify_tracking_health", settings.notifyTrackingHealth)
-                .put("digest_day", settings.digestDay)
-                .put("digest_time", settings.digestTime)
-                .put("control_token", settings.controlToken)
-                .put("updates_enabled", settings.updatesEnabled)
-                // Play builds have no self-updater at all (policy), so the SPA hides the
-                // whole "check for updates" affordance rather than offering a dead button.
-                .put("updates_supported", BuildConfig.UPDATER_ENABLED)
-                // The legacy standalone car/OBD devices. Nothing in the SPA *configures* these
-                // any more — the vehicle that owns the device does — but they're reported so the
-                // registry can adopt a pre-registry install's devices into a real vehicle
-                // exactly once (vehicles.js adoptLegacyDevices), instead of stranding them in a
-                // settings screen that no longer shows them.
-                .put("carBtName", settings.carBtName)
-                .put("carBtMac", settings.carBtMac)
-                .put("obdName", settings.obdName)
-                .put("obdMac", settings.obdMac)
-                .put("versionName", BuildConfig.VERSION_NAME)
-                .put("versionCode", BuildConfig.VERSION_CODE)
-                .toString()
-        }.getOrDefault("{}")
+        fun getSettings(): String =
+            runCatching { BridgeSerializer.settings(settings).toString() }.getOrDefault("{}")
 
         /** Live health for the tabs: the permission checklist (each with a fixable [action]
          *  key), battery + OEM state, the connection/upload summary, any OEM-kill warning,
@@ -908,6 +882,60 @@ class WebViewActivity : AppCompatActivity() {
                                 this@WebViewActivity, Notify.KIND_TRACKING_HEALTH, Notify.HEALTH_ID)
                         }
                     }
+                    "notify_backup_health" -> {
+                        settings.notifyBackupHealth =
+                            value.toBooleanStrictOrNull() ?: settings.notifyBackupHealth
+                        if (!settings.notifyBackupHealth) {
+                            Notify.cancel(
+                                this@WebViewActivity, Notify.KIND_BACKUP_HEALTH, Notify.HEALTH_ID)
+                        }
+                    }
+                    // The three kinds that used to be in-app only. Like the two above, switching
+                    // one OFF also retracts the notification it already put in the shade: a toggle
+                    // that leaves its own notification sitting there reads as broken. (A coverage
+                    // gap is keyed by the outage, not by HEALTH_ID, so there is no single id to
+                    // cancel — an old one simply stops being joined by new ones.)
+                    "notify_apply_usual" -> {
+                        settings.notifyApplyUsual =
+                            value.toBooleanStrictOrNull() ?: settings.notifyApplyUsual
+                        if (!settings.notifyApplyUsual) {
+                            Notify.cancel(
+                                this@WebViewActivity, Notify.KIND_APPLY_USUAL, Notify.HEALTH_ID)
+                        }
+                    }
+                    "notify_coverage_gap" -> settings.notifyCoverageGap =
+                        value.toBooleanStrictOrNull() ?: settings.notifyCoverageGap
+                    "notify_auth_failed" -> {
+                        settings.notifyAuthFailed =
+                            value.toBooleanStrictOrNull() ?: settings.notifyAuthFailed
+                        if (!settings.notifyAuthFailed) {
+                            Notify.cancel(
+                                this@WebViewActivity, Notify.KIND_AUTH_FAILED, Notify.HEALTH_ID)
+                        }
+                    }
+                    // The in-app column. Pure storage as far as the phone is concerned: the SPA
+                    // reads them back over getSettings() and gates its own bell. No channel to
+                    // touch, no worker to re-arm, no notification to retract — an in-app notice is
+                    // recomputed from scratch on the next refresh, so switching one off simply
+                    // stops it being produced.
+                    "notify_drive_complete_inapp" -> settings.inAppDriveComplete =
+                        value.toBooleanStrictOrNull() ?: settings.inAppDriveComplete
+                    "notify_gas_stop_inapp" -> settings.inAppGasStop =
+                        value.toBooleanStrictOrNull() ?: settings.inAppGasStop
+                    "notify_apply_usual_inapp" -> settings.inAppApplyUsual =
+                        value.toBooleanStrictOrNull() ?: settings.inAppApplyUsual
+                    "notify_digest_inapp" -> settings.inAppDigest =
+                        value.toBooleanStrictOrNull() ?: settings.inAppDigest
+                    "notify_check_engine_inapp" -> settings.inAppCheckEngine =
+                        value.toBooleanStrictOrNull() ?: settings.inAppCheckEngine
+                    "notify_tracking_health_inapp" -> settings.inAppTrackingHealth =
+                        value.toBooleanStrictOrNull() ?: settings.inAppTrackingHealth
+                    "notify_coverage_gap_inapp" -> settings.inAppCoverageGap =
+                        value.toBooleanStrictOrNull() ?: settings.inAppCoverageGap
+                    "notify_backup_health_inapp" -> settings.inAppBackupHealth =
+                        value.toBooleanStrictOrNull() ?: settings.inAppBackupHealth
+                    "notify_auth_failed_inapp" -> settings.inAppAuthFailed =
+                        value.toBooleanStrictOrNull() ?: settings.inAppAuthFailed
                     // The digest keys own a scheduled worker, so each write re-arms it (the
                     // backup_schedule precedent above).
                     "notify_digest" -> {
@@ -1122,17 +1150,16 @@ class WebViewActivity : AppCompatActivity() {
         @JavascriptInterface
         fun testConnection() { ui.post { this@WebViewActivity.testConnection() } }
 
-        /** Interactive check-for-update (More tab). */
+        /**
+         * Formerly the interactive check-for-update (More tab). The app no longer updates
+         * itself at all, and the SPA hides the affordance (`updates_supported=false`) — but
+         * the method stays on the bridge, because a WebView holding an older cached snapshot
+         * still has the button and calls this by name. Kept as an honest no-op rather than
+         * removed, so that stale button says something true instead of throwing.
+         */
         @JavascriptInterface
         fun checkForUpdate() {
-            if (!BuildConfig.UPDATER_ENABLED) {
-                // The SPA hides the control on a Play build (updates_supported=false), so
-                // this is only reachable from a stale WebView snapshot. Say the true thing
-                // rather than silently doing nothing.
-                ui.post { toast("Updates for this build come from Google Play") }
-                return
-            }
-            ui.post { toast("Checking for updates…"); Updater.checkFromUi(this@WebViewActivity, interactive = true) }
+            ui.post { toast("Updates for this build come from Google Play") }
         }
 
         /** Export settings to a file via the system picker (Sync/Backup). */
@@ -1174,6 +1201,12 @@ class WebViewActivity : AppCompatActivity() {
                 .put("lastBackupAt", settings.backupLastAt)
                 .put("lastBackupOk", settings.backupLastOk)
                 .put("lastBackupResult", settings.backupLastResult)
+                // Consecutive failed AUTOMATIC runs (BackupWorker.FAIL_STREAK is when it notifies).
+                // The SPA's bell reads this to raise its own "backups are failing" notice — the
+                // in-app half of KIND_BACKUP_HEALTH — so the two say the same thing for the same
+                // reason instead of the bell guessing from `lastBackupOk`, which a single manual
+                // retry would clear while the schedule was still quietly broken.
+                .put("failStreak", settings.backupFailStreak)
                 .put("snapshotAt", settings.backupSnapshotAt)
                 .toString()
         }.getOrDefault("{}")
@@ -1193,6 +1226,7 @@ class WebViewActivity : AppCompatActivity() {
                     Uri.parse(old),
                     Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
             }
+            BackupWorker.reschedule(this@WebViewActivity, settings)
             ui.post { toast("Backup folder forgotten") }
         }
 
@@ -1208,6 +1242,7 @@ class WebViewActivity : AppCompatActivity() {
             settings.backupDriveAccount = ""
             settings.backupDriveFolderId = ""
             settings.backupDriveExportFolderId = ""
+            BackupWorker.reschedule(this@WebViewActivity, settings)
             EventLog.info("Google Drive disconnected")
             ui.post { toast("Google Drive disconnected") }
         }

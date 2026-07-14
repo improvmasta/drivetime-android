@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  What may leave the device, and by which route (API 31+; res/xml/backup_rules.xml is the same
+  policy for API 30 and below). Hardening 3.4.
+
+  The two routes are NOT the same risk, and this file treats them differently on purpose:
+
+  * cloud-backup — a copy at rest on Google's servers, made automatically, that the user never
+    explicitly asked for. `drivetime_secrets.xml` (the device token, the control token, the Drive
+    refresh token, the legacy password — Settings.SECRET_KEYS) is EXCLUDED from it. A restore
+    would otherwise reconstitute a fully-authenticated install on any device the Google account
+    is signed into.
+
+  * device-transfer — a direct phone-to-phone move the user initiates, during setup, to their own
+    new device. Everything goes, credentials included: this is the "I got a new phone" path and it
+    should just work. Nothing is written to a third party, so there is no copy left behind to
+    protect. Deliberately declared and deliberately empty — an absent section would probably mean
+    the same thing, but "probably" is not good enough for the difference between a phone that
+    transfers cleanly and one that silently arrives unpaired.
+
+  Everything else — the ordinary settings in `drivetime.xml`, and the drive data in filesDir
+  (web_*.jsonl, queue.jsonl) — is included on both routes. It is the user's own data and carries
+  no credential, so a cloud restore brings a phone back configured, with its drives, and asks only
+  that you re-pair and reconnect Drive.
+
+  The full-fidelity path is neither of these: the app's own backup (Settings -> Sync & Backup,
+  BACKUP.md) carries settings AND drives AND credentials, and restores a working, paired app.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="drivetime_secrets.xml" />
+    </cloud-backup>
+    <device-transfer />
+</data-extraction-rules>

@@ -233,7 +233,9 @@ class DriveDetectorTest {
     }
 
     @Test fun engineRunning_holdsThroughALongIdle() {
-        // Idling in the car (engine on) is not parked, however long you sit: the dongle says so.
+        // Idling in the car (engine on) is not parked: a drive-through, a warm-up or a bad jam is
+        // still one drive. The engine extends the stop we tolerate — but only up to the ceiling
+        // the next test pins.
         val d = DriveDetector(settings())
         d.obdConnected = true
         d.engineRunning = true
@@ -245,6 +247,44 @@ class DriveDetectorTest {
         d.engineRunning = false
         d.onSpeed(0f, 610_000L)
         d.onSpeed(0f, 930_000L)
+        assertEquals(DriveDetector.Tier.LIGHT, d.tier())
+    }
+
+    @Test fun engineRunning_cannotHoldDrivingForever() {
+        // The bound that keeps OBD additive. A dongle in a parked car keeps its socket and can
+        // keep serving a stale nonzero rpm; without a ceiling that pins DRIVING (and the OBD
+        // loop, which exits on !isParked) for as long as the socket lives. Half an hour without
+        // moving an inch is a parked car whatever the dongle insists.
+        val d = DriveDetector(settings())
+        d.obdConnected = true
+        d.engineRunning = true                               // the dongle never stops claiming it
+        d.onSpeed(0f, 0L)
+        d.onSpeed(0f, 1_500_000L)                            // 25 min: still inside the hold
+        assertFalse(d.isParked)
+        assertEquals(DriveDetector.Tier.DRIVING, d.tier())
+        d.onSpeed(0f, 1_800_000L)                            // 30 min stationary — GPS wins
+        assertTrue(d.isParked)
+        assertEquals(DriveDetector.Tier.LIGHT, d.tier())
+        // And it re-promotes the instant the car actually moves: the signal never dropped.
+        d.onSpeed(9f, 1_810_000L)
+        assertFalse(d.isParked)
+        assertEquals(DriveDetector.Tier.DRIVING, d.tier())
+    }
+
+    @Test fun engineRunning_flappingCannotResetTheStationaryClock() {
+        // The nastier half: engineRunning only has to read true ONCE per five-minute window to
+        // reset parkedSince forever. The stationary clock behind the ceiling is therefore driven
+        // by motion alone — a dongle that flickers cannot wind it back.
+        val d = DriveDetector(settings())
+        d.obdConnected = true
+        d.onSpeed(0f, 0L)
+        var t = 0L
+        while (t < 1_800_000L) {
+            t += 240_000L                                    // a bogus rpm frame every four minutes
+            d.engineRunning = !d.engineRunning
+            d.onSpeed(0f, t)
+        }
+        assertTrue(d.isParked)                               // still parks, on time
         assertEquals(DriveDetector.Tier.LIGHT, d.tier())
     }
 
