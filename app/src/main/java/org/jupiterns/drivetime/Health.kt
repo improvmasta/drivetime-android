@@ -4,7 +4,6 @@ import android.content.Context
 import android.location.LocationManager
 import android.os.Build
 import android.os.PowerManager
-import android.os.SystemClock
 import org.json.JSONObject
 import java.io.File
 
@@ -90,7 +89,7 @@ object Health {
      * is the only moment both ends are known, which is why a `down` row is written on the way UP.
      */
     fun startLife(context: Context, s: Settings) {
-        val now = System.currentTimeMillis()
+        val now = Clock.now()
         val prevBeat = s.lifeBeatAt
         if (prevBeat > 0) {
             val endedAt = s.lifeEndedAt
@@ -109,7 +108,7 @@ object Health {
      *  is the same flag `onDestroy` already reads to tell an intentional stop from an OS one: it
      *  is still set when the system took the service away from us. */
     fun endLife(context: Context, s: Settings) {
-        val now = System.currentTimeMillis()
+        val now = Clock.now()
         s.lifeBeatAt = now          // alive right up to here
         s.lifeEndedAt = now
         s.lifeEndReason = if (s.loggingEnabled) "system" else "stop"
@@ -121,7 +120,7 @@ object Health {
      * Also samples the conditions the tracker depends on, and records a row only when they CHANGE.
      */
     fun beat(context: Context, s: Settings, force: Boolean = false) {
-        val now = System.currentTimeMillis()
+        val now = Clock.now()
         if (!force && now - s.lifeBeatAt < BEAT_MS) return
         s.lifeBeatAt = now
         val (locOn, perms, saver) = sample(context, s)
@@ -218,16 +217,16 @@ object Health {
     }
 
     /**
-     * Did the device boot during a gap of [gapMs]? [SystemClock.elapsedRealtime] counts real time
-     * since boot (deep sleep included) and resets to zero on boot — so if less of it has passed
-     * than the gap we are trying to explain, the gap contains a boot.
+     * Did the device boot during a gap of [gapMs]? [Clock.sinceBoot] counts real time since boot
+     * (deep sleep included) and resets to zero on boot — so if less of it has passed than the gap
+     * we are trying to explain, the gap contains a boot.
      *
      * This matters more than it looks: a graceful shutdown DOES run `onDestroy` with logging still
      * enabled, which is indistinguishable from the OS killing the service. Without this check every
      * ordinary reboot would be reported as "your phone killed the tracker" — the exact false alarm
      * this whole file exists to stop telling.
      */
-    private fun deviceRebooted(gapMs: Long): Boolean = SystemClock.elapsedRealtime() < gapMs
+    private fun deviceRebooted(gapMs: Long): Boolean = Clock.sinceBoot() < gapMs
 
     /** The conditions the logger needs to do its job. Every probe defaults to the HEALTHY value on
      *  failure: a probe that throws must never be able to manufacture an alarm. */

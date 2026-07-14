@@ -158,4 +158,8 @@ dependencies {
     // one way this dependency bites. Lets UploaderQueueTest drive a real flush(), which is
     // the only route to the verify-before-delete + atomic-rewrite code that guards the queue.
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    // Version-locked to work-runtime above, same reason. LocationServiceTest drives the OFF path,
+    // which cancels the watchdog — and WorkManager.getInstance() throws unless a WorkManager
+    // exists to cancel it in. This provides the test one.
+    testImplementation("androidx.work:work-testing:2.9.1")
 }

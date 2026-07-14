@@ -97,6 +97,19 @@ class LocationService : Service() {
     private var notifSig: String? = null          // signature of the last-drawn drive card (redraw coalescing)
     @Volatile private var flashUntil = 0L         // hold the "Marked #N" flash; suppress per-fix redraws until then
 
+    /**
+     * How the service enters the foreground. A **seam, not a strategy** — production has exactly
+     * one implementation and always will.
+     *
+     * It exists because the one test this file most needs is "startForeground threw, so we degrade
+     * to a clean stop instead of a crash-loop", and the throw it must survive is Android 14
+     * enforcing an FGS type's prerequisites — which no unit-test runtime can provoke. Without a
+     * seam the degrade path is unreachable from a test, and an unreachable safety net is one a
+     * future refactor can quietly delete. Assign before `onCreate` runs (the test does; nothing
+     * else may).
+     */
+    internal var enterForeground: (Notification) -> Unit = { startForeground(NOTIF_ID, it) }
+
     private val connectivity by lazy { getSystemService(ConnectivityManager::class.java) }
     /** Flush as soon as a usable network returns, so a dead-zone backlog clears
      *  immediately instead of waiting for the next periodic tick. */
@@ -177,16 +190,23 @@ class LocationService : Service() {
         // detector's in-memory driving signals didn't. Hold DRIVING through the cold start so the
         // drive keeps its identity — original start time, running miles, marker count — instead
         // of the first (fixless) tier resolution ending it and a brand-new drive taking its place.
-        if (settings.loggingEnabled && settings.driveStartedAt != 0L &&
-            System.currentTimeMillis() - settings.driveStartedAt in 0L..MAX_DRIVE_MS) {
+        // Same rule markDriveStart reuses the mark by ([DriveSession.resumable]) — they are two
+        // halves of one decision and must not be able to disagree.
+        if (settings.loggingEnabled && DriveSession.resumable(settings.driveStartedAt, Clock.now())) {
             detector.resumeDriving = true
             EventLog.info("Resuming drive in progress (restart mid-drive)")
         }
         // Android 14 enforces the FGS type's prerequisites at startForeground time: with
         // fine location revoked this throws SecurityException. Callers can't all pre-check
         // (boot/reboot races), so degrade to a clean stop instead of a crash-loop.
+        //
+        // Note what is NOT done here: `loggingEnabled` is left alone. This is not a stop, it is a
+        // start we could not perform — so the flag stays set, [Watchdog] keeps the intent alive,
+        // and it retries once its own readiness gate ([Permissions.Snapshot.isReady]) says the
+        // permission is back. Clearing it would turn a revoked permission into a permanent,
+        // silent end to tracking.
         try {
-            startForeground(NOTIF_ID, buildNotification())
+            enterForeground(buildNotification())
         } catch (e: Exception) {
             EventLog.warn("Can't start logging: ${e.message ?: e.javaClass.simpleName}")
             stopSelf()
@@ -330,8 +350,8 @@ class LocationService : Service() {
      * The reason this is a *durable* mark rather than a field: when the service is killed and
      * restarts mid-drive it re-enters DRIVING with the car still connected, and stamping a
      * fresh start there would silently reset the live bar's clock in the middle of the drive.
-     * A surviving mark is reused instead — unless it's implausibly old ([MAX_DRIVE_MS]), which
-     * means we crashed out of a long-finished drive without ever clearing it.
+     * A surviving mark is reused instead — on the terms [DriveSession.resumable] sets, which is
+     * the same rule `onCreate`'s resume latch used to hold the tier long enough to get here.
      */
     private fun markDriveStart(tier: DriveDetector.Tier): Long {
         if (tier != DriveDetector.Tier.DRIVING) {
@@ -346,9 +366,9 @@ class LocationService : Service() {
             resetDriveTotals()
             return 0L
         }
-        val now = System.currentTimeMillis()
+        val now = Clock.now()
         val existing = settings.driveStartedAt
-        val resume = existing != 0L && now - existing in 0L..MAX_DRIVE_MS
+        val resume = DriveSession.resumable(existing, now)
         // Entering DRIVING — resumed or new — invalidates the previous leg's pending
         // "tag your drive" prompt: a gas-stop chain prompts once, after its final leg.
         DriveCompleteWorker.cancel(this)
@@ -376,7 +396,7 @@ class LocationService : Service() {
      * left leg of a gas pair. Everything here is default-off (NOTIFICATIONS.md P3).
      */
     private fun onDriveEnded(startedAtMs: Long) {
-        val now = System.currentTimeMillis()
+        val now = Clock.now()
         // LiveState is live but zeroed by a mid-drive restart; the Settings mirror is durable
         // but throttled. The max of the two is the honest distance either way.
         val meters = maxOf(LiveState.driveMeters, settings.driveMeters.toDouble())
@@ -516,7 +536,7 @@ class LocationService : Service() {
             lastDistLoc?.let { LiveState.driveMeters += it.distanceTo(loc) }
             lastDistLoc = loc
         }
-        val now = System.currentTimeMillis()
+        val now = Clock.now()
         LiveState.updatedAt = now
         // Persist lastFixAt at most every PERSIST_FIX_MS so the watchdog's kill
         // detector has a recent timestamp without one SharedPreferences write per fix.
@@ -540,7 +560,7 @@ class LocationService : Service() {
 
         val speed = if (loc.hasSpeed()) loc.speed else 0f
         movingHint = speed >= MOVING_MPS
-        detector.onSpeed(speed, System.currentTimeMillis())
+        detector.onSpeed(speed, now)
         // The drive's signal light — green moving, red stopped — plus when the stop began, so
         // the card and the HUD can both count it up. A drive sitting at a pump says so.
         LiveState.moving = detector.isMoving
@@ -1149,10 +1169,6 @@ class LocationService : Service() {
         // Throttle for persisting "last fix" to Settings (cheap but not free; we only
         // need this fresh to the order of a minute for the OEM kill detector).
         private const val PERSIST_FIX_MS = 30_000L
-
-        // Longest a persisted drive-start mark stays resumable. Past this it can only be a
-        // leak (crashed out of a drive without clearing), never a drive still in progress.
-        private const val MAX_DRIVE_MS = 12 * 60 * 60 * 1000L
 
         // Event notifications (P3): what counts as a REAL drive worth prompting about —
         // mirrors the SPA min-trip gate's spirit (a jitter loop must never nag).
