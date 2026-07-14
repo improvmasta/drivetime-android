@@ -34,8 +34,11 @@ class UploaderQueueTest {
         File(ctx.filesDir, "queue.jsonl").delete()
         File(ctx.filesDir, "queue.tmp").delete()
         Uploader.resetQueueCacheForTest()
-        // A server URL left by a previous method would silently change what flush() does.
-        ctx.getSharedPreferences("drivetime", android.content.Context.MODE_PRIVATE)
+        // A server URL (or device token) left by a previous method would silently change what
+        // flush() does — the token lives in its own prefs file now, so clear both.
+        ctx.getSharedPreferences(Settings.PREFS, android.content.Context.MODE_PRIVATE)
+            .edit().clear().commit()
+        ctx.getSharedPreferences(Settings.SECRET_PREFS, android.content.Context.MODE_PRIVATE)
             .edit().clear().commit()
         settings = Settings(ctx)
         uploader = Uploader(ctx, settings)

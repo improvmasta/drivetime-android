@@ -30,7 +30,8 @@ class BackupStoreTest {
 
     @Before fun setup() {
         ctx = ApplicationProvider.getApplicationContext()
-        ctx.getSharedPreferences("drivetime", Context.MODE_PRIVATE).edit().clear().commit()
+        ctx.getSharedPreferences(Settings.PREFS, Context.MODE_PRIVATE).edit().clear().commit()
+        ctx.getSharedPreferences(Settings.SECRET_PREFS, Context.MODE_PRIVATE).edit().clear().commit()
         settings = Settings(ctx)
         BackupStore.snapshotFile(ctx).delete()
         BackupStore.stagedFile(ctx).delete()
@@ -120,8 +121,10 @@ class BackupStoreTest {
                 "pending_fixes.jsonl", "pending_markers.jsonl", "pending_vehicles.jsonl"),
             entries)
 
-        // …restored onto a clean install
-        ctx.getSharedPreferences("drivetime", Context.MODE_PRIVATE).edit().clear().commit()
+        // …restored onto a clean install. Clear the secrets file too, or "the restore brought the
+        // pairing back" would be proved by a token the test never actually removed.
+        ctx.getSharedPreferences(Settings.PREFS, Context.MODE_PRIVATE).edit().clear().commit()
+        ctx.getSharedPreferences(Settings.SECRET_PREFS, Context.MODE_PRIVATE).edit().clear().commit()
         val fresh = Settings(ctx)
         File(ctx.filesDir, "web_fixes.jsonl").delete()
         File(ctx.filesDir, "web_markers.jsonl").delete()

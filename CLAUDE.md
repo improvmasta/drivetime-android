@@ -265,13 +265,18 @@ ship log to stamp, no local build to gate on); CI plus `--watch` are the pre-pub
   is done: `Health` records it as a `cond` transition and the Drives timeline names it as the
   cause of a gap.)
 - **One logging state machine** — manual, detector, and routine commands can still race.
-- **Credentials in Keystore** — the device token, control token, Drive refresh token and legacy
-  password still sit in plain `SharedPreferences`, and `SettingsExport` writes them in cleartext
-  (deliberately, for portability — but it's the gap). Hardening 3.4 closed the *exfiltration*
-  half of this: the `drivetime` prefs are excluded from Google auto-backup and device transfer
-  (`res/xml/data_extraction_rules.xml` + `backup_rules.xml`, which must agree), so a credential
-  no longer leaves the phone by a route the user didn't choose. They are still plaintext **at
-  rest**, which is what Keystore would fix.
+- **Credentials in Keystore** — the five secrets (`Settings.SECRET_KEYS`: device token, control
+  token, legacy username/password, Drive refresh + access token) still sit in plain
+  `SharedPreferences`, and `SettingsExport` writes them in cleartext — deliberately, because the
+  app's own backup is the full-fidelity restore path. Plaintext **at rest** is what Keystore
+  would fix, and it is still open. Hardening 3.4 closed the *exfiltration* half: they live in
+  their own prefs file (`drivetime_secrets.xml`) purely so the backup rules can exclude them —
+  Android can exclude a prefs **file** but not a **key** — so Google's cloud backup never holds a
+  token, while the ordinary settings in `drivetime.xml` still back up and restore. A direct
+  device-to-device transfer still carries everything, so a new phone just works. **The two rule
+  files must agree** (`res/xml/data_extraction_rules.xml` for API 31+, `backup_rules.xml` for
+  ≤ 30). Adding a secret means adding it to `SECRET_KEYS` *and* pointing its accessor at
+  `secrets` — `SecretsMigrationTest` fails if you do only one.
 - **A pre-release checklist** — permissions, FGS, boot, queue, OEM battery. Validation is
   sideload-only, so a checklist is the only gate a device would otherwise provide.
 

@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The API 30-and-below half of the policy in res/xml/data_extraction_rules.xml — keep the same
-  (minSdk is 26, so both files are live). Android picks exactly one: `fullBackupContent` on API
-  <= 30, `dataExtractionRules` on 31+. Change one, change the other, or a phone on Android 11
-  silently keeps backing up the credentials.
+  The API 30-and-below half of the policy in res/xml/data_extraction_rules.xml (minSdk is 26, so
+  both files are live). Android reads exactly one: `fullBackupContent` on API <= 30,
+  `dataExtractionRules` on 31+. Change one, change the other — or a phone on Android 11 quietly
+  keeps backing the credentials up.
 
-  Excludes the `drivetime` SharedPreferences, which hold the device token, the control token, the
-  Drive OAuth refresh token and the legacy password, from auto-backup (and from `adb backup`,
-  which this same file governs on these releases). Rationale in full: data_extraction_rules.xml.
+  These releases have no cloud-vs-transfer distinction — one rule set governs auto-backup and
+  `adb backup` alike — so the conservative half wins and `drivetime_secrets.xml` is excluded
+  outright. The ordinary settings in `drivetime.xml` and the drive data still back up.
 -->
 <full-backup-content>
-    <exclude domain="sharedpref" path="drivetime.xml" />
+    <exclude domain="sharedpref" path="drivetime_secrets.xml" />
 </full-backup-content>

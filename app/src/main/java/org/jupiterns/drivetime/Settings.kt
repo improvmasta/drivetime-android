@@ -6,7 +6,24 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /** Server connection settings, backed by SharedPreferences. */
 class Settings(context: Context) {
-    private val prefs = context.getSharedPreferences("drivetime", Context.MODE_PRIVATE)
+    private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    /**
+     * The **secrets**, in their own prefs file — see [SECRET_KEYS] for what and [migrateSecrets]
+     * for how existing installs get here.
+     *
+     * They are split out for exactly one reason: Android's backup rules can exclude a whole
+     * SharedPreferences *file* but **cannot exclude individual keys**. Leaving the tokens in
+     * `drivetime.xml` therefore forced a choice between "Google's cloud holds your credentials"
+     * and "a restore loses every setting you have". A second file dissolves the choice —
+     * `drivetime.xml` backs up normally, `drivetime_secrets.xml` never leaves the device by any
+     * route the user didn't pick (`res/xml/data_extraction_rules.xml`).
+     *
+     * The key *names* are unchanged, so [SettingsExport] (which round-trips them by name, and
+     * still carries them deliberately — the app's own backup is the full-fidelity restore path)
+     * and every other caller are unaffected. Only the file underneath moved.
+     */
+    private val secrets = context.getSharedPreferences(SECRET_PREFS, Context.MODE_PRIVATE)
 
     /** Server URL. **Empty by default → standalone/local mode** (STANDALONE.md A3): a fresh
      *  install runs entirely on-device against the bundled SPA + replica, no server required.
@@ -36,19 +53,19 @@ class Settings(context: Context) {
      *  QR on the server's dashboard, or paste the code); sent as `Bearer <token>` on every
      *  API call. Replaces the old username/password login *and* the separate ingest token. */
     var deviceToken: String
-        get() = prefs.getString("device_token", "") ?: ""
-        set(v) = prefs.edit().putString("device_token", v.trim()).apply()
+        get() = secrets.getString("device_token", "") ?: ""
+        set(v) = secrets.edit().putString("device_token", v.trim()).apply()
 
     /** Legacy dashboard login (username/password → HTTP Basic). Kept only so an app that
      *  paired before the device-token model keeps syncing until it re-pairs (AUTH.md →
      *  Migration). New pairings set [deviceToken] and leave these blank. */
     var username: String
-        get() = prefs.getString("username", "") ?: ""
-        set(v) = prefs.edit().putString("username", v.trim()).apply()
+        get() = secrets.getString("username", "") ?: ""
+        set(v) = secrets.edit().putString("username", v.trim()).apply()
 
     var password: String
-        get() = prefs.getString("password", "") ?: ""
-        set(v) = prefs.edit().putString("password", v).apply()
+        get() = secrets.getString("password", "") ?: ""
+        set(v) = secrets.edit().putString("password", v).apply()
 
     /**
      * Every numeric cadence/threshold below is bounds-checked through [ControlParse.clampSetting]
@@ -355,14 +372,16 @@ class Settings(context: Context) {
         get() = prefs.getString("prev_drive_summary", "") ?: ""
         set(v) = prefs.edit().putString("prev_drive_summary", v).apply()
 
-    /** Optional shared secret gating *parameter-setting* control intents (SET, QUERY).
-     *  Blank → open (the default; this is a private app on the user's own phone). When
-     *  set, a routine must include `token=<this>` in its intent extras or the action is
-     *  silently ignored. START/STOP/TOGGLE remain open per the roadmap — they're
-     *  low-risk and routines should be able to stop the app even if the token rotates. */
+    /** Optional shared secret gating the *exported* control surface. Blank → fully open (the
+     *  default; this is a private app on the user's own phone). When set, an intent from
+     *  outside the app must carry `token=<this>` to use SET, QUERY, MARK, **STOP or TOGGLE**
+     *  (hardening 3.2 — an app that can silently stop your tracking is the thing worth
+     *  gating). START and the MODE_* verbs stay open: they cannot stop logging, so a routine
+     *  can always recover tracking without the secret. Enforced in [Control.applyExternal];
+     *  the app's own switches never need it. See AUTOMATION.md. */
     var controlToken: String
-        get() = prefs.getString("control_token", "") ?: ""
-        set(v) = prefs.edit().putString("control_token", v.trim()).apply()
+        get() = secrets.getString("control_token", "") ?: ""
+        set(v) = secrets.edit().putString("control_token", v.trim()).apply()
 
     /** Last thing that changed tracking state — "user", "shortcut", "routine",
      *  "watchdog", "boot", "auto", … — surfaced in the STATE_CHANGED broadcast so a
@@ -514,17 +533,19 @@ class Settings(context: Context) {
     val driveClientId: String
         get() = backupDriveClientId.ifBlank { DEFAULT_DRIVE_CLIENT_ID }
 
-    /** Long-lived Drive credential; non-blank = connected. */
+    /** Long-lived Drive credential; non-blank = connected. Scope is `drive.file`, so it reaches
+     *  only the files this app created — but it is still a credential, and lives with them. */
     var backupDriveRefreshToken: String
-        get() = prefs.getString("backup_drive_refresh_token", "") ?: ""
-        set(v) = prefs.edit().putString("backup_drive_refresh_token", v).apply()
+        get() = secrets.getString("backup_drive_refresh_token", "") ?: ""
+        set(v) = secrets.edit().putString("backup_drive_refresh_token", v).apply()
     var backupDriveAccessToken: String
-        get() = prefs.getString("backup_drive_access_token", "") ?: ""
-        set(v) = prefs.edit().putString("backup_drive_access_token", v).apply()
-    /** Epoch-ms the access token dies (refreshed a bit early). */
+        get() = secrets.getString("backup_drive_access_token", "") ?: ""
+        set(v) = secrets.edit().putString("backup_drive_access_token", v).apply()
+    /** Epoch-ms the access token dies (refreshed a bit early). Not a secret itself, but it is
+     *  meaningless without the token it describes, so it moves with it. */
     var backupDriveTokenExpiry: Long
-        get() = prefs.getLong("backup_drive_token_expiry", 0L)
-        set(v) = prefs.edit().putLong("backup_drive_token_expiry", v).apply()
+        get() = secrets.getLong("backup_drive_token_expiry", 0L)
+        set(v) = secrets.edit().putLong("backup_drive_token_expiry", v).apply()
     /** The connected account's email, for the Settings card. */
     var backupDriveAccount: String
         get() = prefs.getString("backup_drive_account", "") ?: ""
@@ -586,6 +607,70 @@ class Settings(context: Context) {
 
     companion object {
         val BACKUP_SCHEDULES = setOf("off", "daily", "weekly", "drive")
+
+        const val PREFS = "drivetime"
+        const val SECRET_PREFS = "drivetime_secrets"
+
+        /** Every key that lives in [SECRET_PREFS] instead of [PREFS]. All are strings except
+         *  `backup_drive_token_expiry`, which is a Long — hence [SECRET_LONG_KEYS]. */
+        val SECRET_KEYS = listOf(
+            "device_token",                 // Bearer credential for the paired server
+            "username", "password",         // legacy Basic-auth login it replaced
+            "control_token",                // the routine/automation shared secret
+            "backup_drive_refresh_token",   // long-lived Drive credential
+            "backup_drive_access_token",    // short-lived, derived from it
+            "backup_drive_token_expiry",
+        )
+        private val SECRET_LONG_KEYS = setOf("backup_drive_token_expiry")
+
+        /**
+         * Move the secrets out of `drivetime.xml` and into `drivetime_secrets.xml` on an install
+         * that predates the split. Called once from [DrivetimeApp.onCreate] — single process, so
+         * it completes before anything reads a [Settings].
+         *
+         * The failure this is written against is the one that actually hurts: **losing the device
+         * token**, which silently unpairs a phone that was working. So it copies, *verifies the
+         * copy landed*, and only then clears the originals — and any step failing leaves the
+         * originals exactly where they are, so the next launch simply tries again. A phone that
+         * dies mid-migration comes up with its credentials intact in the old file and re-runs
+         * this; the worst case is one more launch spent unmigrated, never a lost token.
+         *
+         * Idempotent with no "migrated" flag to get out of sync, and safe to re-run against a
+         * partially-migrated install: a key already present in the secrets file is treated as
+         * authoritative and is *never* overwritten from the old one. Without that rule, a
+         * migration that copied but failed to clear would let a later launch resurrect a stale
+         * token over a newer one.
+         */
+        fun migrateSecrets(context: Context) {
+            val main = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val secrets = context.getSharedPreferences(SECRET_PREFS, Context.MODE_PRIVATE)
+
+            val stale = SECRET_KEYS.filter { main.contains(it) }
+            if (stale.isEmpty()) return   // fresh install, or already migrated
+
+            val edit = secrets.edit()
+            for (key in stale) {
+                if (secrets.contains(key)) continue   // the secrets file wins, always
+                if (key in SECRET_LONG_KEYS) edit.putLong(key, main.getLong(key, 0L))
+                else edit.putString(key, main.getString(key, "") ?: "")
+            }
+            // commit(), not apply(): the clear below must not race ahead of the write.
+            if (!edit.commit()) {
+                EventLog.warn("Secret migration: write failed — credentials left in place, will retry")
+                return
+            }
+
+            val missing = stale.filterNot { secrets.contains(it) }
+            if (missing.isNotEmpty()) {
+                EventLog.warn("Secret migration: ${missing.size} key(s) did not land — left in place, will retry")
+                return
+            }
+
+            val clear = main.edit()
+            for (key in stale) clear.remove(key)
+            if (clear.commit()) EventLog.info("Secrets moved to their own prefs file (${stale.size} keys)")
+            else EventLog.warn("Secret migration: copied, but the old copy could not be cleared — will retry")
+        }
 
         /** Built-in Google Drive OAuth client (BACKUP.md). A client ID is a public app
          *  identifier, not a secret — safe to commit — so a tester's whole Drive setup is

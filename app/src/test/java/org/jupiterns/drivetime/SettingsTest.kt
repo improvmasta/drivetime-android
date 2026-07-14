@@ -22,8 +22,11 @@ class SettingsTest {
 
     @Before fun setup() {
         ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
-        // Wipe between runs since Robolectric reuses prefs in-process.
-        ctx.getSharedPreferences("drivetime", android.content.Context.MODE_PRIVATE).edit().clear().commit()
+        // Wipe between runs since Robolectric reuses prefs in-process. BOTH files — the secrets
+        // live in their own now, and a device token surviving into the next test would make a
+        // green run mean nothing.
+        ctx.getSharedPreferences(Settings.PREFS, android.content.Context.MODE_PRIVATE).edit().clear().commit()
+        ctx.getSharedPreferences(Settings.SECRET_PREFS, android.content.Context.MODE_PRIVATE).edit().clear().commit()
         s = Settings(ctx)
     }
 

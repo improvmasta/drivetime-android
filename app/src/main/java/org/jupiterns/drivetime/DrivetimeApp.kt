@@ -13,6 +13,11 @@ class DrivetimeApp : Application() {
     override fun onCreate() {
         super.onCreate()
         EventLog.init(this)
+        // Before anything can read a Settings: move the credentials into their own prefs file if
+        // this install predates the split (they are excluded from Android's backup there — see
+        // Settings.migrateSecrets). Single process, so "before onCreate returns" is genuinely
+        // before every service, worker, receiver and activity in the app.
+        Settings.migrateSecrets(this)
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, e ->
             // Log first, then hand off to Android's own handler (crash dialog + process

@@ -165,18 +165,36 @@ as open as before.
   the privacy-policy link on the server's own host was enough to trip this by accident, never mind
   a MITM'd self-hosted server on plain HTTP. The `addJavascriptInterface` comment already claimed
   "only our own SPA is ever loaded here" — this commit made that true and named what enforces it.
-- **3.4 Credentials excluded from auto-backup** — ✅ but note the granularity: **Android cannot
-  exclude individual prefs keys**, only whole files, and the credentials share `drivetime.xml`
-  with every ordinary setting — so the settings are excluded with them. That is the right trade
-  (the app's own Sync & Backup already carries settings + drives + credentials and is the
-  documented restore path; Android's was a redundant copy nobody opted into), but the consequence
-  is real: after a cloud restore or device transfer the app comes up **unconfigured**.
-  - Excluded from **device-transfer** as well as cloud-backup — a phone-to-phone transfer would
-    otherwise mint a second install holding the same device token, and pairing exists so a
-    device's authority is *granted* to it, not cloned into it.
+- **3.4 Credentials excluded from auto-backup** — ✅ **Android cannot exclude individual prefs
+  keys, only whole files.** The first cut of this therefore excluded all of `drivetime.xml`, which
+  bought credential safety at the price of "a cloud restore loses every setting you have". That
+  was a false choice: nothing forced the secrets to share a file with the settings.
+  - **The five secrets now live in `drivetime_secrets.xml`** (`Settings.SECRET_KEYS`: device
+    token, control token, legacy username/password, Drive refresh + access token), and *only that
+    file* is excluded. The key **names** are unchanged, so `SettingsExport` — which round-trips
+    them by name, and still carries them deliberately — and every other caller are untouched.
+    Only the file underneath moved. `backup_drive_client_id` (public), `…_account` (an email) and
+    the cached folder ids are **not** secrets and stay put.
+  - **Cloud backup and device transfer are treated differently, on purpose.** Cloud backup is an
+    unrequested copy at rest on Google's servers → secrets excluded. A device transfer is a
+    user-initiated phone-to-phone move during setup → **everything goes, credentials included**,
+    so a new phone just works. `<device-transfer/>` is declared and deliberately empty rather than
+    omitted: an absent section probably means the same, and "probably" is not good enough for the
+    difference between a phone that transfers cleanly and one that silently arrives unpaired.
+  - **The migration is the only part that can hurt an installed phone** (`Settings.migrateSecrets`,
+    run from `DrivetimeApp.onCreate` — single process, so it lands before anything reads a
+    `Settings`). It copies → *verifies the copy landed* → only then clears the originals, and any
+    step failing leaves them exactly where they are for the next launch to retry. It is idempotent
+    with no flag to fall out of sync, and a key already in the secrets file is **never** overwritten
+    from the old one — otherwise a migration that copied but failed to clear would let a later
+    launch resurrect a stale token over a freshly-paired one. `SecretsMigrationTest` covers all of
+    that, plus the "declared secret but accessor still writes the backed-up file" half-job.
   - **Both** rule files are required and must agree: `fullBackupContent` (`backup_rules.xml`) is
     read on API ≤ 30, `dataExtractionRules` on 31+, and minSdk is 26. Shipping only the latter
-    would have left every Android 11 phone still backing the credentials up.
+    would have left every Android 11 phone still backing the credentials up. API ≤ 30 has no
+    cloud-vs-transfer distinction, so there the conservative half wins.
+  - Net: cloud restore → settings + drives back, re-pair and reconnect Drive. Device transfer →
+    everything, zero friction. The app's own backup → everything, always. Google never holds a token.
 - **Deferred (needs device):** origin-scoped bridge via `addWebMessageListener` and not exposing
   the raw token through `authHeader()`. Higher regression risk to the native↔web contract — do
   it in Phase 5 with device verification.

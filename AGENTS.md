@@ -199,9 +199,13 @@ ship log to stamp, no local build to gate on); CI plus `--watch` are the pre-pub
 - **Low-accuracy / no-fix handling** — flag or drop poor fixes. ("Location services off" is done:
   `Health` records it and the Drives timeline names it as a gap's cause.)
 - **One logging state machine** — manual, detector, and routine commands can still race.
-- **Credentials in Keystore** — the device token is in plain `SharedPreferences` today. Hardening
-  3.4 excluded those prefs from Google auto-backup and device transfer
-  (`res/xml/data_extraction_rules.xml` + `backup_rules.xml`, which must agree), so credentials no
-  longer leave the phone by a route the user didn't choose — but they are still plaintext at rest.
+- **Credentials in Keystore** — the secrets (`Settings.SECRET_KEYS`) are still plaintext
+  `SharedPreferences` at rest. Hardening 3.4 moved them into their own file
+  (`drivetime_secrets.xml`) so the backup rules can exclude them — Android can exclude a prefs
+  **file** but not a **key** — keeping tokens out of Google's cloud backup while the ordinary
+  settings still restore, and letting a device-to-device transfer carry everything. The two rule
+  files (`data_extraction_rules.xml` API 31+, `backup_rules.xml` ≤ 30) must agree. A new secret
+  goes in `SECRET_KEYS` *and* gets its accessor pointed at `secrets`; `SecretsMigrationTest`
+  catches half a job.
 - **A pre-release checklist** — permissions, FGS, boot, queue, OEM battery (sideload-only
   validation means the checklist is the only gate a device would otherwise provide).
