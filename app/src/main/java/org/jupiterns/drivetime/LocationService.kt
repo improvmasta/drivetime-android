@@ -22,10 +22,7 @@ import android.location.Location
 import android.net.ConnectivityManager
 import android.net.Network
 import android.os.Build
-import android.os.Handler
-import android.os.HandlerThread
 import android.os.IBinder
-import android.os.Looper
 import android.os.SystemClock
 import android.widget.RemoteViews
 import com.google.android.gms.location.LocationCallback
@@ -63,17 +60,26 @@ import org.jupiterns.drivetime.obd.Elm327Client
 class LocationService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val main = Handler(Looper.getMainLooper())
-    // Fix handling does disk I/O (queue append, cap check, WebFixBuffer rewrite) on every
-    // callback — that must not run on the UI thread of the process that also hosts the
-    // WebView (it was a periodic jank/ANR source while driving with the app open).
-    private val locThread by lazy { HandlerThread("dt-location").also { it.start() } }
+
+    /**
+     * The one thread tier state lives on, and the queue every trigger reaches it through. Fixes are
+     * delivered straight onto it (its looper is what [requestUpdates] hands the fused provider), so
+     * the hot path pays nothing; the car-Bluetooth receiver, the OBD loop, the motion-onset probe
+     * and `onStartCommand` all [TierReconciler.submit] instead of running inline on their own
+     * threads, which is what they used to do. See [TierReconciler] for the races that ended.
+     *
+     * It also keeps the property the old `dt-location` HandlerThread was created for: a fix does
+     * disk I/O (queue append, cap check, WebFixBuffer rewrite) on every callback, and that must not
+     * run on the UI thread of the process that also hosts the WebView — it was a periodic jank/ANR
+     * source while driving with the app open.
+     */
+    private val reconciler = TierReconciler()
     private lateinit var settings: Settings
     private lateinit var uploader: Uploader
     private lateinit var detector: DriveDetector
     private val fused by lazy { LocationServices.getFusedLocationProviderClient(this) }
 
-    private var obd: Elm327Client? = null
+    @Volatile private var obd: Elm327Client? = null
     @Volatile private var latestObd: Elm327Client.ObdSample? = null
     @Volatile private var movingHint = false      // recent non-trivial motion (gates OBD probe)
 
@@ -88,14 +94,40 @@ class LocationService : Service() {
     @Volatile private var onsetProbationUntil = 0L
     @Volatile private var onsetTokenSource: CancellationTokenSource? = null
 
-    private var currentTier = DriveDetector.Tier.LIGHT
+    /**
+     * ## Tier state — confined to the [reconciler] thread
+     *
+     * Every field below is read and written **only** on the reconciler thread, which is why none of
+     * them is `@Volatile` or guarded by a lock and none of them needs to be. They were all plain
+     * fields before too — the difference is that they were touched from two threads, and the
+     * sequences that touch them are read-decide-write (is the tier different? then switch it; is
+     * this request the one already in force? then skip it), which a lock per field would not have
+     * made safe anyway.
+     *
+     * The one exception is [currentTier]: the OBD and upload loops read it from their own
+     * coroutines to decide their cadence. Single-writer / many-reader is fine — a stale read there
+     * costs one poll interval — so it stays volatile and everything else stays plain.
+     */
+    @Volatile private var currentTier = DriveDetector.Tier.LIGHT
     private var requestedIntervalMs = -1L         // active LocationRequest interval (avoid churn)
     private var requestedPriority = -1            // active LocationRequest priority (ditto)
-    private var pendingSinceFlush = 0             // fixes enqueued since the last flush trigger
     private var lastPersistedFixAt = 0L           // throttle Settings writes for the kill detector
     private var lastPersistedMeters = 0.0         // last driveMeters mirrored to durable Settings
     private var notifSig: String? = null          // signature of the last-drawn drive card (redraw coalescing)
-    @Volatile private var flashUntil = 0L         // hold the "Marked #N" flash; suppress per-fix redraws until then
+    private var flashUntil = 0L                   // hold the "Marked #N" flash; suppress per-fix redraws until then
+
+    /**
+     * Fixes enqueued since the last flush — the one counter that is genuinely shared, and so the
+     * one exception to the block above. It is *incremented* on the reconciler thread (a fix) but
+     * *zeroed* by [flushNow], which fires from the network callback, the charge receiver and the
+     * upload loop — three other threads. It was a plain `Int` doing that, which is a data race.
+     *
+     * Atomic rather than submitted, because it is a counter, not a decision: nothing reads it and
+     * then acts on the tier, so there is no read-decide-write to serialise, and putting a queue hop
+     * on every network event to protect one increment would be ceremony. The worst a lost update
+     * could ever cost is a batch flushing one tick late, which the periodic cadence covers anyway.
+     */
+    private val pendingSinceFlush = java.util.concurrent.atomic.AtomicInteger(0)
 
     /**
      * How the service enters the foreground. A **seam, not a strategy** — production has exactly
@@ -142,7 +174,12 @@ class LocationService : Service() {
 
     /** Car Bluetooth connect/disconnect → flip the #1 driving signal. Registered at
      *  runtime (runtime receivers aren't subject to the manifest implicit-broadcast
-     *  limits and the service is always alive to hear them). */
+     *  limits and the service is always alive to hear them).
+     *
+     *  The parse happens here, on the main thread, because that is where the Intent is; the
+     *  *decision* is submitted, because it changes the tier. This receiver used to flip
+     *  `carConnected` and call `reevaluate()` inline — main-thread writes racing the locator
+     *  thread's, and the reason the whole reconciler exists. */
     private val btReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context, intent: Intent) {
             val dev = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE) ?: return
@@ -151,13 +188,15 @@ class LocationService : Service() {
             val mac = dev.address?.uppercase() ?: return
             if (mac !in settings.carBtMacs) return
             val connected = intent.action == BluetoothDevice.ACTION_ACL_CONNECTED
-            detector.carConnected = connected
-            // Which car we're in — the OBD loop reads this to pick THAT car's adapter
-            // (Settings.obdTarget). Kept as a MAC even after stampVehicle upgrades the drive's
-            // vehicle key to the VIN.
-            LiveState.carBtMac = if (connected) mac else null
-            if (connected) stampVehicle(mac)  // the drive's vehicle key (upgraded to VIN by OBD)
-            reevaluate()
+            reconciler.submit(TierReconciler.Trigger.CAR_BT) {
+                detector.carConnected = connected
+                // Which car we're in — the OBD loop reads this to pick THAT car's adapter
+                // (Settings.obdTarget). Kept as a MAC even after stampVehicle upgrades the drive's
+                // vehicle key to the VIN.
+                LiveState.carBtMac = if (connected) mac else null
+                if (connected) stampVehicle(mac)  // the drive's vehicle key (upgraded to VIN by OBD)
+                reevaluate()
+            }
         }
     }
 
@@ -258,7 +297,7 @@ class LocationService : Service() {
 
     /** Trigger a (single-flight, draining) flush and reset the size counter. */
     private fun flushNow() {
-        pendingSinceFlush = 0
+        pendingSinceFlush.set(0)
         // runCatching: this scope has no CoroutineExceptionHandler, so an uncaught throw
         // here kills the process — and a sticky service makes that a crash LOOP that also
         // takes the WebView down on every relaunch. An upload must never be able to do that.
@@ -268,19 +307,31 @@ class LocationService : Service() {
         }
     }
 
+    /**
+     * Every branch here that touches tier state is [TierReconciler.submit]ted rather than run
+     * inline: `onStartCommand` is delivered on the main thread, and this method used to mark, boost
+     * and re-apply the tier from it while the locator thread was doing the same.
+     *
+     * The OFF branch is the exception, and stays synchronous on purpose. It touches no tier state
+     * (it writes the two Settings flags and stops the service), and it has to be *done* by the time
+     * this method returns `START_NOT_STICKY` — deferring the stop would leave a window in which the
+     * queue still holds tier work for a service that is on its way out.
+     */
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // A side-effect action, handled before the mode logic below: marking changes no
         // tracking mode, and must never be mistaken for a stop.
         if (intent?.action == Control.ACTION_MARK) {
-            markNow()
+            reconciler.submit(TierReconciler.Trigger.MARK) { markNow() }
             return START_STICKY
         }
         // Dashboard opened/closed: re-apply the (now boosted or restored) dense fix rate at
         // once instead of waiting for the next adaptSampling tick. OBD picks up its own boost
         // on its next loop iteration. Never mistaken for a stop.
         if (intent?.action == ACTION_DASHBOARD) {
-            if (currentTier == DriveDetector.Tier.DRIVING && !idleMode) {
-                requestUpdates(drivingIntervalMs(), Priority.PRIORITY_HIGH_ACCURACY)
+            reconciler.submit(TierReconciler.Trigger.DASHBOARD) {
+                if (currentTier == DriveDetector.Tier.DRIVING && !idleMode) {
+                    requestUpdates(drivingIntervalMs(), Priority.PRIORITY_HIGH_ACCURACY)
+                }
             }
             return START_STICKY
         }
@@ -293,15 +344,18 @@ class LocationService : Service() {
         }
         settings.loggingEnabled = true
         Watchdog.schedule(this)               // arm the self-healing backstop
-        // Apply the tier the detector currently resolves (forces a fresh request).
-        requestedIntervalMs = -1L
-        requestedPriority = -1
-        applyTier(detector.tier())
+        reconciler.submit(TierReconciler.Trigger.COMMAND) {
+            // Apply the tier the detector currently resolves (forces a fresh request).
+            requestedIntervalMs = -1L
+            requestedPriority = -1
+            applyTier(detector.tier())
+        }
         return START_STICKY
     }
 
     /** (Re)resolve the tier from the detector and switch sampling if it changed. */
     private fun reevaluate() {
+        reconciler.requireOwnThread("reevaluate")
         val t = detector.tier()
         if (t == DriveDetector.Tier.OFF) {
             settings.trackingMode = Settings.MODE_OFF
@@ -315,6 +369,7 @@ class LocationService : Service() {
     }
 
     private fun applyTier(tier: DriveDetector.Tier) {
+        reconciler.requireOwnThread("applyTier")
         val changed = tier != currentTier
         currentTier = tier
         if (changed) {
@@ -489,10 +544,19 @@ class LocationService : Service() {
     private fun drivingIntervalMs(): Long =
         if (dashboardBoost) minOf(settings.intervalSec * 1000L, DASH_BOOST_MS) else settings.intervalSec * 1000L
 
-    /** (Re)subscribe to fixes at the given interval/priority. Skips a no-op re-request
-     *  only when BOTH are unchanged (a LIGHT→DRIVING flip with equal intervals must
-     *  still upgrade the priority, or the whole drive gets balanced-power fixes). */
+    /**
+     * (Re)subscribe to fixes at the given interval/priority. Skips a no-op re-request only when
+     * BOTH are unchanged (a LIGHT→DRIVING flip with equal intervals must still upgrade the
+     * priority, or the whole drive gets balanced-power fixes).
+     *
+     * That skip is a memo of what is currently in force, and it is exactly what the old race could
+     * corrupt: two threads interleaving here could leave the memo describing a request that had
+     * been superseded, so the service believed it was sampling densely while the provider was
+     * delivering a fix a minute. Nothing threw. On the reconciler thread the read-decide-write is
+     * atomic by construction.
+     */
     private fun requestUpdates(intervalMs: Long, priority: Int) {
+        reconciler.requireOwnThread("requestUpdates")
         if (intervalMs == requestedIntervalMs && priority == requestedPriority) return
         requestedIntervalMs = intervalMs
         requestedPriority = priority
@@ -500,15 +564,18 @@ class LocationService : Service() {
             .setMinUpdateIntervalMillis(minOf(intervalMs, 1000L))
             .build()
         try {
-            // Deliver fixes on the service's own thread: handleFix writes the queue +
-            // WebFixBuffer to disk, which must stay off the UI thread.
-            fused.requestLocationUpdates(req, callback, locThread.looper)
+            // Deliver fixes onto the reconciler's own thread — so a fix IS a tier event rather
+            // than something that has to hop onto the tier thread, and so the disk I/O handleFix
+            // does (queue append, cap check, WebFixBuffer rewrite) stays off the UI thread.
+            fused.requestLocationUpdates(req, callback, reconciler.looper)
         } catch (se: SecurityException) {
             stopSelf()
         }
     }
 
+    /** Runs on the reconciler thread: the fused provider delivers straight onto it. */
     private fun handleFix(loc: Location) {
+        reconciler.requireOwnThread("handleFix")
         val obd = if (currentTier == DriveDetector.Tier.DRIVING) latestObd else null
         uploader.enqueue(
             lat = loc.latitude,
@@ -556,7 +623,7 @@ class LocationService : Service() {
         }
         // Batched upload: buffer to the durable queue; flush on the periodic tick,
         // when a full batch has accumulated, or when connectivity returns.
-        if (++pendingSinceFlush >= BATCH_FIXES) flushNow()
+        if (pendingSinceFlush.incrementAndGet() >= BATCH_FIXES) flushNow()
 
         val speed = if (loc.hasSpeed()) loc.speed else 0f
         movingHint = speed >= MOVING_MPS
@@ -630,7 +697,6 @@ class LocationService : Service() {
                     connected = true
                     wedgedStreak = 0
                     obd = client
-                    detector.obdConnected = true
                     LiveState.obdConnected = true
                     EventLog.info("OBD connected")
                     // Multi-vehicle (Phase 4): a read VIN is the strongest vehicle identity —
@@ -640,7 +706,15 @@ class LocationService : Service() {
                     // moves the adapter in the registry too, instead of stranding it on the old one.
                     client.vin?.takeIf { it.isNotBlank() }?.let { stampVehicle(it, mac) }
                     runCatching { client.diagnostic().forEach { EventLog.info("OBD $it") } }
-                    main.post { reevaluate(); StateBroadcaster.emit(this@LocationService, "obd") }
+                    // The signal flip and the tier decision it causes are one event, applied on
+                    // the reconciler thread. Setting `obdConnected` out here and reevaluating over
+                    // there would let a fix land in between and resolve the tier from a
+                    // half-applied signal.
+                    reconciler.submit(TierReconciler.Trigger.OBD) {
+                        detector.obdConnected = true
+                        reevaluate()
+                        StateBroadcaster.emit(this@LocationService, "obd")
+                    }
                     var ticks = 0
                     var loggedSample = false
                     // Leave when we're parked, not just when the socket dies. An OBD-II port is
@@ -653,6 +727,15 @@ class LocationService : Service() {
                         // rpm is the ONLY thing that distinguishes "engine running" from "dongle
                         // still plugged into a parked car" — the detector needs it to know that
                         // idling at a light is not the same as sitting in a parking lot.
+                        //
+                        // Written straight from this thread, unlike `obdConnected` above, and the
+                        // difference is real: `obdConnected` is an EDGE that must be paired with a
+                        // tier decision (connecting starts a drive; dropping lets a parked one
+                        // end), so the flip and the reevaluate have to be one atomic event.
+                        // `engineRunning` is a LEVEL, resampled every poll, that nothing reevaluates
+                        // on — it only modulates the `parked` latch, which is computed on the
+                        // reconciler thread on the next fix. A volatile write is the whole
+                        // contract; queueing one per poll would be traffic for nothing.
                         detector.engineRunning = (s.rpm ?: 0) > 0
                         // Log the first decoded sample so we can confirm PIDs are parsing
                         // (not just connecting) without watching live.
@@ -687,10 +770,14 @@ class LocationService : Service() {
                     if (wasConnected) EventLog.info("OBD disconnected")
                     obd?.close(); obd = null
                     latestObd = null
-                    detector.obdConnected = false
-                    detector.engineRunning = false
                     LiveState.obdConnected = false
-                    main.post {
+                    // Dropping the link is a driving signal going away — the same event as it
+                    // arriving, and it goes through the same door. `obdConnected` false is what
+                    // lets a parked car actually leave DRIVING, so it must not be applied
+                    // half-way while the tier is being resolved from the other side.
+                    reconciler.submit(TierReconciler.Trigger.OBD) {
+                        detector.obdConnected = false
+                        detector.engineRunning = false
                         reevaluate()
                         if (wasConnected) StateBroadcaster.emit(this@LocationService, "obd")
                     }
@@ -729,13 +816,20 @@ class LocationService : Service() {
      *  hardware-backed and ~free while parked; on a device without it the app simply
      *  leans on the 60 s LIGHT heartbeat + speed backstop as before. */
     private fun armMotionOnset() {
+        reconciler.requireOwnThread("armMotionOnset")
         if (!settings.motionOnset || sigMotionListener != null) return
         val sm = sensors ?: return
         val sensor = sm.getDefaultSensor(Sensor.TYPE_SIGNIFICANT_MOTION) ?: return
         val l = object : TriggerEventListener() {
+            // The OS delivers this on its own thread, so the whole handler is submitted — including
+            // clearing `sigMotionListener`, which arm/disarm also write. That field is the arm
+            // latch: two threads writing it is how you end up either double-armed or, worse,
+            // permanently disarmed with the app waiting for a trigger that will never come.
             override fun onTrigger(event: TriggerEvent?) {
-                sigMotionListener = null   // one-shot: the OS has disarmed it
-                onMotionTrigger()
+                reconciler.submit(TierReconciler.Trigger.MOTION) {
+                    sigMotionListener = null   // one-shot: the OS has disarmed it
+                    onMotionTrigger()
+                }
             }
         }
         if (sm.requestTriggerSensor(l, sensor)) sigMotionListener = l
@@ -753,35 +847,45 @@ class LocationService : Service() {
      *  instant Doppler fix + a short accelerometer read, and let [DriveDetector.confirmOnset]
      *  decide. Confirmed → flip to DRIVING now; otherwise hold dense GPS until the probation
      *  window expires (so the speed backstop can still promote a shy start) then fall back to
-     *  LIGHT and re-arm. Runs on the main thread (sensor callback); the work is a coroutine. */
+     *  LIGHT and re-arm. Runs on the reconciler thread (it reads the tier and raises the fix rate);
+     *  the blocking Doppler/accelerometer work is a coroutine, which submits its answer back. */
     private fun onMotionTrigger() {
+        reconciler.requireOwnThread("onMotionTrigger")
         if (onsetProbing || currentTier != DriveDetector.Tier.LIGHT) {
             if (currentTier == DriveDetector.Tier.LIGHT) armMotionOnset()  // don't lose the trigger
             return
         }
         onsetProbing = true
-        onsetProbationUntil = System.currentTimeMillis() + settings.onsetProbeWindowSec * 1000L
+        onsetProbationUntil = Clock.now() + settings.onsetProbeWindowSec * 1000L
         LiveState.onsetState = "probing"
         EventLog.info("Motion onset → probing")
         requestUpdates(settings.onsetProbeIntervalSec * 1000L, Priority.PRIORITY_HIGH_ACCURACY)
         val tokenSrc = CancellationTokenSource()
         onsetTokenSource = tokenSrc
         scope.launch {
+            // Off-thread on purpose: an instant-fix await plus a 3s accelerometer window. Blocking
+            // the reconciler thread for that would stall every fix behind it.
             val doppler = currentDoppler(tokenSrc)
             val accel = sampleAccelRms()
-            val confirmed = detector.confirmOnset(doppler, accel, System.currentTimeMillis())
+            val confirmed = detector.confirmOnset(doppler, accel, Clock.now())
             if (confirmed) {
                 LiveState.onsetState = "confirmed"
                 val mph = doppler?.let { Math.round(it * 2.2369362f) } ?: -1
                 EventLog.info("Driving detected (motion, $mph mph)")
-                main.post { reevaluate(); StateBroadcaster.emit(this@LocationService, "motion") }
+                reconciler.submit(TierReconciler.Trigger.MOTION) {
+                    reevaluate()
+                    StateBroadcaster.emit(this@LocationService, "motion")
+                }
             } else {
-                val remain = onsetProbationUntil - System.currentTimeMillis()
+                val remain = onsetProbationUntil - Clock.now()
                 if (remain > 0) delay(remain)
             }
-            onsetProbing = false
-            onsetTokenSource = null
-            main.post {
+            // Close the probe on the reconciler thread — it clears the probing latch and, if the
+            // tier never went DRIVING, drops the probationary dense GPS back to LIGHT and re-arms.
+            // Submitted after the confirm above, so it observes the tier that confirm produced.
+            reconciler.submit(TierReconciler.Trigger.MOTION) {
+                onsetProbing = false
+                onsetTokenSource = null
                 if (currentTier == DriveDetector.Tier.LIGHT) {
                     LiveState.onsetState = "idle"
                     requestUpdates(settings.lightIntervalSec * 1000L, Priority.PRIORITY_BALANCED_POWER_ACCURACY)
@@ -847,7 +951,9 @@ class LocationService : Service() {
         runCatching { onsetTokenSource?.cancel() }
         accelListener?.let { runCatching { sensors?.unregisterListener(it) } }
         fused.removeLocationUpdates(callback)
-        runCatching { locThread.quitSafely() }
+        // Unsubscribe from fixes BEFORE the reconciler quits, so no fix is delivered onto a
+        // looper that is on its way out. quitSafely drains what is already queued.
+        reconciler.quit()
         obd?.close(); obd = null
         // Final flush off the cancelled scope so a last batch isn't dropped.
         Thread { runCatching { uploader.flush() } }.start()
@@ -877,7 +983,7 @@ class LocationService : Service() {
      */
     private fun maybeUpdateNotification() {
         if (currentTier == DriveDetector.Tier.OFF) return
-        if (System.currentTimeMillis() < flashUntil) return
+        if (Clock.now() < flashUntil) return
         if (notifSignature() == notifSig) return
         updateNotification()
     }
@@ -1065,6 +1171,7 @@ class LocationService : Service() {
      * drive spanning its `ts` at read time. That is the whole reason this button is cheap.
      */
     private fun markNow() {
+        reconciler.requireOwnThread("markNow")
         if (!driving()) return  // a mark on a parked phone would belong to no drive
         val lat = LiveState.lat
         val lon = LiveState.lon
@@ -1091,12 +1198,17 @@ class LocationService : Service() {
     /** Show [text] in place of the stats line, then fall back. With the phone locked this is
      *  the only feedback the driver gets, so it has to land. */
     private fun flashNotification(text: String) {
-        flashUntil = System.currentTimeMillis() + FLASH_MS   // hold it against the coalesced redraw
+        flashUntil = Clock.now() + FLASH_MS   // hold it against the coalesced redraw
         updateNotification(flash = text)
         scope.launch {
             delay(FLASH_MS)
-            flashUntil = 0L
-            updateNotification()
+            // Back onto the reconciler thread to clear the hold and restore the card: `flashUntil`
+            // and `notifSig` are read by every fix's coalesced redraw, and a timer thread stomping
+            // them mid-fix is how the flash used to be erased within a second of appearing.
+            reconciler.submit(TierReconciler.Trigger.FLASH) {
+                flashUntil = 0L
+                updateNotification()
+            }
         }
     }
 
