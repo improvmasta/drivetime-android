@@ -57,32 +57,46 @@ class Elm327Client {
 
     fun isConnected() = socket?.isConnected == true
 
+    /**
+     * Connect and run the ELM327 init. **Atomic:** either it returns holding a live socket, or it
+     * throws having closed whatever it opened. The caller only learns the client exists by this
+     * method returning — the service assigns its `obd` field *after* the call — so a socket left
+     * open by a throwing init is unreachable, and its file descriptor leaks. A wedged clone
+     * (see [handshake]) throws on every reconnect attempt, which made that leak unbounded.
+     */
     @SuppressLint("MissingPermission")
     fun connect(device: BluetoothDevice) {
+        // Everything after openSocket runs guarded: the streams can throw too, and by here we
+        // own a connected socket that nothing else holds a reference to.
         val s = openSocket(device)
         socket = s
-        input = s.inputStream
-        output = s.outputStream
-        initLog.clear()
-        // Fast handshake + wake before the real init. A healthy ELM327 answers ATZ in ~1s.
-        // When the car was started well before we reach the dongle (e.g. a remote start), a
-        // cheap clone often sits powered-but-idle until it locks up — it still accepts the
-        // Bluetooth socket but won't answer commands. [handshake] nudges it (reset/warm-start)
-        // on a SHORT timeout and bails immediately if it stays mute, so the loop can retry or
-        // cold-reset instead of grinding through ~20s of per-command timeouts every attempt.
-        if (!handshake()) throw ObdUnresponsiveException("no ELM327 response — dongle asleep or wedged")
-        // echo off, linefeeds off, spaces off
-        for (cmd in listOf("ATE0", "ATL0", "ATS0")) {
-            val r = send(cmd); Thread.sleep(120)
-            initLog.add("$cmd→${clean(r)}")
+        try {
+            input = s.inputStream
+            output = s.outputStream
+            initLog.clear()
+            // Fast handshake + wake before the real init. A healthy ELM327 answers ATZ in ~1s.
+            // When the car was started well before we reach the dongle (e.g. a remote start), a
+            // cheap clone often sits powered-but-idle until it locks up — it still accepts the
+            // Bluetooth socket but won't answer commands. [handshake] nudges it (reset/warm-start)
+            // on a SHORT timeout and bails immediately if it stays mute, so the loop can retry or
+            // cold-reset instead of grinding through ~20s of per-command timeouts every attempt.
+            if (!handshake()) throw ObdUnresponsiveException("no ELM327 response — dongle asleep or wedged")
+            // echo off, linefeeds off, spaces off
+            for (cmd in listOf("ATE0", "ATL0", "ATS0")) {
+                val r = send(cmd); Thread.sleep(120)
+                initLog.add("$cmd→${clean(r)}")
+            }
+            // Protocol: pin ISO 15765-4 CAN 11-bit/500k (ATSP6 — ~95% of post-2008 cars) so the
+            // first OBD query skips the multi-second "SEARCHING..." auto-probe. If that car isn't
+            // protocol 6, fall back to auto (ATSP0) which searches once. A connected car answers
+            // 0100 with a "4100" header; "NO DATA"/"UNABLE TO CONNECT"/"SEARCHING" don't.
+            if (!tryProtocol("6")) tryProtocol("0")
+            discoverCapabilities()
+            vin = runCatching { readVin() }.getOrNull()
+        } catch (e: Throwable) {
+            close()
+            throw e
         }
-        // Protocol: pin ISO 15765-4 CAN 11-bit/500k (ATSP6 — ~95% of post-2008 cars) so the
-        // first OBD query skips the multi-second "SEARCHING..." auto-probe. If that car isn't
-        // protocol 6, fall back to auto (ATSP0) which searches once. A connected car answers
-        // 0100 with a "4100" header; "NO DATA"/"UNABLE TO CONNECT"/"SEARCHING" don't.
-        if (!tryProtocol("6")) tryProtocol("0")
-        discoverCapabilities()
-        vin = runCatching { readVin() }.getOrNull()
     }
 
     /**

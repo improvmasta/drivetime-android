@@ -157,12 +157,12 @@ object Control {
                 applyMode(context, settings, mode, source)
                 true
             }
-            "interval_sec" -> setPosInt(value) { settings.intervalSec = it }
-            "idle_interval_sec" -> setPosInt(value) { settings.idleIntervalSec = it }
-            "light_interval_sec" -> setPosInt(value) { settings.lightIntervalSec = it }
-            "upload_interval_sec" -> setPosInt(value) { settings.uploadIntervalSec = it }
-            "driving_upload_interval_sec" -> setPosInt(value) { settings.drivingUploadIntervalSec = it }
-            "stationary_stop_min" -> setPosInt(value, allowZero = true) { settings.stationaryStopMin = it }
+            "interval_sec" -> setPosInt(key, value) { settings.intervalSec = it }
+            "idle_interval_sec" -> setPosInt(key, value) { settings.idleIntervalSec = it }
+            "light_interval_sec" -> setPosInt(key, value) { settings.lightIntervalSec = it }
+            "upload_interval_sec" -> setPosInt(key, value) { settings.uploadIntervalSec = it }
+            "driving_upload_interval_sec" -> setPosInt(key, value) { settings.drivingUploadIntervalSec = it }
+            "stationary_stop_min" -> setPosInt(key, value, allowZero = true) { settings.stationaryStopMin = it }
             "drive_by_speed" -> setBool(value) { settings.driveBySpeed = it }
             "auto_trip" -> setBool(value) {
                 settings.autoTrip = it
@@ -186,10 +186,10 @@ object Control {
                 }
             }
             "motion_onset" -> setBool(value) { settings.motionOnset = it }
-            "onset_probe_interval_sec" -> setPosInt(value) { settings.onsetProbeIntervalSec = it }
-            "onset_probe_window_sec" -> setPosInt(value) { settings.onsetProbeWindowSec = it }
-            "onset_speed_mps" -> setPosInt(value) { settings.onsetSpeedMps = it }
-            "onset_accel_rms" -> setPosInt(value, allowZero = true) { settings.onsetAccelRms = it }
+            "onset_probe_interval_sec" -> setPosInt(key, value) { settings.onsetProbeIntervalSec = it }
+            "onset_probe_window_sec" -> setPosInt(key, value) { settings.onsetProbeWindowSec = it }
+            "onset_speed_mps" -> setPosInt(key, value) { settings.onsetSpeedMps = it }
+            "onset_accel_rms" -> setPosInt(key, value, allowZero = true) { settings.onsetAccelRms = it }
             else -> false
         }
         if (applied) {
@@ -219,9 +219,17 @@ object Control {
 
     private fun parseMode(value: String): String? = ControlParse.parseMode(value)
 
-    private inline fun setPosInt(value: String, allowZero: Boolean = false, apply: (Int) -> Unit): Boolean {
+    /** Parse a numeric SET value, then hold it to [ControlParse]'s bounds for that key. The clamp
+     *  is announced: a routine that asked for `interval_sec=0` and quietly got 1 would otherwise
+     *  have no way to find out its recipe doesn't do what it says. ([Settings] clamps too — this
+     *  is where the *user* hears about it.) */
+    private inline fun setPosInt(key: String, value: String, allowZero: Boolean = false, apply: (Int) -> Unit): Boolean {
         val n = ControlParse.parsePosInt(value, allowZero) ?: return false
-        apply(n)
+        val bounded = ControlParse.clampSetting(key, n)
+        if (bounded != n) {
+            EventLog.warn("SET $key=$n out of range (${ControlParse.boundsOf(key)}) — clamped to $bounded")
+        }
+        apply(bounded)
         return true
     }
 

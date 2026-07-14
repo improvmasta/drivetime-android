@@ -22,10 +22,11 @@ import kotlin.math.abs
  * Two families share this one door:
  *  - **Decision prompts** (NOTIFICATIONS.md P3/P4) — "drive completed, tag it", "gas-stop
  *    split detected", the weekly digest. One-shot, tappable, and **default OFF**.
- *  - **Health alerts** (P5) — [KIND_CHECK_ENGINE] and [KIND_TRACKING_HEALTH]. These used to
- *    post themselves from LocationService and Watchdog, each inventing its own channel, id
- *    scheme, and (non-)retraction. They now come through here, which is what buys them a
- *    channel in the group, a toggle, a deep link, and honest retraction.
+ *  - **Health alerts** (P5) — [KIND_CHECK_ENGINE], [KIND_TRACKING_HEALTH] and
+ *    [KIND_BACKUP_HEALTH]. The first two used to post themselves from LocationService and
+ *    Watchdog, each inventing its own channel, id scheme, and (non-)retraction. They now come
+ *    through here, which is what buys them a channel in the group, a toggle, a deep link, and
+ *    honest retraction.
  *
  * One OS channel per kind, so the system's own channel controls map 1:1 to the app's
  * toggles. [post] is the single gate: it silently no-ops unless the kind's toggle is on AND
@@ -54,9 +55,13 @@ object Notify {
      *  so a user who already silenced or tuned check-engine alerts keeps that setting. */
     const val KIND_CHECK_ENGINE = "check_engine"
     const val KIND_TRACKING_HEALTH = "tracking_health"
+    /** Scheduled backups have been failing ([BackupWorker.FAIL_STREAK] in a row). */
+    const val KIND_BACKUP_HEALTH = "backup_health"
 
     /** The kill warning is a singleton — one "we lost your drives" at a time, replaced in
-     *  place rather than stacked, and cancelled by this id when the user acknowledges it. */
+     *  place rather than stacked, and cancelled by this id when the user acknowledges it.
+     *  A failing backup is a singleton condition in exactly the same way, so it shares the id
+     *  (the ids are per-kind — [notifId] hashes kind+id — so they never collide). */
     const val HEALTH_ID = "1"
 
     /** Native drive boundaries vs the SPA's segmented ones: same drive, seconds apart. */
@@ -100,6 +105,7 @@ object Notify {
         KIND_WEEKLY_DIGEST -> s.notifyDigest
         KIND_CHECK_ENGINE -> s.alertsEnabled
         KIND_TRACKING_HEALTH -> s.notifyTrackingHealth
+        KIND_BACKUP_HEALTH -> s.notifyBackupHealth
         else -> false
     }
 
@@ -122,13 +128,17 @@ object Notify {
         m.createNotificationChannelGroup(NotificationChannelGroup(GROUP_ID, "Events"))
         // A decision prompt is DEFAULT (it can wait for the next glance at the phone); a
         // health alert is HIGH (a fault light and a tracker the OS killed are both "you are
-        // losing data right now" — they earn the heads-up).
+        // losing data right now" — they earn the heads-up). Backup health is the exception
+        // that proves the rule: it reports a safety net that is down, not data being lost as
+        // you read it, and it has already been true for days by the time it posts — so it
+        // takes DEFAULT and waits for the next glance.
         for ((id, spec) in listOf(
             KIND_DRIVE_COMPLETE to ("Drive completed" to NotificationManager.IMPORTANCE_DEFAULT),
             KIND_GAS_STOP to ("Gas-stop detected" to NotificationManager.IMPORTANCE_DEFAULT),
             KIND_WEEKLY_DIGEST to ("Weekly digest" to NotificationManager.IMPORTANCE_DEFAULT),
             KIND_CHECK_ENGINE to ("Check-engine alerts" to NotificationManager.IMPORTANCE_HIGH),
             KIND_TRACKING_HEALTH to ("Tracking health" to NotificationManager.IMPORTANCE_HIGH),
+            KIND_BACKUP_HEALTH to ("Backup problems" to NotificationManager.IMPORTANCE_DEFAULT),
         )) {
             val ch = NotificationChannel(id, spec.first, spec.second)
             ch.group = GROUP_ID
@@ -230,9 +240,10 @@ object Notify {
                 // tagging the last untagged drive clears last week's digest from the shade.
                 KIND_WEEKLY_DIGEST -> att.untagged > 0
                 // The health alerts are none of the SPA's business — its replica has no idea
-                // whether a trouble code is still standing or the logger is running. Their
-                // own producers retract them; the attention push must never touch them.
-                KIND_CHECK_ENGINE, KIND_TRACKING_HEALTH -> true
+                // whether a trouble code is still standing, the logger is running, or last
+                // night's backup reached the folder. Their own producers retract them; the
+                // attention push must never touch them.
+                KIND_CHECK_ENGINE, KIND_TRACKING_HEALTH, KIND_BACKUP_HEALTH -> true
                 else -> true
             }
             if (!still) {

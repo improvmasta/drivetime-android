@@ -81,6 +81,23 @@ and both `androidx.car.app` artifacts came out. Restore from git if it earns its
 every "can we log right now?" question goes through — the warning banner, the wizard, the start
 path, and `Watchdog` all read it, so they can never disagree.
 
+**`Health` is the tracker's liveness ledger, and it exists because silence proves nothing.** The
+only thing that writes a GPS fix is the location callback, so a parked car and a tracker the OEM
+battery manager killed produce the same thing: no fixes. Four features were once built on a comment
+claiming "the logger heartbeats every ~60s even parked, so silence means it died" — nothing
+enforced that, and the app accused itself of dying every time the car sat in a driveway. `Health`
+makes it true, but **not** by writing a row every 60s: a `delay` doesn't tick in deep sleep, so a
+missing row would still mean *dead OR asleep*. Instead the beat is a continuously-updated **proof
+of life** (`Settings.lifeBeatAt`, stamped from a fix, an upload, or a `Watchdog` pass), and the
+unit of identity is the **process** — anything `startLife` finds in prefs during `onCreate` can
+only describe a predecessor, so a predecessor that never ran `onDestroy` was *killed*, and the
+interval since its last beat is downtime we can state as fact. A late beat still proves continuity,
+because the same process wrote both ends of it. Outages land in `web_health.jsonl` as `down` rows
+(with a cause: `killed`/`system` are faults, `stop`/`reboot` are not) plus `cond` rows for
+transitions in what the tracker needs (location off, permission revoked, power saver). The SPA
+drains them over `pullHealth` (`drivetime/frontend/src/lib/health.js`). Nothing may read a gap in
+the fixes as a failure — read the ledger.
+
 ## The web assets are generated — never hand-edit them
 
 `app/src/main/assets/web/` is a **committed build artifact**, not source. Its source lives in
@@ -234,8 +251,14 @@ ship log to stamp, no local build to gate on); CI plus `--watch` are the pre-pub
   and it needs a real phone to verify. Do it *before* the bump, not with it.
 - **Quick Settings tile** (`TileService`) — the last unbuilt entry-point in the control API.
 - **OBD reconnect** — backoff retry on a dongle drop (GPS already continues regardless).
-- **Low-accuracy / no-fix handling** — flag or drop poor fixes; notice "location services off"
-  while logging and say so.
+- **"Alive but blind" alarm** — the payoff `Health` was built for, and still unbuilt: heartbeat
+  present + motion/OBD says the engine is running + no fixes for minutes = we are losing a drive
+  *right now*. Today that is a completely dark failure. The `cond` rows (location off, permission
+  revoked, power saver) are already being recorded to tune the thresholds against — deliberately
+  collected before the alarm is wired, so it can't nag on a guess.
+- **Low-accuracy / no-fix handling** — flag or drop poor fixes. (The "location services off" half
+  is done: `Health` records it as a `cond` transition and the Drives timeline names it as the
+  cause of a gap.)
 - **One logging state machine** — manual, detector, and routine commands can still race.
 - **Credentials in Keystore** — the device token sits in plain `SharedPreferences` today, and
   `SettingsExport` writes it in cleartext (deliberately, for portability — but it's the gap).

@@ -152,4 +152,8 @@ dependencies {
     testImplementation("org.robolectric:robolectric:4.16.1")
     testImplementation("androidx.test:core:1.6.1")
     testImplementation("androidx.test.ext:junit:1.2.1")
+    // Version-locked to the okhttp above (same artifact family) — a mismatched pair is the
+    // one way this dependency bites. Lets UploaderQueueTest drive a real flush(), which is
+    // the only route to the verify-before-delete + atomic-rewrite code that guards the queue.
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }

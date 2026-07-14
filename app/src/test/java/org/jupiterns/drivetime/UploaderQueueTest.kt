@@ -1,12 +1,17 @@
 package org.jupiterns.drivetime
 
 import androidx.test.core.app.ApplicationProvider
+import okhttp3.mockwebserver.Dispatcher
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 
 /**
@@ -29,6 +34,9 @@ class UploaderQueueTest {
         File(ctx.filesDir, "queue.jsonl").delete()
         File(ctx.filesDir, "queue.tmp").delete()
         Uploader.resetQueueCacheForTest()
+        // A server URL left by a previous method would silently change what flush() does.
+        ctx.getSharedPreferences("drivetime", android.content.Context.MODE_PRIVATE)
+            .edit().clear().commit()
         settings = Settings(ctx)
         uploader = Uploader(ctx, settings)
         queueFile = File(ctx.filesDir, "queue.jsonl")
@@ -71,5 +79,76 @@ class UploaderQueueTest {
         File(ctx.filesDir, "queue.jsonl").delete()
         val h = Uploader(ctx, Settings(ctx)).health()
         assertEquals(0, h.queued)
+    }
+
+    // ---- the rewrite path: acked lines leave, everything else stays ----
+
+    /** Point the uploader at a real (mock) server so flush() runs end to end. */
+    private fun serve(vararg codes: Int): MockWebServer {
+        val server = MockWebServer()
+        for (c in codes) server.enqueue(MockResponse().setResponseCode(c))
+        server.start()
+        settings.serverUrl = server.url("/").toString().removeSuffix("/")
+        settings.deviceToken = "tok"
+        return server
+    }
+
+    @Test fun flush_drainsTheQueue_andLeavesNoTempFileBehind() {
+        val server = serve(200)
+        try {
+            repeat(4) { uploader.enqueue(40.0, -75.0, 1700000000L + it, null, null, null) }
+            assertTrue(uploader.flush())
+            assertEquals(0, uploader.queuedCount())
+            assertEquals(1, server.requestCount)
+            // A drained queue is deleted outright, and the temp file the atomic rewrite uses
+            // must never be left lying around: a stale queue.tmp is a half-queue waiting to be
+            // mistaken for a real one.
+            assertFalse(queueFile.exists())
+            assertFalse("queue.tmp left behind", File(queueFile.parentFile, "queue.tmp").exists())
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test fun flush_keepsTheQueueIntactWhenTheServerRejectsIt() {
+        val server = serve(500)
+        try {
+            repeat(3) { uploader.enqueue(40.0, -75.0, 1700000000L + it, null, null, null) }
+            assertFalse(uploader.flush())
+            // Verify-before-delete: a failed POST deletes nothing, so the fixes survive to be
+            // re-sent. This is the invariant the whole durable queue exists for.
+            assertEquals(3, uploader.queuedCount())
+            assertEquals(3, queueFile.readLines().filter { it.isNotBlank() }.size)
+            assertFalse(File(queueFile.parentFile, "queue.tmp").exists())
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test fun flush_neverDropsAFixThatArrivedWhileThePostWasInFlight() {
+        val server = serve()
+        // A fix recorded *during* the POST is the case the content-matched drop exists for: a
+        // count-based one would delete it unsent. The dispatcher appends it at the one moment
+        // that is otherwise impossible to stage — while the batch is on the wire.
+        var appended = false
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                if (!appended) {
+                    appended = true
+                    uploader.enqueue(41.0, -76.0, 1700009999L, null, null, null)
+                }
+                return MockResponse().setResponseCode(200)
+            }
+        }
+        try {
+            repeat(2) { uploader.enqueue(40.0, -75.0, 1700000000L + it, null, null, null) }
+            assertTrue(uploader.flush())
+            // Two POSTs: the original pair, then the latecomer — which was sent, not discarded.
+            assertEquals(2, server.requestCount)
+            assertEquals(0, uploader.queuedCount())
+            assertFalse(queueFile.exists())
+        } finally {
+            server.shutdown()
+        }
     }
 }

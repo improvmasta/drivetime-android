@@ -50,37 +50,49 @@ class Settings(context: Context) {
         get() = prefs.getString("password", "") ?: ""
         set(v) = prefs.edit().putString("password", v).apply()
 
+    /**
+     * Every numeric cadence/threshold below is bounds-checked through [ControlParse.clampSetting]
+     * on **both** sides of the pref.
+     *
+     * On write, so the value the user sees stored is the one that takes effect, and no writer —
+     * routine `SET`, a [SettingsExport] import, or the SPA bridge — can install a cadence the
+     * logger can't act on (`0` spins GPS flat out; `2000000000` is a fix every 63 years, which
+     * silently ends drive detection). On read, so a value a previous build already wrote to prefs
+     * can't outlive this fix on a phone that merely updates the app.
+     */
+    private fun bound(key: String, v: Int) = ControlParse.clampSetting(key, v)
+
     /** Seconds between GPS fixes while *driving and moving* (the dense tier). */
     var intervalSec: Int
-        get() = prefs.getInt("interval_sec", 3)
-        set(v) = prefs.edit().putInt("interval_sec", v).apply()
+        get() = bound("interval_sec", prefs.getInt("interval_sec", 3))
+        set(v) = prefs.edit().putInt("interval_sec", bound("interval_sec", v)).apply()
 
     /** Seconds between fixes while *driving but stopped* (red light / traffic):
      *  adaptive back-off so a stop doesn't flood at the moving rate. */
     var idleIntervalSec: Int
-        get() = prefs.getInt("idle_interval_sec", 20)
-        set(v) = prefs.edit().putInt("idle_interval_sec", v).apply()
+        get() = bound("idle_interval_sec", prefs.getInt("idle_interval_sec", 20))
+        set(v) = prefs.edit().putInt("idle_interval_sec", bound("idle_interval_sec", v)).apply()
 
     /** Seconds between fixes when *not driving* (the light background tier):
      *  a sparse, low-power everyday-location pulse that ramps to dense on a drive. */
     var lightIntervalSec: Int
-        get() = prefs.getInt("light_interval_sec", 60)
-        set(v) = prefs.edit().putInt("light_interval_sec", v).apply()
+        get() = bound("light_interval_sec", prefs.getInt("light_interval_sec", 60))
+        set(v) = prefs.edit().putInt("light_interval_sec", bound("light_interval_sec", v)).apply()
 
     /** Seconds between *batched* upload flushes while in **LIGHT** tier. Fixes are
      *  buffered to the on-disk queue and sent in bursts on this cadence (radio-friendly)
      *  instead of one POST per fix; a regained connection or a full batch flushes early. */
     var uploadIntervalSec: Int
-        get() = prefs.getInt("upload_interval_sec", 45)
-        set(v) = prefs.edit().putInt("upload_interval_sec", v).apply()
+        get() = bound("upload_interval_sec", prefs.getInt("upload_interval_sec", 45))
+        set(v) = prefs.edit().putInt("upload_interval_sec", bound("upload_interval_sec", v)).apply()
 
     /** Seconds between flushes while **DRIVING** — short, so the dashboard / live ETA
      *  see near-real-time position instead of the battery-friendly LIGHT cadence.
      *  Foreground UI and charge-connected events also trigger an immediate flush
      *  regardless of this. */
     var drivingUploadIntervalSec: Int
-        get() = prefs.getInt("driving_upload_interval_sec", 10)
-        set(v) = prefs.edit().putInt("driving_upload_interval_sec", v).apply()
+        get() = bound("driving_upload_interval_sec", prefs.getInt("driving_upload_interval_sec", 10))
+        set(v) = prefs.edit().putInt("driving_upload_interval_sec", bound("driving_upload_interval_sec", v)).apply()
 
     /**
      * Tracking mode = the *desired* behaviour, set by the user or a routine:
@@ -110,25 +122,25 @@ class Settings(context: Context) {
     /** Probationary GPS cadence (seconds) after a significant-motion trigger, so the
      *  speed backstop has dense fixes to confirm a real start. */
     var onsetProbeIntervalSec: Int
-        get() = prefs.getInt("onset_probe_interval_sec", 3)
-        set(v) = prefs.edit().putInt("onset_probe_interval_sec", v).apply()
+        get() = bound("onset_probe_interval_sec", prefs.getInt("onset_probe_interval_sec", 3))
+        set(v) = prefs.edit().putInt("onset_probe_interval_sec", bound("onset_probe_interval_sec", v)).apply()
 
     /** How long (seconds) the probationary dense GPS runs before falling back to LIGHT
      *  if no drive was confirmed. */
     var onsetProbeWindowSec: Int
-        get() = prefs.getInt("onset_probe_window_sec", 25)
-        set(v) = prefs.edit().putInt("onset_probe_window_sec", v).apply()
+        get() = bound("onset_probe_window_sec", prefs.getInt("onset_probe_window_sec", 25))
+        set(v) = prefs.edit().putInt("onset_probe_window_sec", bound("onset_probe_window_sec", v)).apply()
 
     /** Doppler speed (m/s) at/above which a motion-onset wake is unambiguously vehicular. */
     var onsetSpeedMps: Int
-        get() = prefs.getInt("onset_speed_mps", 4)
-        set(v) = prefs.edit().putInt("onset_speed_mps", v).apply()
+        get() = bound("onset_speed_mps", prefs.getInt("onset_speed_mps", 4))
+        set(v) = prefs.edit().putInt("onset_speed_mps", bound("onset_speed_mps", v)).apply()
 
     /** Accelerometer-energy RMS threshold (×100 m/s²) separating a smooth vehicle from an
      *  on-foot bounce in the ambiguous low-speed band; below it ⇒ vehicle. */
     var onsetAccelRms: Int
-        get() = prefs.getInt("onset_accel_rms", 250)
-        set(v) = prefs.edit().putInt("onset_accel_rms", v).apply()
+        get() = bound("onset_accel_rms", prefs.getInt("onset_accel_rms", 250))
+        set(v) = prefs.edit().putInt("onset_accel_rms", bound("onset_accel_rms", v)).apply()
 
     /** Car Bluetooth device (stereo / head unit). Its connection is the #1 "I'm
      *  driving" signal — deterministic, no activity-recognition guessing. */
@@ -159,8 +171,8 @@ class Settings(context: Context) {
     /** End a trip after this many minutes stationary, as a backstop for a missed
      *  activity-recognition "exited vehicle". 0 disables; only used with autoTrip. */
     var stationaryStopMin: Int
-        get() = prefs.getInt("stationary_stop_min", 5)
-        set(v) = prefs.edit().putInt("stationary_stop_min", v).apply()
+        get() = bound("stationary_stop_min", prefs.getInt("stationary_stop_min", 5))
+        set(v) = prefs.edit().putInt("stationary_stop_min", bound("stationary_stop_min", v)).apply()
 
     /** Whether the logging service is currently meant to be running. */
     var loggingEnabled: Boolean
@@ -281,6 +293,19 @@ class Settings(context: Context) {
     var notifyTrackingHealth: Boolean
         get() = prefs.getBoolean("notify_tracking_health", true)
         set(v) = prefs.edit().putBoolean("notify_tracking_health", v).apply()
+
+    /**
+     * Post [Notify.KIND_BACKUP_HEALTH] after [BackupWorker.FAIL_STREAK] consecutive failed
+     * automatic backups.
+     *
+     * Defaults **ON** for the same reason as [notifyTrackingHealth]: a backup that has been
+     * failing for a month is only discovered on the day it's needed, and the app is the only
+     * thing that knows. An error report, not a nag — it fires once per failing streak, and the
+     * first successful run retracts it.
+     */
+    var notifyBackupHealth: Boolean
+        get() = prefs.getBoolean("notify_backup_health", true)
+        set(v) = prefs.edit().putBoolean("notify_backup_health", v).apply()
 
     // ---- event notifications (NOTIFICATIONS.md P3) — decision prompts, all default OFF ----
 
@@ -404,6 +429,39 @@ class Settings(context: Context) {
         get() = prefs.getLong("last_kill_notified_at", 0L)
         set(v) = prefs.edit().putLong("last_kill_notified_at", v).apply()
 
+    // ---- the logger's liveness ledger ([Health]) ----
+    //
+    // These three describe the CURRENT logging process while it runs, and its corpse once it
+    // doesn't. `onCreate` reads them before writing any of them, so whatever they hold at that
+    // moment can only describe a *predecessor* — which is what lets the tracker state "I was
+    // down from X to Y" as a fact instead of inferring it from an absence of GPS fixes.
+
+    /** Wall-clock (ms) of the last proof that the logging process was ALIVE — bumped from a fix,
+     *  an upload flush, or a watchdog pass, at most once a minute. Distinct from [lastFixAt] in the
+     *  way that matters: a parked phone stops producing fixes but keeps beating, so a stale beat
+     *  means the tracker was *gone*, where a stale fix only ever meant the car wasn't moving. */
+    var lifeBeatAt: Long
+        get() = prefs.getLong("life_beat_at", 0L)
+        set(v) = prefs.edit().putLong("life_beat_at", v).apply()
+
+    /** Wall-clock (ms) the service's `onDestroy` ran; 0 when it is running — or when it was killed
+     *  outright and never got to run one, which is exactly the case worth knowing about. */
+    var lifeEndedAt: Long
+        get() = prefs.getLong("life_ended_at", 0L)
+        set(v) = prefs.edit().putLong("life_ended_at", v).apply()
+
+    /** Why the last life ended: "stop" (the user turned tracking off) or "system" (the OS stopped
+     *  the service while logging was still meant to be on). Blank when it never said. */
+    var lifeEndReason: String
+        get() = prefs.getString("life_end_reason", "") ?: ""
+        set(v) = prefs.edit().putString("life_end_reason", v).apply()
+
+    /** Signature of the last recorded tracker-condition tuple (location on / permissions / power
+     *  saver), so [Health] writes a row when the conditions CHANGE and stays silent otherwise. */
+    var healthCond: String
+        get() = prefs.getString("health_cond", "") ?: ""
+        set(v) = prefs.edit().putString("health_cond", v).apply()
+
     /** Auto-check the server for a newer APK when the app comes to the foreground
      *  (throttled). Off = only the manual "Check for updates" button checks. */
     var updatesEnabled: Boolean
@@ -485,6 +543,12 @@ class Settings(context: Context) {
     var backupLastResult: String
         get() = prefs.getString("backup_last_result", "") ?: ""
         set(v) = prefs.edit().putString("backup_last_result", v).apply()
+
+    /** Consecutive *automatic* backup runs that failed. Reset by any run that succeeds; drives
+     *  [Notify.KIND_BACKUP_HEALTH] once it reaches [BackupWorker.FAIL_STREAK]. */
+    var backupFailStreak: Int
+        get() = prefs.getInt("backup_fail_streak", 0)
+        set(v) = prefs.edit().putInt("backup_fail_streak", v.coerceAtLeast(0)).apply()
 
     /** Epoch-ms the SPA last pushed its data snapshot over the bridge — the freshness of
      *  the app-data half of any archive a background worker builds. */

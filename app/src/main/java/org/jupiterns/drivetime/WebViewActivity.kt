@@ -553,6 +553,9 @@ class WebViewActivity : AppCompatActivity() {
         settings.backupFolderName = runCatching {
             DocumentFile.fromTreeUri(this, uri)?.name ?: ""
         }.getOrDefault("")
+        // The scheduled work's network constraint is derived from the destination set, so
+        // changing that set has to re-arm it (BackupWorker.constraints).
+        BackupWorker.reschedule(this, settings)
         EventLog.info("Backup folder set: ${settings.backupFolderName.ifBlank { uri.lastPathSegment ?: "?" }}")
         toast("Backup folder set")
     }
@@ -752,6 +755,17 @@ class WebViewActivity : AppCompatActivity() {
         @JavascriptInterface
         fun pullBattery(sinceTs: Double): String = WebBatteryBuffer.pullSince(this@WebViewActivity, sinceTs)
 
+        /** JSON array of tracker-liveness rows at or after [sinceTs] — the `down` windows the
+         *  logger was NOT running (with why), and the `cond` transitions in what it needs to work
+         *  (location services, permissions, power saver). See [Health].
+         *
+         *  This is the row stream that lets the app state "you lost 14:02–15:10" as a FACT. Every
+         *  other signal it has is an absence of GPS fixes, and an absence proves nothing: a parked
+         *  car and a dead tracker look identical in the fix stream. Keyed `kind|ts` on the SPA
+         *  side, so a cursor overlap re-delivering a row is a no-op. */
+        @JavascriptInterface
+        fun pullHealth(sinceTs: Double): String = Health.pullSince(this@WebViewActivity, sinceTs)
+
         /**
          * Stamp a marker from the SPA's own Mark button, through the SAME service path the
          * notification uses. One writer: otherwise an in-app mark would land
@@ -818,6 +832,7 @@ class WebViewActivity : AppCompatActivity() {
                 .put("notify_gas_stop", settings.notifyGasStop)
                 .put("notify_digest", settings.notifyDigest)
                 .put("notify_tracking_health", settings.notifyTrackingHealth)
+                .put("notify_backup_health", settings.notifyBackupHealth)
                 .put("digest_day", settings.digestDay)
                 .put("digest_time", settings.digestTime)
                 .put("control_token", settings.controlToken)
@@ -906,6 +921,14 @@ class WebViewActivity : AppCompatActivity() {
                         if (!settings.notifyTrackingHealth) {
                             Notify.cancel(
                                 this@WebViewActivity, Notify.KIND_TRACKING_HEALTH, Notify.HEALTH_ID)
+                        }
+                    }
+                    "notify_backup_health" -> {
+                        settings.notifyBackupHealth =
+                            value.toBooleanStrictOrNull() ?: settings.notifyBackupHealth
+                        if (!settings.notifyBackupHealth) {
+                            Notify.cancel(
+                                this@WebViewActivity, Notify.KIND_BACKUP_HEALTH, Notify.HEALTH_ID)
                         }
                     }
                     // The digest keys own a scheduled worker, so each write re-arms it (the
@@ -1193,6 +1216,7 @@ class WebViewActivity : AppCompatActivity() {
                     Uri.parse(old),
                     Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
             }
+            BackupWorker.reschedule(this@WebViewActivity, settings)
             ui.post { toast("Backup folder forgotten") }
         }
 
@@ -1208,6 +1232,7 @@ class WebViewActivity : AppCompatActivity() {
             settings.backupDriveAccount = ""
             settings.backupDriveFolderId = ""
             settings.backupDriveExportFolderId = ""
+            BackupWorker.reschedule(this@WebViewActivity, settings)
             EventLog.info("Google Drive disconnected")
             ui.post { toast("Google Drive disconnected") }
         }

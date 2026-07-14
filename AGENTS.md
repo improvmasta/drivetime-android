@@ -76,6 +76,19 @@ can't verify without a head unit. Don't re-add it casually; git has it.
 `Permissions.snapshot`/`checklist` is the one gate every "can we log right now?" question goes
 through.
 
+**`Health` is the tracker's liveness ledger — silence proves nothing.** The only thing that writes
+a fix is the location callback, so a parked car and a killed tracker look identical (no fixes). The
+app used to read that silence as failure and accused itself of dying every time the car sat parked.
+`Health` fixes it, but **not** with a row every 60s — a `delay` doesn't tick in deep sleep, so a
+missing row would still mean *dead OR asleep*. The beat is a continuously-updated **proof of life**
+(`Settings.lifeBeatAt`, stamped from a fix, an upload, or a `Watchdog` pass), and the unit of
+identity is the **process**: anything `startLife` finds in prefs during `onCreate` describes a
+predecessor, so one that never ran `onDestroy` was *killed*, and the time since its last beat is
+downtime stated as fact. Outages become `down` rows in `web_health.jsonl` with a cause
+(`killed`/`system` are faults; `stop`/`reboot` are not), plus `cond` rows for transitions in what
+the tracker needs (location off, permission revoked, power saver). The SPA drains them over
+`pullHealth`. Never read a gap in the fixes as a failure — read the ledger.
+
 ## The web assets are generated — never hand-edit them
 
 `app/src/main/assets/web/` is a **committed build artifact**, not source. Its source is
@@ -173,7 +186,11 @@ ship log to stamp, no local build to gate on); CI plus `--watch` are the pre-pub
 
 - **Quick Settings tile** (`TileService`) — the last unbuilt entry-point in the control API.
 - **OBD reconnect** — backoff retry on a dongle drop (GPS already continues regardless).
-- **Low-accuracy / no-fix handling** — flag or drop poor fixes; notice "location services off".
+- **"Alive but blind" alarm** — what `Health` was built for, still unbuilt: heartbeat + engine
+  running + no fixes for minutes = a drive is being lost right now. `cond` rows are already being
+  recorded to tune it against, so the alarm isn't wired on a guess.
+- **Low-accuracy / no-fix handling** — flag or drop poor fixes. ("Location services off" is done:
+  `Health` records it and the Drives timeline names it as a gap's cause.)
 - **One logging state machine** — manual, detector, and routine commands can still race.
 - **Credentials in Keystore** — the device token is in plain `SharedPreferences` today.
 - **A pre-release checklist** — permissions, FGS, boot, queue, OEM battery (sideload-only

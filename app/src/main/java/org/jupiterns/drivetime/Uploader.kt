@@ -8,6 +8,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.jupiterns.drivetime.obd.Elm327Client
 import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.random.Random
 
@@ -23,8 +25,10 @@ import kotlin.random.Random
  *    (a live fix matters more than a week-old one) rather than growing until OOM.
  *  - **Backoff + jitter** — repeated failures back off exponentially so a dead
  *    server doesn't get hammered and the radio isn't kept hot.
- *  - **Atomic rewrites** — trimming the queue writes a temp file and renames it, so
- *    a kill mid-rewrite can't corrupt or truncate the queue.
+ *  - **Atomic rewrites** — trimming the queue writes a temp file, fsyncs it, and renames
+ *    it over the queue, so neither a kill nor a power loss mid-rewrite can corrupt or
+ *    truncate it. A rewrite that fails keeps the previous queue rather than overwriting
+ *    in place ([atomicWriteLocked]).
  *
  * The queue file is process-global state: the logging service, the watchdog, and
  * the UI may each hold their own Uploader. All file access therefore takes a
@@ -178,8 +182,9 @@ class Uploader(context: Context, private val settings: Settings) {
         while (i < sent.size && i < lines.size && lines[i] == sent[i]) i++
         val remaining = lines.drop(i)
         if (remaining.isEmpty()) { queueFile.delete(); tmpFile.delete(); queuedApprox = 0; return true }
-        atomicWriteLocked(remaining)
-        queuedApprox = remaining.size
+        // A failed rewrite leaves the OLD queue on disk (acked lines and all), so the count we
+        // were about to cache would under-report it. -1 reseeds from the file on next read.
+        queuedApprox = if (atomicWriteLocked(remaining)) remaining.size else -1
         return false
     }
 
@@ -191,20 +196,40 @@ class Uploader(context: Context, private val settings: Settings) {
         val lines = queueFile.readLines().filter { it.isNotBlank() }
         if (lines.size <= 1) return
         val keep = lines.subList(lines.size / 4, lines.size)
-        atomicWriteLocked(keep)
+        if (!atomicWriteLocked(keep)) { queuedApprox = -1; return }   // nothing dropped, count stale
         queuedApprox = keep.size
         EventLog.warn("Upload queue full — dropped ${lines.size - keep.size} oldest fixes")
     }
 
-    /** Write [lines] to a temp file and atomically rename over the queue, so an
-     *  interrupted rewrite leaves the previous queue intact rather than a half file. */
-    private fun atomicWriteLocked(lines: List<String>) {
-        tmpFile.writeText(lines.joinToString("\n", postfix = "\n"))
-        if (!tmpFile.renameTo(queueFile)) {
-            // Rename can fail across some FS states; fall back to a direct overwrite.
-            queueFile.writeText(lines.joinToString("\n", postfix = "\n"))
-            tmpFile.delete()
+    /**
+     * Write [lines] to a temp file and atomically rename over the queue, so an interrupted
+     * rewrite leaves the previous queue intact rather than a half file. Returns false if the
+     * queue is unchanged on disk (the caller's cached count is then a lie — reseed it).
+     *
+     * Two things make it actually atomic, and both were missing:
+     *  - **fsync before the rename.** A rename is atomic with respect to the bytes the kernel
+     *    has *written*, not the bytes we handed it. Without the sync, power loss between the
+     *    two can publish a queue file that is correctly named and half there.
+     *  - **No overwrite fallback.** The old one caught a failed rename by writing the lines
+     *    straight over `queue.jsonl` — which is precisely the non-atomic write the temp file
+     *    exists to avoid, run at the moment the filesystem has already said it is unhappy. It
+     *    could truncate a good queue into a torn one. Failing loudly and keeping the old queue
+     *    is strictly better: its head is the batch we just uploaded, so the worst case is that
+     *    those fixes are re-sent, and the server ingests idempotently on (ts, source).
+     */
+    private fun atomicWriteLocked(lines: List<String>): Boolean = runCatching {
+        val bytes = lines.joinToString("\n", postfix = "\n").toByteArray()
+        FileOutputStream(tmpFile).use { out ->
+            out.write(bytes)
+            out.flush()
+            out.fd.sync()
         }
+        if (!tmpFile.renameTo(queueFile)) throw IOException("queue rename failed")
+        true
+    }.getOrElse {
+        EventLog.warn("Queue rewrite failed — keeping the previous queue: ${it.message}")
+        runCatching { tmpFile.delete() }
+        false
     }
 
     companion object {
@@ -236,10 +261,20 @@ class Uploader(context: Context, private val settings: Settings) {
         @Volatile private var lastAuthFailed = false   // last failure was a 401 (typed, not string-matched)
         @Volatile private var queuedApprox = -1   // -1 = not yet seeded from disk
 
-        /** Test-only: forget the process-global cached count so the next access
-         *  re-seeds from disk. The cache is static (shared across instances), so a
-         *  test must reset it to isolate runs / exercise the seed-from-disk path. */
-        internal fun resetQueueCacheForTest() { synchronized(LOCK) { queuedApprox = -1 } }
+        /** Test-only: forget the process-global queue state — the cached count (so the next
+         *  access re-seeds from disk) *and* the backoff window. All of it is static (shared
+         *  across instances, and across test methods in one JVM), so a test that drives a
+         *  failing flush would otherwise leave every later test inside a backoff window,
+         *  where flush() returns early and asserts nothing. */
+        internal fun resetQueueCacheForTest() {
+            synchronized(LOCK) {
+                queuedApprox = -1
+                failures = 0
+                nextAttemptAt = 0L
+                lastError = null
+                lastAuthFailed = false
+            }
+        }
 
         /** A glanceable snapshot of upload state for the dashboard's connection card.
          *  [authFailed] is the typed 401 signal (the UI used to string-match the message). */

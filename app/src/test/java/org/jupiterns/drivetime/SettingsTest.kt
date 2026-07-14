@@ -18,13 +18,16 @@ import org.robolectric.RobolectricTestRunner
 class SettingsTest {
 
     private lateinit var s: Settings
+    private lateinit var ctx: android.content.Context
 
     @Before fun setup() {
-        val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
+        ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
         // Wipe between runs since Robolectric reuses prefs in-process.
         ctx.getSharedPreferences("drivetime", android.content.Context.MODE_PRIVATE).edit().clear().commit()
         s = Settings(ctx)
     }
+
+    private fun prefs() = ctx.getSharedPreferences("drivetime", android.content.Context.MODE_PRIVATE)
 
     @Test fun defaults_areTheCadencesTheServiceAssumes() {
         assertEquals("driving fix cadence default", 3, s.intervalSec)
@@ -170,5 +173,76 @@ class SettingsTest {
         assertEquals(DONGLE, back[0].mac)
         assertEquals("a | in the name can't corrupt the record", "OBD II", back[0].name)
         assertEquals(listOf(KIA_BT, VAN_BT), back[0].carBtMacs)
+    }
+
+    // --- cadence bounds: the logger must never be handed an interval it can't act on ---
+
+    @Test fun cadences_clampOnWrite() {
+        s.intervalSec = 0                       // would spin GPS at max rate
+        s.lightIntervalSec = 2_000_000_000      // a fix every 63 years = drive detection is over
+        assertEquals(1, s.intervalSec)
+        assertEquals(3600, s.lightIntervalSec)
+        assertEquals("the clamped value is what's stored, not just what's read",
+            3600, prefs().getInt("light_interval_sec", -1))
+    }
+
+    @Test fun cadences_clampOnRead_soAPoisonedPrefCantSurviveAnAppUpdate() {
+        // A build before the clamp could persist this. The tester updates the app; nothing
+        // rewrites the pref — so if only the setter clamped, their logger stays dead.
+        prefs().edit().putInt("light_interval_sec", 2_000_000_000).putInt("interval_sec", 0).commit()
+        assertEquals(3600, s.lightIntervalSec)
+        assertEquals(1, s.intervalSec)
+    }
+
+    @Test fun stationaryStopMin_keepsZeroMeaningDisabled() {
+        s.stationaryStopMin = 0
+        assertEquals("0 disables the backstop — clamping must not turn it on", 0, s.stationaryStopMin)
+    }
+
+    @Test fun settingsImport_clampsAbsurdCadences() {
+        // An imported file is untrusted input exactly like a routine SET.
+        val applied = SettingsExport.fromJson(
+            ctx, s, """{"interval_sec":0,"light_interval_sec":2000000000,"idle_interval_sec":20}"""
+        )
+        assertEquals("all three keys recognised", 3, applied)
+        assertEquals(1, s.intervalSec)
+        assertEquals(3600, s.lightIntervalSec)
+        assertEquals("a sane value imports untouched", 20, s.idleIntervalSec)
+    }
+
+    @Test fun healthNotifications_defaultOn_andTheNagsDefaultOff() {
+        // The default-OFF rule is about nags. These two are error reports: a tracker the OEM
+        // killed, and a backup that has silently not run for a month. Defaulting them off makes
+        // the app complicit in its own worst failures (NOTIFICATIONS.md #4).
+        assertTrue("kill warning", s.notifyTrackingHealth)
+        assertTrue("failing backups", s.notifyBackupHealth)
+        assertFalse("drive-complete prompt is a nag", s.notifyDriveComplete)
+        assertFalse("gas-stop prompt is a nag", s.notifyGasStop)
+        assertFalse("weekly digest is a nag", s.notifyDigest)
+        assertTrue(Notify.enabledFor(s, Notify.KIND_BACKUP_HEALTH))
+        s.notifyBackupHealth = false
+        assertFalse(Notify.enabledFor(s, Notify.KIND_BACKUP_HEALTH))
+    }
+
+    @Test fun backupFailStreak_countsUp_andNeverGoesNegative() {
+        assertEquals(0, s.backupFailStreak)
+        s.backupFailStreak = s.backupFailStreak + 1
+        s.backupFailStreak = s.backupFailStreak + 1
+        assertEquals(2, s.backupFailStreak)
+        s.backupFailStreak = -5      // a corrupt/poisoned pref can't push the streak below zero
+        assertEquals(0, s.backupFailStreak)
+    }
+
+    @Test fun routineSet_clampsTheAbsurdAndStillRejectsTheInvalid() {
+        // The two halves of the SET contract. An out-of-range-but-valid int is clamped and
+        // applied...
+        assertTrue(Control.set(ctx, "light_interval_sec", "2000000000", "test"))
+        assertEquals(3600, s.lightIntervalSec)
+        // ...while 0 / negative are still rejected outright by parsePosInt and never reach the
+        // clamp, so a bad SET leaves the cadence exactly as it was. (The import path has no such
+        // parse gate — JSONObject.optInt hands 0 straight through — which is why Settings clamps.)
+        assertFalse(Control.set(ctx, "interval_sec", "0", "test"))
+        assertFalse(Control.set(ctx, "interval_sec", "-1", "test"))
+        assertEquals("a rejected SET changes nothing", 3, s.intervalSec)
     }
 }

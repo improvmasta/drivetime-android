@@ -167,6 +167,12 @@ class LocationService : Service() {
         settings = Settings(this)
         uploader = Uploader(this, settings)
         detector = DriveDetector(settings)
+        // Open this process's life in the liveness ledger — and, in doing so, close the previous
+        // one. Whatever [Health] finds in Settings right now was written by a process that no
+        // longer exists, so an absence it left behind can be stated as downtime rather than
+        // guessed at from missing fixes. First thing after Settings, so even a service that dies
+        // in startForeground below is bracketed.
+        runCatching { Health.startLife(this, settings) }
         // Resuming mid-drive (app update / OEM kill): the persisted drive start survived but the
         // detector's in-memory driving signals didn't. Hold DRIVING through the cold start so the
         // drive keeps its identity — original start time, running miles, marker count — instead
@@ -219,6 +225,12 @@ class LocationService : Service() {
                     else -> settings.uploadIntervalSec.coerceAtLeast(5)
                 }
                 delay(sec * 1000L)
+                // Proof of life, stamped from work the service was doing anyway. This loop is
+                // the beat's floor while parked: fixes may stop arriving, but the process still
+                // wakes to check its queue. (A late tick is not a problem — see [Health]: what
+                // proves continuity is that the SAME process wrote both ends of the interval,
+                // not that it wrote them on time.)
+                runCatching { Health.beat(this@LocationService, settings) }
                 if (settings.isConfigured) flushNow()
             }
         }
@@ -517,6 +529,10 @@ class LocationService : Service() {
                 settings.driveMeters = LiveState.driveMeters.toFloat()
                 lastPersistedMeters = LiveState.driveMeters
             }
+            // A fix is also proof the process is alive — the densest such proof we get. (It is
+            // not the ONLY one, and that is the point: [Health] must keep beating through a
+            // parked hour when no fix ever arrives.)
+            runCatching { Health.beat(this, settings) }
         }
         // Batched upload: buffer to the durable queue; flush on the periodic tick,
         // when a full batch has accumulated, or when connectivity returns.
@@ -797,6 +813,10 @@ class LocationService : Service() {
         isRunning = false
         LiveState.logging = false
         LiveState.clear()
+        // Close this life, WITH its reason, while we still have the chance to say one. A process
+        // the OEM battery manager destroys never reaches here — and that silence is precisely how
+        // the next [Health.startLife] knows it was killed rather than stopped.
+        runCatching { Health.endLife(this, settings) }
         if (settings.loggingEnabled) EventLog.warn("Logging stopped by system — will auto-resume")
         else EventLog.info("Logging stopped")
         StateBroadcaster.emit(this, "service")
