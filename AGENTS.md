@@ -196,6 +196,12 @@ internal upload — runs only on **main, PRs and `workflow_dispatch`**. So a gre
 branch means "it compiles", *not* "it passes": to run the tests on a branch, use
 `gh workflow run android.yml --ref <branch>`.
 
+**That dispatch publishes nothing, so it is the right move even when you have been told not to
+ship.** The GitHub release, the Play staging and the Play upload are each gated on
+`github.event_name == 'push' && github.ref == 'refs/heads/main'` — a branch run builds the APK and
+AAB as CI artifacts and stops there. With no compiler on this host, "I can't verify it" is not a
+reason to hand unverified Kotlin to the user: push the branch and run the tests.
+
 There is no device on the dev host, so the unit tests *are* the safety net. The ones that exist
 because the thing they cover fails **silently**, which is this app's whole bug class:
 
