@@ -84,6 +84,12 @@ class LocationService : Service() {
     @Volatile private var latestObd: Elm327Client.ObdSample? = null
     @Volatile private var movingHint = false      // recent non-trivial motion (gates OBD probe)
 
+    /** Set once, in [onDestroy], when this service is going away for good. It is read by
+     *  [markDriveStart] (on the reconciler thread) so a fix still in flight during teardown cannot
+     *  stamp a *new* drive mark seconds after the stop cleared the old one — which would recreate
+     *  the very leak [endDriveOnStop] exists to close. Volatile because those are two threads. */
+    @Volatile private var stopping = false
+
     // Motion-onset (device-agnostic fast start). A one-shot significant-motion trigger,
     // armed only in the LIGHT tier, wakes an instant Doppler check so a drive starts dense
     // logging within seconds in ANY car. The probationary dense GPS it briefly raises also
@@ -361,7 +367,11 @@ class LocationService : Service() {
         if (t == DriveDetector.Tier.OFF) {
             settings.trackingMode = Settings.MODE_OFF
             settings.loggingEnabled = false
-            settings.driveStartedAt = 0L   // tracking off ends the drive; don't resume it later
+            // The drive in progress is ended in onDestroy, which every stop route reaches (this
+            // one, ACTION_STOP, and Control's stopService). Clearing the mark here instead — as
+            // this line used to — ended the drive for the *resume* check and for nothing else:
+            // onDestroy then found no mark and skipped the tag prompt, the gas-stop pair, the
+            // battery stamp and the after-drive backup.
             Watchdog.cancel(this)
             stopSelf()
             return
@@ -410,16 +420,10 @@ class LocationService : Service() {
      * the same rule `onCreate`'s resume latch used to hold the tier long enough to get here.
      */
     private fun markDriveStart(tier: DriveDetector.Tier): Long {
-        if (tier != DriveDetector.Tier.DRIVING) {
-            if (settings.driveStartedAt != 0L) {
-                stampBatteryUsed(settings.driveStartedAt)   // before the start mark is cleared
-                onDriveEnded(settings.driveStartedAt)       // notifications (P3): before totals reset
-                settings.driveStartedAt = 0L
-                // A drive just ended: on the "after each drive" backup schedule, queue an
-                // archive shortly (debounced inside — a quick errand resume re-arms it).
-                BackupWorker.afterDrive(this, settings)
-            }
-            resetDriveTotals()
+        // `stopping` is the teardown case: onDestroy has already ended the drive, and a fix that
+        // was in flight must not stamp a fresh mark on the way out (see [stopping]).
+        if (tier != DriveDetector.Tier.DRIVING || stopping) {
+            endDrive()
             return 0L
         }
         val now = Clock.now()
@@ -442,6 +446,49 @@ class LocationService : Service() {
             settings.driveStartPos = if (lat != null && lon != null) "$lat,$lon" else ""
         }
         return if (resume) existing else now
+    }
+
+    /**
+     * End the drive in progress, if there is one — the whole of what "a drive ended" *means*, in
+     * one place: stamp the battery it cost, fire the end effects (tag prompt, gas-stop pair), drop
+     * the durable mark, queue the after-drive backup, and zero the running totals.
+     *
+     * It is one function because it has two callers that must not be able to disagree: leaving the
+     * DRIVING tier ([markDriveStart]) and switching tracking off ([endDriveOnStop]). The second one
+     * used to be a lone `driveStartedAt = 0L`, which cleared the mark and skipped every effect
+     * above — so an Off mid-drive silently dropped the drive's ending on the floor, and (when it
+     * failed to clear the mark at all, via `Control`'s `stopService`) handed the old start time and
+     * mileage to the next drive within 12 hours.
+     *
+     * Idempotent: with no mark there is nothing to end, and the totals are already zero.
+     */
+    private fun endDrive() {
+        if (settings.driveStartedAt != 0L) {
+            stampBatteryUsed(settings.driveStartedAt)   // before the start mark is cleared
+            onDriveEnded(settings.driveStartedAt)       // notifications (P3): before totals reset
+            settings.driveStartedAt = 0L
+            // A drive just ended: on the "after each drive" backup schedule, queue an
+            // archive shortly (debounced inside — a quick errand resume re-arms it).
+            BackupWorker.afterDrive(this, settings)
+        }
+        resetDriveTotals()
+    }
+
+    /**
+     * The drive-end that tracking being switched **off** owes the driver.
+     *
+     * Every intentional stop reaches [onDestroy] — `Control`'s `stopService` (the Off toggle and
+     * every routine), `ACTION_STOP`, and `reevaluate`'s OFF branch — and `loggingEnabled` is
+     * already how that method tells an intentional stop from an OS kill. So this is called from
+     * exactly one place, on the intentional side of that test. An OS kill deliberately does NOT
+     * end the drive: the mark survives so the restart can resume the same drive.
+     *
+     * Runs on the main thread while the reconciler may still be draining, which is what [stopping]
+     * is for — it is set here, before the mark is cleared, so a racing fix cannot stamp a new one.
+     */
+    private fun endDriveOnStop() {
+        stopping = true
+        endDrive()
     }
 
     /**
@@ -925,6 +972,16 @@ class LocationService : Service() {
 
     override fun onDestroy() {
         isRunning = false
+        // Tracking was switched off — end the drive that was in progress, properly. `loggingEnabled`
+        // is the same test the log line below makes: still set = the system took the service away
+        // (the drive keeps its mark and resumes), cleared = the user stopped it, and a drive the
+        // user stops is a drive that ENDED. This is the only place that can serve every stop route,
+        // because `Control`'s Off path calls `stopService` from outside the service and so never
+        // runs a line of `onStartCommand`.
+        //
+        // Before LiveState.clear(), which is destroying the two things the ending is computed from:
+        // the drive's distance and the position it ended at.
+        if (!settings.loggingEnabled) endDriveOnStop()
         LiveState.logging = false
         LiveState.clear()
         // Close this life, WITH its reason, while we still have the chance to say one. A process
@@ -940,7 +997,10 @@ class LocationService : Service() {
         disarmMotionOnset()
         runCatching { onsetTokenSource?.cancel() }
         accelListener?.let { runCatching { sensors?.unregisterListener(it) } }
-        fused.removeLocationUpdates(callback)
+        // runCatching like every other teardown call here: a throw on the way out would skip the
+        // reconciler quit, the OBD close and the final flush below it, and take the drive's last
+        // batch with it.
+        runCatching { fused.removeLocationUpdates(callback) }
         // Unsubscribe from fixes BEFORE the reconciler quits, so no fix is delivered onto a
         // looper that is on its way out. quitSafely drains what is already queued.
         reconciler.quit()

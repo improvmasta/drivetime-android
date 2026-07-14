@@ -333,6 +333,18 @@ object Control {
             settings.trackingMode = Settings.MODE_OFF
             settings.loggingEnabled = false
             Watchdog.cancel(context)
+            // A drive in progress ends here, and the live service is the only thing that can end it
+            // *properly* — [LocationService.onDestroy] runs the tag prompt, the gas-stop pair, the
+            // battery stamp and the after-drive backup off the totals and end position that only it
+            // holds. So the stop below is also the drive's ending.
+            //
+            // Unless the service is already dead: killed mid-drive, waiting on the watchdog we just
+            // cancelled. Then `stopService` is a no-op, no `onDestroy` runs, and its durable start
+            // mark would outlive the Off toggle — to be inherited, start time and mileage included,
+            // by the next drive within twelve hours ([DriveSession.MAX_DRIVE_MS]). Nobody can run
+            // the end effects for a process that isn't there (LiveState died with it), but the mark
+            // must not survive: tracking off ends the drive.
+            if (!LocationService.isRunning) settings.driveStartedAt = 0L
             context.stopService(Intent(context, LocationService::class.java))
             EventLog.info("Tracking stopped (from $source)")
             StateBroadcaster.emit(context, source)

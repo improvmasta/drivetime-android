@@ -17,11 +17,12 @@ import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
+import org.robolectric.android.controller.ServiceController
 
 /**
- * The two [LocationService] lifecycle paths that can end logging, and the one that must *not*.
+ * The [LocationService] lifecycle paths that can end logging, and the ones that must *not*.
  *
- * Both of the paths below are one line away from a silent-stop bug, and neither had a test:
+ * Every path below is one line away from a silent bug, and none of them had a test:
  *
  *  - **The OFF path** must return `START_NOT_STICKY` and clear `loggingEnabled`. Get the sticky
  *    flag wrong and the OS resurrects a service the user just switched off; leave the flag set and
@@ -32,6 +33,12 @@ import org.robolectric.Shadows.shadowOf
  *    throws in `onCreate` is a crash *loop*, and it takes the WebView down with it on every
  *    relaunch — while leaving `loggingEnabled` set, because a start we could not perform is not a
  *    stop the user asked for.
+ *  - **Off mid-drive ends the drive**, and an **OS kill does not**. Same `onDestroy`, opposite
+ *    answers, and `loggingEnabled` is the only thing that tells them apart. Get it backwards in
+ *    either direction and it is silent: end the drive on a kill and a real drive's clock and miles
+ *    reset under the driver; *fail* to end it on an Off and the drive stays open, so the next drive
+ *    within twelve hours inherits its start time and mileage while the first one's ending — the tag
+ *    prompt, the gas-stop pair, the battery stamp, the after-drive backup — never fires at all.
  *
  * The RUN path is deliberately not driven here: it subscribes to the fused location provider,
  * which no unit-test runtime provides. What it *decides* is covered where the decisions live
@@ -52,6 +59,9 @@ class LocationServiceTest {
         EventLog.init(ctx)
         EventLog.clear()
         Clock.setForTest(clock)
+        // Static, and Robolectric does not reset an app class's statics between test methods — so a
+        // service another test built would still read as "running" here.
+        LocationService.isRunning = false
         s = Settings(ctx)
     }
 
@@ -63,13 +73,16 @@ class LocationServiceTest {
 
     /** Build the service with the foreground start stubbed out. Robolectric will happily run the
      *  real `startForeground`, but stubbing it keeps these tests about the paths under test. */
-    private fun service(foreground: (android.app.Notification) -> Unit = {}): LocationService {
+    private fun controller(
+        foreground: (android.app.Notification) -> Unit = {}
+    ): ServiceController<LocationService> {
         val controller = Robolectric.buildService(LocationService::class.java)
-        val svc = controller.get()
-        svc.enterForeground = foreground
-        controller.create()
-        return svc
+        controller.get().enterForeground = foreground
+        return controller.create()
     }
+
+    private fun service(foreground: (android.app.Notification) -> Unit = {}): LocationService =
+        controller(foreground).get()
 
     // ---- the OFF path ----
 
@@ -168,7 +181,7 @@ class LocationServiceTest {
     }
 
     @Test fun aDriveMarkIsNotResumedWhenTrackingIsOff() {
-        // Tracking was switched off mid-drive. `reevaluate` clears the mark on the way out, but a
+        // Tracking was switched off mid-drive. The stop clears the mark on the way out, but a
         // process that was killed before it got there leaves one behind — and it must not become a
         // reason to hold DRIVING the next time the service starts.
         s.loggingEnabled = false
@@ -177,5 +190,104 @@ class LocationServiceTest {
         service()
 
         assertNull(EventLog.recent().firstOrNull { it.msg.contains("Resuming drive in progress") })
+    }
+
+    // ---- Off mid-drive: the drive ends, and it ends exactly once ----
+
+    @Test fun switchingTrackingOffMidDriveEndsTheDrive() {
+        // Twenty minutes and nine miles into a drive, the user switches tracking off. That IS the
+        // drive's ending — the mark is spent, and with it the mileage and the battery snapshot the
+        // ending is computed from. The Off path used to reach `stopService` without touching any of
+        // it, so the drive just… stopped being logged, and stayed open.
+        s.loggingEnabled = true
+        s.trackingMode = Settings.MODE_AUTO
+        s.driveStartedAt = clock.wall - 20 * 60_000L
+        s.driveMeters = 15_000f
+        s.driveBatteryStart = 80
+        val c = controller()
+
+        c.get().onStartCommand(stopIntent(), 0, 1)
+        c.destroy()
+
+        assertEquals(
+            "a mark left behind by an Off is inherited by the next drive within twelve hours",
+            0L, Settings(ctx).driveStartedAt
+        )
+        assertEquals(
+            "and it would hand over this drive's mileage too",
+            0.0, Settings(ctx).driveMeters.toDouble(), 0.0
+        )
+        assertEquals(
+            "the battery snapshot is spent at drive end — proof the end effects actually ran, " +
+                "rather than the mark being quietly zeroed on its own",
+            -1, Settings(ctx).driveBatteryStart
+        )
+    }
+
+    @Test fun theNextDriveDoesNotInheritAStoppedDrivesStartMark() {
+        // The user-visible half of the bug above, and the reason it is worth a test of its own: the
+        // leaked mark stays resumable for twelve hours ([DriveSession.MAX_DRIVE_MS]), so the next
+        // drive that starts inside that window is not a new drive at all — it wakes up wearing the
+        // old one's start time and miles.
+        s.loggingEnabled = true
+        s.trackingMode = Settings.MODE_AUTO
+        s.driveStartedAt = clock.wall - 20 * 60_000L
+        val off = controller()
+        off.get().onStartCommand(stopIntent(), 0, 1)
+        off.destroy()
+
+        // An hour later, tracking back on. This is a NEW drive.
+        EventLog.clear()   // the service above logged its own (correct) mid-drive resume on create
+        clock.advance(60 * 60_000L)
+        s.trackingMode = Settings.MODE_AUTO
+        s.loggingEnabled = true
+
+        service()
+
+        assertNull(
+            "a drive the user ended an hour ago must not be picked back up",
+            EventLog.recent().firstOrNull { it.msg.contains("Resuming drive in progress") }
+        )
+    }
+
+    @Test fun anOsKillMidDriveKeepsTheDriveOpen() {
+        // The guard rail on the two tests above: the same `onDestroy`, reached the other way. The
+        // system took the service away (`loggingEnabled` still set) and the watchdog will bring it
+        // back — the drive is not over, so ending it here would reset the live bar's clock, its
+        // miles and its marker count in the middle of a real drive. Nothing may end a drive on a
+        // kill; that is the whole reason the mark is durable.
+        s.loggingEnabled = true
+        s.trackingMode = Settings.MODE_AUTO
+        s.driveStartedAt = clock.wall - 30_000L
+        s.driveMeters = 8_000f
+
+        controller().destroy()
+
+        assertEquals(clock.wall - 30_000L, Settings(ctx).driveStartedAt)
+        assertEquals(
+            "the miles behind the mark must survive with it",
+            8_000.0, Settings(ctx).driveMeters.toDouble(), 0.0
+        )
+        assertTrue("…and tracking stays on, so the watchdog resumes", Settings(ctx).loggingEnabled)
+    }
+
+    @Test fun offWithTheServiceAlreadyDeadStillClearsTheMark() {
+        // The corner the service cannot cover, because it isn't there: killed mid-drive, waiting on
+        // a watchdog pass, and the user switches tracking off in the gap. `stopService` on a dead
+        // service is a no-op — no `onDestroy` runs — so [Control] has to drop the mark itself or it
+        // outlives the Off toggle. Nobody can run the end effects for a process that is gone, but
+        // "tracking off ends the drive" has to hold anyway.
+        LocationService.isRunning = false
+        s.loggingEnabled = true
+        s.trackingMode = Settings.MODE_AUTO
+        s.driveStartedAt = clock.wall - 30_000L
+
+        Control.apply(ctx, Control.ACTION_STOP)
+
+        assertFalse(Settings(ctx).loggingEnabled)
+        assertEquals(
+            "an Off that finds no service still has to end the drive",
+            0L, Settings(ctx).driveStartedAt
+        )
     }
 }
