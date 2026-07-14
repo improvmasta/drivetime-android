@@ -43,6 +43,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.jupiterns.drivetime.obd.Elm327Client
+import org.jupiterns.drivetime.obd.ObdSession
 
 /**
  * Always-on foreground logger with two sampling tiers, chosen by [DriveDetector]:
@@ -677,25 +678,27 @@ class LocationService : Service() {
      */
     private fun startObdLoop() {
         scope.launch {
-            // Consecutive "opened a socket but the adapter never answered" failures. A cheap
-            // dongle that sat powered on an already-running car (remote start) gets into this
-            // wedged state; after a few fast retries we force a cold reset (see below).
-            var wedgedStreak = 0
+            // The loop's judgement — the probe gate, the wedged-adapter streak and the recovery
+            // cadence — lives in ObdSession, which is pure and tested. What stays here is the part
+            // that genuinely needs Android: a BluetoothManager, a socket, and a coroutine to block
+            // on. The session outlives any one connection, because the streak it counts is the
+            // thing a single attempt cannot see.
+            val session = ObdSession()
             while (isActive) {
                 // The adapter belonging to the car we're actually in (by its connected car BT),
                 // falling back to the sole registered one — or, on an install that predates the
                 // vehicle registry, the legacy single OBD setting. Re-read every pass, so
                 // getting into the other car re-targets without a restart.
                 val mac = settings.obdTarget(LiveState.carBtMac)
-                if (mac.isBlank() || !shouldProbeObd()) { delay(OBD_IDLE_MS); continue }
+                if (mac.isBlank() || !shouldProbeObd()) { delay(ObdSession.IDLE_MS); continue }
                 var connected = false
                 try {
                     val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
-                    if (adapter == null) { delay(OBD_IDLE_MS); continue }
+                    if (adapter == null) { delay(ObdSession.IDLE_MS); continue }
                     val client = Elm327Client()
                     client.connect(adapter.getRemoteDevice(mac))
                     connected = true
-                    wedgedStreak = 0
+                    session.onConnected()
                     obd = client
                     LiveState.obdConnected = true
                     EventLog.info("OBD connected")
@@ -746,7 +749,7 @@ class LocationService : Service() {
                                 " maf=${s.maf?.let { "%.1f".format(it) }} fuel=${s.fuelLph?.let { "%.1f".format(it) }}L/h" +
                                 " tank=${s.fuelLevel?.let { "%.0f".format(it) }}% v=${s.voltage} ctrlV=${s.ctrlVoltage}")
                         }
-                        latestObd = if (ticks % 120 == 0) {
+                        latestObd = if (ObdSession.readDtcsOnTick(ticks)) {
                             val fresh = s.copy(dtcs = client.readDtcs())
                             maybeAlertDtcs(fresh.dtcs)
                             fresh
@@ -754,17 +757,13 @@ class LocationService : Service() {
                         LiveState.rpm = s.rpm; LiveState.throttle = s.throttle
                         LiveState.coolantC = s.coolantC; LiveState.voltage = s.voltage
                         ticks++
-                        // Poll faster while the live dashboard is open so the RPM/throttle
-                        // gauges keep up; ~0.8s is within a cheap ELM327 clone's reach.
-                        delay(if (dashboardBoost) OBD_BOOST_MS else OBD_POLL_MS)
+                        delay(ObdSession.pollDelayMs(dashboardBoost))
                     }
                 } catch (e: Exception) {
                     // dongle off/unpaired/out of range — log it so a real fault is visible
                     // instead of silently logging GPS without engine data.
                     EventLog.warn("OBD error: ${e.message ?: e.javaClass.simpleName}")
-                    // A failure *before* we ever connected (mute/wedged adapter) counts toward
-                    // the streak; a mid-drive drop after a good connect does not.
-                    if (!connected) wedgedStreak++
+                    session.onFailure(everConnected = connected)
                 } finally {
                     val wasConnected = LiveState.obdConnected
                     if (wasConnected) EventLog.info("OBD disconnected")
@@ -782,33 +781,31 @@ class LocationService : Service() {
                         if (wasConnected) StateBroadcaster.emit(this@LocationService, "obd")
                     }
                 }
-                // Recovery cadence. While driving we retry fast; but if the adapter keeps
-                // accepting a socket without ever answering, escalate: forget the cached
-                // socket strategy and give the dongle a quiet, fully-disconnected window so
-                // its firmware watchdog can self-reset — the closest we get to a power-cycle
-                // without touching the plug. Not driving → slow idle probe as before.
-                when {
-                    currentTier != DriveDetector.Tier.DRIVING -> delay(OBD_IDLE_MS)
-                    wedgedStreak >= OBD_WEDGE_LIMIT -> {
-                        Elm327Client.clearStrategy(mac)
-                        EventLog.warn("OBD unresponsive ×$wedgedStreak — cold reset, pausing ${OBD_COLD_PAUSE_MS / 1000}s")
-                        wedgedStreak = 0
-                        delay(OBD_COLD_PAUSE_MS)
-                    }
-                    else -> delay(OBD_RETRY_DRIVE_MS)
+                // What to do next is the session's call; performing it is ours. The cold reset is
+                // the only arm with a side effect out here, because forgetting the cached socket
+                // strategy is Bluetooth state, not a decision.
+                val next = session.recovery(driving = currentTier == DriveDetector.Tier.DRIVING)
+                if (next is ObdSession.Recovery.ColdReset) {
+                    Elm327Client.clearStrategy(mac)
+                    EventLog.warn(
+                        "OBD unresponsive ×${session.wedgedStreak} — cold reset, " +
+                            "pausing ${next.delayMs / 1000}s"
+                    )
+                    session.onColdReset()   // after the log: it reads the streak
                 }
+                delay(next.delayMs)
             }
         }
     }
 
-    /** Only probe when there's reason to think we're in a *running* car. The `currentTier ==
-     *  DRIVING` arm is what made this self-sustaining: a connected dongle pins DRIVING, and
-     *  DRIVING re-probes the dongle within 5 s of any drop — a closed loop with no exit. Gating
-     *  the whole thing on `!isParked` breaks it; the first moving fix clears `parked` and the
-     *  probe resumes, with nothing to re-acquire because the dongle never went anywhere. */
-    private fun shouldProbeObd(): Boolean =
-        !detector.isParked &&
-            (detector.carConnected || movingHint || currentTier == DriveDetector.Tier.DRIVING)
+    /** Only probe when there's reason to think we're in a *running* car — see
+     *  [ObdSession.shouldProbe], which owns the rule and the two bugs behind it. */
+    private fun shouldProbeObd(): Boolean = ObdSession.shouldProbe(
+        parked = detector.isParked,
+        carConnected = detector.carConnected,
+        movingHint = movingHint,
+        driving = currentTier == DriveDetector.Tier.DRIVING,
+    )
 
     // ---- Motion-onset (device-agnostic fast start) ----
 
@@ -1225,12 +1222,9 @@ class LocationService : Service() {
             private set
 
         const val ACTION_DASHBOARD = "org.jupiterns.drivetime.action.DASHBOARD"
-        /** Boosted GPS fix interval while the dashboard is open. */
+        /** Boosted GPS fix interval while the dashboard is open. (The OBD half of the boost is
+         *  [ObdSession.pollDelayMs], with the rest of the dongle's cadence.) */
         private const val DASH_BOOST_MS = 1_000L
-        /** Boosted OBD poll while the dashboard is open (vs OBD_POLL_MS). */
-        private const val OBD_BOOST_MS = 800L
-        /** Ordinary OBD poll cadence. */
-        private const val OBD_POLL_MS = 1_500L
 
         /** Toggle the dashboard boost and, if the service is live, re-apply the fix rate now. */
         fun setDashboardBoost(context: Context, active: Boolean) {
@@ -1260,14 +1254,8 @@ class LocationService : Service() {
         // Motion-onset accelerometer sampling window after a significant-motion wake.
         private const val ACCEL_SAMPLE_MS = 3_000L
 
-        // OBD probe cadence.
-        private const val OBD_IDLE_MS = 120_000L      // recheck/probe interval when not driving
-        private const val OBD_RETRY_DRIVE_MS = 5_000L // fast reconnect while driving
-        // After this many back-to-back "socket opened but no answer" connects while driving,
-        // force a cold reset: drop the cached socket strategy and stay fully disconnected for
-        // OBD_COLD_PAUSE_MS so a wedged clone's watchdog can reset itself.
-        private const val OBD_WEDGE_LIMIT = 3
-        private const val OBD_COLD_PAUSE_MS = 20_000L
+        // The OBD probe/retry/wedge cadences now live with the decisions that read them, in
+        // ObdSession — a constant whose only reader is a policy belongs next to the policy.
 
         // Upload batching: flush early once this many fixes have queued since the last
         // flush, so dense driving doesn't hold more than ~a minute between periodic ticks.
