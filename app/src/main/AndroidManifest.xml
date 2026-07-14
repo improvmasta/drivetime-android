@@ -20,9 +20,10 @@
          gets false, and uses setAndAllowWhileIdle. The resume can drift a few minutes in
          deep Doze; it does not get lost.
 
-         REQUEST_INSTALL_PACKAGES is NOT here either — it is declared only by the `github`
-         flavor (src/github/AndroidManifest.xml), because the in-app updater it exists for
-         is compiled out of Play builds. See app/build.gradle.kts → productFlavors. -->
+         REQUEST_INSTALL_PACKAGES is not here either, and is no longer declared by ANY
+         flavor. It existed for the in-app updater, which is deleted: Play's Device and
+         Network Abuse policy forbids an app updating itself by any route other than Play.
+         Re-adding this permission is how the app gets taken down. -->
     <!-- Phase B: OBD over Bluetooth -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />

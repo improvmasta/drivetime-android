@@ -462,14 +462,20 @@ class Settings(context: Context) {
         get() = prefs.getString("health_cond", "") ?: ""
         set(v) = prefs.edit().putString("health_cond", v).apply()
 
-    /** Auto-check the server for a newer APK when the app comes to the foreground
-     *  (throttled). Off = only the manual "Check for updates" button checks. */
+    /**
+     * Vestigial: both of these drove the in-app APK updater, which is deleted (Play forbids
+     * an app updating itself). Nothing reads them to make a decision any more — the SPA hides
+     * the whole affordance when the bridge reports `updates_supported=false`.
+     *
+     * The keys stay because they are still *written*: `updates_enabled` round-trips through
+     * `SettingsExport`, so an older exported settings file must still import, and a phone
+     * that already has these prefs must not choke on them. Cheap to keep, and removing them
+     * buys nothing. Do not build anything new on them.
+     */
     var updatesEnabled: Boolean
         get() = prefs.getBoolean("updates_enabled", true)
         set(v) = prefs.edit().putBoolean("updates_enabled", v).apply()
 
-    /** Wall-clock (ms) of the last in-app update check, so the foreground auto-check
-     *  throttles instead of hitting the server every resume. */
     var lastUpdateCheckAt: Long
         get() = prefs.getLong("last_update_check_at", 0L)
         set(v) = prefs.edit().putLong("last_update_check_at", v).apply()

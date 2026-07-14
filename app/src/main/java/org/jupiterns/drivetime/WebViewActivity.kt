@@ -301,12 +301,6 @@ class WebViewActivity : AppCompatActivity() {
         // The SPA authenticates to the server per-request with the device token (no cookie
         // session to keep alive), so a resume just retries the load if it never came up.
         if (!loadedOnce) loadDashboard()
-        // Offer a newer build if one's been published (throttled; silent when up to date).
-        // Never on a Play build — Play is the update channel there, and self-updating is a
-        // policy violation, not a preference (BuildConfig.UPDATER_ENABLED).
-        if (BuildConfig.UPDATER_ENABLED && settings.updatesEnabled) {
-            Updater.checkFromUi(this, interactive = false)
-        }
     }
 
 
@@ -837,9 +831,12 @@ class WebViewActivity : AppCompatActivity() {
                 .put("digest_time", settings.digestTime)
                 .put("control_token", settings.controlToken)
                 .put("updates_enabled", settings.updatesEnabled)
-                // Play builds have no self-updater at all (policy), so the SPA hides the
-                // whole "check for updates" affordance rather than offering a dead button.
-                .put("updates_supported", BuildConfig.UPDATER_ENABLED)
+                // No build self-updates any more (Play policy — the updater is deleted, not
+                // disabled), so the SPA hides the whole "check for updates" affordance rather
+                // than offering a dead button. Reported as a constant `false` rather than
+                // dropped: the SPA reads `updates_supported !== false`, so an ABSENT key means
+                // "supported" and would put the dead button back.
+                .put("updates_supported", false)
                 // The legacy standalone car/OBD devices. Nothing in the SPA *configures* these
                 // any more — the vehicle that owns the device does — but they're reported so the
                 // registry can adopt a pre-registry install's devices into a real vehicle
@@ -1145,17 +1142,16 @@ class WebViewActivity : AppCompatActivity() {
         @JavascriptInterface
         fun testConnection() { ui.post { this@WebViewActivity.testConnection() } }
 
-        /** Interactive check-for-update (More tab). */
+        /**
+         * Formerly the interactive check-for-update (More tab). The app no longer updates
+         * itself at all, and the SPA hides the affordance (`updates_supported=false`) — but
+         * the method stays on the bridge, because a WebView holding an older cached snapshot
+         * still has the button and calls this by name. Kept as an honest no-op rather than
+         * removed, so that stale button says something true instead of throwing.
+         */
         @JavascriptInterface
         fun checkForUpdate() {
-            if (!BuildConfig.UPDATER_ENABLED) {
-                // The SPA hides the control on a Play build (updates_supported=false), so
-                // this is only reachable from a stale WebView snapshot. Say the true thing
-                // rather than silently doing nothing.
-                ui.post { toast("Updates for this build come from Google Play") }
-                return
-            }
-            ui.post { toast("Checking for updates…"); Updater.checkFromUi(this@WebViewActivity, interactive = true) }
+            ui.post { toast("Updates for this build come from Google Play") }
         }
 
         /** Export settings to a file via the system picker (Sync/Backup). */

@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- FileProvider roots. `updates/` under getExternalFilesDir(null) holds the downloaded
-     APK the in-app updater hands to the system package installer. -->
+<!-- FileProvider roots, under getExternalFilesDir(null). (There used to be an `updates/`
+     root here, holding the APK the in-app updater handed to the system package installer.
+     The updater is gone — Play forbids self-updating — so the root is gone with it.) -->
 <paths>
-    <external-files-path name="updates" path="updates/" />
     <!-- `reports/` holds the diagnostic text file the Report-a-problem email attaches. -->
     <external-files-path name="reports" path="reports/" />
     <!-- `exports/` stages a generated export (the mileage CSV) for the share sheet. -->

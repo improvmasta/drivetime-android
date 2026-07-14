@@ -60,16 +60,14 @@ at `https://appassets.androidplatform.net/assets/web/` — a secure origin, so t
 and IndexedDB replica work with no server. The phone segments its own GPS into drives; the
 server is support. Settings are the SPA's own tabs (General / Tracking / Sync & Backup /
 Advanced) reading and writing over the `DrivetimeNative` bridge; the genuinely-native flows
-(permission prompts, BT/OBD pairing, QR pairing scan, backup pickers, the APK updater, Test
-connection) fire in place from their tab. The old native `LoggerActivity`/`SettingsActivity`
-screens are gone.
+(permission prompts, BT/OBD pairing, QR pairing scan, backup pickers, Test connection) fire in
+place from their tab. The old native `LoggerActivity`/`SettingsActivity` screens are gone.
 
 **Everything else, briefly:** `Notify` is the single door for every notification except the
 ongoing drive card — drive-complete, gas-stop, weekly digest, check-engine, tracking-interrupted
 — one OS channel per kind, each with a toggle, a deep link, and honest retraction (see
 `drivetime/NOTIFICATIONS.md`). `BackupStore`/`BackupWorker`/`DriveClient` take scheduled
 full-data snapshots to a SAF folder and/or the user's own Google Drive (`drivetime/BACKUP.md`).
-`Updater` polls GitHub Releases (and a paired server's `/dl`) for one-tap APK updates.
 `Control` + `ControlReceiver` + `StateBroadcaster` are the routine API (`AUTOMATION.md`).
 **Android Auto was removed** (2026-07-13, commit before the first Play upload): Play refuses a
 manifest declaring both the `android.hardware.type.automotive` feature (Automotive OS) and the
@@ -133,10 +131,11 @@ cd ../drivetime-android
 SHIP_TOOL=claude bash ship.sh "message"       # 3. commit+push, await CI APK, publish to /dl
 ```
 
-Step 3 blocks on the "Build APK" CI run then calls `drivetime/publish-apk.sh --watch <sha>`, so
-a ship is not finished until the in-app updater is offering the new APK. Shipping `drivetime`
-alone leaves the phone on the old snapshot — the single most common way a "fixed" bug survives
-a ship.
+Step 3 blocks on the "Build APK" CI run then calls `drivetime/publish-apk.sh --watch <sha>`.
+What actually reaches a phone is the **Play internal-track upload** that the same CI run does —
+the app no longer self-updates, so the published APK/`/dl` pair is now just an artifact nobody
+polls, and that half of the ship is vestigial (see Distribution). Shipping `drivetime` alone
+leaves the phone on the old snapshot — the single most common way a "fixed" bug survives a ship.
 
 The one exception: a commit here that changes **nothing the app runs** (docs, CI config) can go
 up with `SHIP_SKIP_PUBLISH=1 bash ship.sh "…"` — pushed, no APK built for users. Anything
@@ -154,23 +153,29 @@ cosmetic:
 | | `github` (sideload) | `play` |
 |---|---|---|
 | Build | `assembleGithubDebug` → APK | `bundlePlayRelease` → AAB |
-| In-app updater | on (`BuildConfig.UPDATER_ENABLED=true`) | **compiled out** |
-| `REQUEST_INSTALL_PACKAGES` | declared (`src/github/AndroidManifest.xml`) | **absent** |
-| Updates reach users via | GitHub Releases → `Updater` | Google Play |
-| CI on push to `main` | publishes the GitHub release | uploads the AAB to **internal testing** |
+| Updates reach users via | nothing — install by hand | Google Play |
+| CI on push to `main` | publishes the APK as a GitHub release | uploads the AAB to **internal testing** |
 
-**A push to `main` now reaches Play testers, not just sideloaders.** CI uploads the AAB to the
-**internal** track automatically (`PLAY_SERVICE_ACCOUNT_JSON` secret; the step is skipped, not
-failed, when it's absent, and never runs on a pull request — this repo is public and a fork
-must not reach the credential). Play refuses a versionCode it has already accepted, so the
-monotonic CI run number behind `versionCode` is load-bearing, not a convenience. To stop
-shipping to testers on every commit, change the track or gate the step on `workflow_dispatch`.
+Every real install is on **Play**, and the flavors now differ only by their Drive OAuth client
+(below). The `github` APK is a build artifact you can sideload by hand, not a channel anyone
+is served from.
 
-The updater is removed from Play builds because Play's **Device and Network Abuse** policy
-forbids an app updating itself by any route other than Play, and `REQUEST_INSTALL_PACKAGES`
-may not be used for self-updates. This is a removal, not a lint nit — putting either back
-into the `play` flavor gets the app taken down. The SPA hides the whole affordance when the
-bridge reports `updates_supported=false`.
+**A push to `main` reaches Play testers.** CI uploads the AAB to the **internal** track
+automatically (`PLAY_SERVICE_ACCOUNT_JSON` secret; the step is skipped, not failed, when it's
+absent, and never runs on a pull request — this repo is public and a fork must not reach the
+credential). Play refuses a versionCode it has already accepted, so the monotonic CI run number
+behind `versionCode` is load-bearing, not a convenience. To stop shipping to testers on every
+commit, change the track or gate the step on `workflow_dispatch`.
+
+**There is no in-app updater, and adding one back gets the app taken down.** `Updater.kt`,
+`REQUEST_INSTALL_PACKAGES`, and the `UPDATER_ENABLED` flavor flag were deleted (hardening 3.1):
+Play's **Device and Network Abuse** policy forbids an app updating itself by any route other
+than Play, and `REQUEST_INSTALL_PACKAGES` may not be used for self-updates — so the flag only
+ever had one legal setting, and keeping the code meant keeping an APK downloader-and-installer
+no shipped build was allowed to run. The bridge reports `updates_supported=false` (a constant),
+and the SPA hides the whole affordance; `DrivetimeNative.checkForUpdate()` survives as an honest
+no-op toast, because a WebView on a stale cached snapshot still has the button and calls it by
+name.
 
 Flavors rename every Gradle task: it's `testGithubDebugUnitTest`, `lintGithubDebug`,
 `assembleGithubDebug` — not `testDebugUnitTest`.
@@ -226,10 +231,10 @@ have bitten us: `*/` inside a comment closes the block early, and a bare `return
 declared to return `Boolean` won't compile.
 
 CI (`.github/workflows/android.yml`) runs unit tests + lint, builds the sideload APK and the
-Play AAB, and publishes the APK as a GitHub release — the update channel
-`Updater.RELEASES_BASE` reads. Tests worth knowing about: `AutomationHelpTest` holds the
-in-app cheat-sheet to `Control.SET_KEYS`, and `Uploader`/`DriveDetector`/`ControlParse` have
-real coverage. There is no device on the dev host, so CI *is* the safety net.
+Play AAB, publishes the APK as a GitHub release, and uploads the AAB to Play internal testing.
+Tests worth knowing about: `AutomationHelpTest` holds the in-app cheat-sheet to
+`Control.SET_KEYS`, and `Uploader`/`DriveDetector`/`ControlParse` have real coverage. There is
+no device on the dev host, so CI *is* the safety net.
 
 The toolchain moves as a unit: **compileSdk 36 needs AGP ≥ 8.9.1, and AGP 8.10 needs Gradle
 ≥ 8.11.1** (CI generates the wrapper). Bumping one without the other fails at configuration.

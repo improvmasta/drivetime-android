@@ -62,13 +62,13 @@ on regained connectivity, on app-foreground, and on charge-connected.
 at `https://appassets.androidplatform.net/assets/web/` — a secure origin, so the service worker
 and IndexedDB replica work with no server. Settings are the SPA's own tabs (General / Tracking /
 Sync & Backup / Advanced) over the `DrivetimeNative` bridge; native flows (permissions, BT/OBD
-pairing, QR pairing, backup pickers, updater) fire in place from their tab.
+pairing, QR pairing, backup pickers) fire in place from their tab.
 
 **Everything else, briefly:** `Notify` is the single door for every notification except the
 ongoing drive card (drive-complete, gas-stop, weekly digest, check-engine, tracking-interrupted
 — one channel per kind, each with a toggle, deep link, and retraction).
 `BackupStore`/`BackupWorker`/`DriveClient` take scheduled full-data snapshots to a SAF folder
-and/or the user's own Google Drive. `Updater` polls GitHub Releases for one-tap APK updates.
+and/or the user's own Google Drive.
 `Control` + `ControlReceiver` + `StateBroadcaster` are the routine API (`AUTOMATION.md`).
 **Android Auto was removed** before the first Play upload — Play rejects a manifest carrying
 both the `automotive` feature and the Auto meta-data, and an Auto app draws review scrutiny we
@@ -119,9 +119,11 @@ cd ../drivetime-android
 bash ship.sh "message"                  # 3. commit+push, await CI APK, publish to /dl
 ```
 
-Step 3 blocks on the "Build APK" CI run then calls `drivetime/publish-apk.sh --watch <sha>`, so
-a ship is not finished until the in-app updater offers the new APK. Shipping `drivetime` alone
-leaves the phone on the old snapshot — the single most common way a "fixed" bug survives a ship.
+Step 3 blocks on the "Build APK" CI run then calls `drivetime/publish-apk.sh --watch <sha>`.
+What actually reaches a phone is the **Play internal-track upload** the same CI run does — the
+app no longer self-updates, so the published APK/`/dl` pair is an artifact nobody polls and that
+half of the ship is vestigial. Shipping `drivetime` alone leaves the phone on the old snapshot —
+the single most common way a "fixed" bug survives a ship.
 
 The one exception: a commit here that changes **nothing the app runs** (docs, CI config) can go
 up with `SHIP_SKIP_PUBLISH=1 bash ship.sh "…"` — pushed, no APK built for users. Anything
@@ -135,13 +137,17 @@ bridge. Where phone and desktop pull apart, the phone wins.
 
 `github` and `play` are build flavors (`app/build.gradle.kts`):
 
-- **`github`** (sideload) — `assembleGithubDebug` → APK, published as a GitHub release. Keeps
-  the in-app `Updater` and declares `REQUEST_INSTALL_PACKAGES` (`src/github/AndroidManifest.xml`).
-- **`play`** — `bundlePlayRelease` → AAB. The updater is **compiled out**
-  (`BuildConfig.UPDATER_ENABLED=false`) and the permission is absent, because Play's Device
-  and Network Abuse policy forbids an app updating itself outside Play. Putting either back
-  gets the app taken down. The SPA hides the affordance when the bridge reports
-  `updates_supported=false`.
+- **`github`** (sideload) — `assembleGithubDebug` → APK, published as a GitHub release. A build
+  artifact you install by hand; nobody is served updates from it.
+- **`play`** — `bundlePlayRelease` → AAB, uploaded to internal testing by CI. **Every real
+  install is here.**
+
+The flavors now differ only by their Drive OAuth client. **There is no in-app updater, and
+adding one back gets the app taken down:** `Updater.kt`, `REQUEST_INSTALL_PACKAGES` and the
+`UPDATER_ENABLED` flag are deleted (hardening 3.1), because Play's Device and Network Abuse
+policy forbids an app updating itself outside Play. The bridge reports a constant
+`updates_supported=false` and the SPA hides the affordance; `checkForUpdate()` stays on the
+bridge as an honest no-op toast, for WebViews on a stale cached snapshot that still call it.
 
 Flavors rename every task: `testGithubDebugUnitTest`, `lintGithubDebug`, `assembleGithubDebug`.
 
@@ -174,9 +180,10 @@ CI is the only Kotlin compiler, so a syntax error costs a full CI round-trip. Re
 have bitten us: `*/` inside a comment closes the block early, and a bare `return` in a function
 declared to return `Boolean` won't compile.
 
-CI (`.github/workflows/android.yml`) runs unit tests + lint, builds the APK, and publishes it
-as the GitHub release the in-app updater reads. `AutomationHelpTest` holds the in-app
-cheat-sheet to `Control.SET_KEYS`. There is no device on the dev host, so CI *is* the safety net.
+CI (`.github/workflows/android.yml`) runs unit tests + lint, builds the APK and the Play AAB,
+publishes the APK as a GitHub release, and uploads the AAB to Play internal testing.
+`AutomationHelpTest` holds the in-app cheat-sheet to `Control.SET_KEYS`. There is no device on
+the dev host, so CI *is* the safety net.
 
 `ship.sh` here is intentionally leaner than the generic `/home/lindsay/scripts/ship.sh` (no
 ship log to stamp, no local build to gate on); CI plus `--watch` are the pre-publish gate.
