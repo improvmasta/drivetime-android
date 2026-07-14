@@ -563,23 +563,11 @@ class Settings(context: Context) {
         get() = prefs.getString("health_cond", "") ?: ""
         set(v) = prefs.edit().putString("health_cond", v).apply()
 
-    /**
-     * Vestigial: both of these drove the in-app APK updater, which is deleted (Play forbids
-     * an app updating itself). Nothing reads them to make a decision any more — the SPA hides
-     * the whole affordance when the bridge reports `updates_supported=false`.
-     *
-     * The keys stay because they are still *written*: `updates_enabled` round-trips through
-     * `SettingsExport`, so an older exported settings file must still import, and a phone
-     * that already has these prefs must not choke on them. Cheap to keep, and removing them
-     * buys nothing. Do not build anything new on them.
-     */
-    var updatesEnabled: Boolean
-        get() = prefs.getBoolean("updates_enabled", true)
-        set(v) = prefs.edit().putBoolean("updates_enabled", v).apply()
-
-    var lastUpdateCheckAt: Long
-        get() = prefs.getLong("last_update_check_at", 0L)
-        set(v) = prefs.edit().putLong("last_update_check_at", v).apply()
+    // `updates_enabled` / `last_update_check_at` used to live here, driving the in-app APK
+    // updater. The updater is deleted (Play forbids an app updating itself by any route but
+    // Play) and so are they: nothing read them, they were not in `Control.SET_KEYS`, and they
+    // never round-tripped through `SettingsExport`, so dropping them breaks no import and no
+    // routine. A stale pair left in an existing phone's prefs file is simply ignored.
 
     // ---- backup & restore (BACKUP.md) ----
 

@@ -1,0 +1,1 @@
+import{p as r,an as p,bc as i,l,bd as c,n as d,be as v,m as f}from"./index-CvoLVoix.js";var h=new Set(["$$slots","$$events","$$legacy","tone","children"]),m=d("<span><!></span>");function u(s,e){let t=r(e,"tone",3,"neutral"),n=v(e,h);var a=m();p(a,()=>({class:`chip ${t()??""}`,...n}),void 0,void 0,void 0,"svelte-1eqf306");var o=f(a);i(o,()=>e.children??c),l(s,a)}export{u as C};

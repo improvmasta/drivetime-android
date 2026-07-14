@@ -10,10 +10,10 @@ support server.
 ## Read first
 
 - Sibling repo `/home/lindsay/drivetime`: `NATIVE_APP.md` (shell architecture),
-  `STANDALONE.md` (why the app bundles its own web snapshot), `AUTH.md` (device-token
-  pairing) — before touching the bridge, auth, or sync.
-- `README.md` (the user-facing pitch), `AUTOMATION.md` (the routine/shortcut control surface).
-- `PLAY.md` — **live plan:** getting the app onto Google Play. Delete once we're on Play.
+  `LOCAL_FIRST.md` (why the app bundles its own web snapshot + offline model), `AUTH.md`
+  (device-token pairing) — before touching the bridge, auth, or sync.
+- `README.md` (the user-facing pitch), `AUTOMATION.md` (the routine/shortcut control surface),
+  `EMULATOR.md` (live UI reload + running the app in an emulator).
 
 ## Working style
 
@@ -105,38 +105,34 @@ the tracker needs (location off, permission revoked, power saver). The SPA drain
 `cd /home/lindsay/drivetime && ./sync-web-to-android.sh`. Editing `assets/web/` directly is
 always wrong — the next sync overwrites it and the website and phone drift apart.
 
-## Phone first: update always, ship only when told
+## The loop: emulator first, Play on command
 
-A change to `drivetime/frontend/` that is only committed in `drivetime` updates the *website*
-and nothing else; the phone keeps running the old bundled snapshot. The two halves are
-deliberately separate:
+**Every change goes to the emulator first; shipping to Play happens only when told** (setup in
+`EMULATOR.md`). Three distinct steps:
 
-**Update (always, unprompted).** Every frontend change ends with `drivetime`'s
-`./sync-web-to-android.sh`, which refreshes `app/src/main/assets/web/` here. It leaves the new
-snapshot in this repo's **working tree** and pushes/publishes nothing. A dirty `assets/web/` is
-therefore the correct, expected state: the app carries the change and is ready to ship. **Do
-not** run `ship.sh` just to clean it up.
+1. **See it on the emulator (always, first — no ship, no commit).** SPA/UI change: Vite dev
+   server + `./dev.sh --dev` once, then edits hot-reload live. Kotlin/native change: `./dev.sh`
+   builds + installs the bundled APK. **Caveat:** `--dev` serves the SPA from the server origin,
+   so the app runs as the web dashboard (server-bound, login-walled) — check anything
+   standalone/offline/pairing/data on a plain `./dev.sh` build instead.
+2. **Bundle it (before shipping, not before testing).** A `drivetime/frontend/` change becomes
+   permanent in the app only when `drivetime`'s `./sync-web-to-android.sh` refreshes
+   `app/src/main/assets/web/` here. A dirty `assets/web/` is the correct, expected state. **Do
+   not** run `ship.sh` just to clean it up.
+3. **Ship to Play (only on explicit instruction).** Both repos, ending on Play's internal track:
 
-**Ship (only on explicit instruction).** Shipping means **both repos, ending in a published
-APK** — never one without the other:
+   ```bash
+   cd /home/lindsay/drivetime && bash ship.sh "msg"        # 1. drivetime: commit + push
+   ./sync-web-to-android.sh                                # 2. re-sync if changed since
+   cd ../drivetime-android && bash ship.sh "msg"           # 3. local build+test gate, then push
+   ```
 
-```bash
-cd /home/lindsay/drivetime
-bash ship.sh "message"                  # 1. drivetime: commit + push
-./sync-web-to-android.sh                # 2. re-sync if anything changed since
-cd ../drivetime-android
-bash ship.sh "message"                  # 3. commit+push, await CI APK, publish to /dl
-```
-
-Step 3 blocks on the "Build APK" CI run then calls `drivetime/publish-apk.sh --watch <sha>`.
-What actually reaches a phone is the **Play internal-track upload** the same CI run does — the
-app no longer self-updates, so the published APK/`/dl` pair is an artifact nobody polls and that
-half of the ship is vestigial. Shipping `drivetime` alone leaves the phone on the old snapshot —
-the single most common way a "fixed" bug survives a ship.
-
-The one exception: a commit here that changes **nothing the app runs** (docs, CI config) can go
-up with `SHIP_SKIP_PUBLISH=1 bash ship.sh "…"` — pushed, no APK built for users. Anything
-touching `app/` or `assets/web/` publishes.
+   Step 3 builds + runs the unit tests locally as a gate (toolchain on this host — EMULATOR.md)
+   before pushing; CI uploads the AAB to Play's **internal track**, the only channel. No APK
+   publish and no `/dl` — the in-app updater is deleted (Play forbids self-updating), so
+   `publish-apk.sh` and the CI GitHub release went too. Shipping `drivetime` alone leaves the
+   phone on the old snapshot — the #1 way a "fixed" bug survives a ship. Docs/CI-only commits
+   that compile nothing can skip the gate with `SHIP_SKIP_GATE=1`.
 
 Verify on the phone, not just in a browser: touch targets, the hardware BACK button (the shell
 calls `window.__dtHandleBack()`), offline / no-server behavior, and the `DrivetimeNative`
@@ -146,17 +142,20 @@ bridge. Where phone and desktop pull apart, the phone wins.
 
 `github` and `play` are build flavors (`app/build.gradle.kts`):
 
-- **`github`** (sideload) — `assembleGithubDebug` → APK, published as a GitHub release. A build
-  artifact you install by hand; nobody is served updates from it.
+- **`github`** (sideload) — `assembleGithubDebug` → APK, uploaded as a CI **workflow artifact**.
+  A build you download from a run and install by hand; nobody is served updates from it. (No
+  longer a GitHub *release* — that carried a `version.json` for the deleted updater.)
 - **`play`** — `bundlePlayRelease` → AAB, uploaded to internal testing by CI. **Every real
   install is here.**
 
 The flavors now differ only by their Drive OAuth client. **There is no in-app updater, and
 adding one back gets the app taken down:** `Updater.kt`, `REQUEST_INSTALL_PACKAGES` and the
-`UPDATER_ENABLED` flag are deleted (hardening 3.1), because Play's Device and Network Abuse
-policy forbids an app updating itself outside Play. The bridge reports a constant
-`updates_supported=false` and the SPA hides the affordance; `checkForUpdate()` stays on the
-bridge as an honest no-op toast, for WebViews on a stale cached snapshot that still call it.
+`UPDATER_ENABLED` flag are deleted (hardening 3.1), and so is the whole distribution tail — the
+server `/dl` route, `publish-apk.sh`, `version.json`, the CI GitHub release, the
+`updates_enabled`/`updates_supported` bridge keys, `checkForUpdate()`, and the SPA's
+check-for-updates card. Play's Device and Network Abuse policy forbids an app updating itself
+outside Play. A stale cached SPA that still calls `checkForUpdate()` is harmless — `native.js`
+probes `typeof` first, so a missing bridge method is a silent no-op. Do not re-add any of it.
 
 Flavors rename every task: `testGithubDebugUnitTest`, `lintGithubDebug`, `assembleGithubDebug`.
 
@@ -175,32 +174,36 @@ backup still silently dies for Play installs.
 We ship targetSdk 35 with `windowOptOutEdgeToEdgeEnforcement`; **Play requires 36 from
 2026-08-31**, and at 36 that opt-out is ignored — the roots need real inset padding first.
 
-## No local compiler — and never try to render the app yourself
+## There IS a local compiler now — but never render the app yourself
 
-There is **no JDK or Android SDK on the dev host**, no emulator, and no device here. Do not
-try to build, launch, screenshot, or otherwise *look at* the app — not with an emulator, not
-by serving `app/src/main/assets/web` in a headless browser. The UI only exists once it's a
-real app on a real phone (the WebView's `DrivetimeNative` bridge is what makes the native
-Settings/HUD render at all), so an attempt at it costs time and produces a picture of
-something the user never sees. **Lindsay looks at the phone; you verify by building, testing,
-and reading.** Say what changed and let him look.
+**A JDK + Android SDK live on the dev host** (`~/.local/lib/jdk-17`, `~/.local/lib/gradle-8.11.1`,
+`~/Android/sdk`; `local.properties` points at the SDK). Build + test locally:
 
-CI is the only Kotlin compiler, so a syntax error costs a full CI round-trip. Read Kotlin edits carefully before pushing; two that
-have bitten us: `*/` inside a comment closes the block early, and a bare `return` in a function
-declared to return `Boolean` won't compile.
+```bash
+export JAVA_HOME=~/.local/lib/jdk-17 ANDROID_HOME=~/Android/sdk
+~/.local/lib/gradle-8.11.1/bin/gradle assembleGithubDebug testGithubDebugUnitTest
+```
+
+`ship.sh` runs exactly this as a gate before pushing, so unverified Kotlin no longer leaves the
+box — and the two traps that used to cost a CI round-trip (`*/` closing a comment early, a bare
+`return` in a `Boolean` function) a local `gradle` catches for free.
+
+**Still do not try to *render* the app.** There is no emulator or device *on this host* — the
+emulator runs on Lindsay's Windows PC (EMULATOR.md). The UI only exists as a real app: the
+WebView's `DrivetimeNative` bridge makes the native Settings/HUD render at all, so serving
+`assets/web` in a headless browser shows a surface the user never sees. **Lindsay looks at the
+phone/emulator; you verify by building, testing, and reading.** When he wants a change live, the
+path is EMULATOR.md (driven from Windows), not a render you produce here.
 
 CI (`.github/workflows/android.yml`) has two jobs. `compile` (Kotlin, app **and** test sources,
-~2 min) runs on **every branch** — a test that doesn't compile is indistinguishable from one that
-doesn't exist. `build` — unit tests, lint, the APK, the Play AAB, the GitHub release, the Play
-internal upload — runs only on **main, PRs and `workflow_dispatch`**. So a green push to a work
-branch means "it compiles", *not* "it passes": to run the tests on a branch, use
-`gh workflow run android.yml --ref <branch>`.
+~2 min) runs on **every branch**. `build` — unit tests, lint, the APK, the Play AAB, the Play
+internal upload — runs only on **main, PRs and `workflow_dispatch`**. A branch push only
+*compiles* in CI; `gh workflow run android.yml --ref <branch>` runs the tests remotely, though a
+local `testGithubDebugUnitTest` is now faster.
 
-**That dispatch publishes nothing, so it is the right move even when you have been told not to
-ship.** The GitHub release, the Play staging and the Play upload are each gated on
-`github.event_name == 'push' && github.ref == 'refs/heads/main'` — a branch run builds the APK and
-AAB as CI artifacts and stops there. With no compiler on this host, "I can't verify it" is not a
-reason to hand unverified Kotlin to the user: push the branch and run the tests.
+**A `workflow_dispatch` run publishes nothing, so it stays safe under "don't ship."** The Play
+staging and Play upload are gated on `github.event_name == 'push' && github.ref ==
+'refs/heads/main'` — a branch run builds the APK and AAB as CI artifacts and stops there.
 
 There is no device on the dev host, so the unit tests *are* the safety net. The ones that exist
 because the thing they cover fails **silently**, which is this app's whole bug class:
@@ -222,8 +225,10 @@ Time in the spine goes through `Clock` (wall clock + time-since-boot), so tests 
 of waiting twenty minutes. Everything outside the spine still calls `System.currentTimeMillis()`
 directly, on purpose — a clock no test needs to move is not worth a seam.
 
-`ship.sh` here is intentionally leaner than the generic `/home/lindsay/scripts/ship.sh` (no
-ship log to stamp, no local build to gate on); CI plus `--watch` are the pre-publish gate.
+`ship.sh` here is leaner than the generic `/home/lindsay/scripts/ship.sh` (no ship log to
+stamp), but it now **gates on a local `assembleGithubDebug` + `testGithubDebugUnitTest`** before
+pushing. `dev.sh` builds + installs onto the Windows emulator over LAN ADB (EMULATOR.md); a
+UI-only change needs neither — the Vite dev server hot-reloads it.
 `SHIP_SKIP_PUBLISH=1` commits and pushes without waiting for the APK.
 
 ## Next up
@@ -250,5 +255,6 @@ ship log to stamp, no local build to gate on); CI plus `--watch` are the pre-pub
   files (`data_extraction_rules.xml` API 31+, `backup_rules.xml` ≤ 30) must agree. A new secret
   goes in `SECRET_KEYS` *and* gets its accessor pointed at `secrets`; `SecretsMigrationTest`
   catches half a job.
-- **A pre-release checklist** — permissions, FGS, boot, queue, OEM battery (sideload-only
-  validation means the checklist is the only gate a device would otherwise provide).
+- **A pre-release checklist** — permissions, FGS, boot, queue, OEM battery. The Windows emulator
+  (EMULATOR.md) covers much of this now; the checklist still backs OEM-battery and real-device
+  behaviours an emulator can't reproduce.

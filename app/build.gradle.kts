@@ -53,6 +53,11 @@ android {
         // over the last; local builds fall back to 1. versionName mirrors it.
         versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
         versionName = "0.1." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
+
+        // Empty in EVERY build unless a developer asks for one — see the `debug` build type
+        // below and `Shell.DEV_URL`. Declared here so the field exists in all variants (a
+        // buildConfigField missing from one variant fails to compile, not to link).
+        buildConfigField("String", "DEV_SERVER_URL", "\"\"")
     }
 
     // Two distribution channels from one source tree.
@@ -110,6 +115,18 @@ android {
             // Sign the debug build (CI ships assembleDebug) with the stable key so
             // sideloaded updates install over the top instead of as a new app.
             signingConfig = signingConfigs.getByName("stable")
+
+            // Live SPA reload (EMULATOR.md): `-PdevServer=http://<lxc-ip>:5173` makes the shell
+            // load the Vite dev server instead of the bundled snapshot, so UI edits hot-reload
+            // in the emulator with no rebuild and no sync-web-to-android.
+            //
+            // DEBUG-TYPE ONLY, and that is the whole safety argument. `Shell.DEV_URL` also
+            // re-checks `BuildConfig.DEBUG` at runtime, so even this field being non-empty
+            // cannot give a `release` build a dev origin — and `release` is the only thing Play
+            // gets. Widening the WebView's origin fence (WebAuth.isInAppUrl) is only defensible
+            // because of that: it is unreachable from any build a user can install.
+            val devServer = (project.findProperty("devServer") as String?).orEmpty()
+            buildConfigField("String", "DEV_SERVER_URL", "\"$devServer\"")
         }
         release {
             isMinifyEnabled = false

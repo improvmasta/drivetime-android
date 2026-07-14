@@ -1,6 +1,8 @@
 package org.jupiterns.drivetime
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -52,5 +54,41 @@ class WebAuthTest {
     @Test fun garbageIsNotInApp() {
         assertFalse(WebAuth.isInAppUrl("not a url"))
         assertFalse(WebAuth.isInAppUrl(""))
+    }
+
+    /**
+     * The dev-server escape hatch (EMULATOR.md), pinned in **both** directions so the test is
+     * correct however the suite is invoked — including `gradle test -PdevServer=…`.
+     *
+     * `-PdevServer=…` compiles a second trusted origin into a DEBUG build so the SPA can
+     * hot-reload in an emulator, and that origin gets the `DrivetimeNative` bridge. The branch
+     * here is keyed off `BuildConfig.DEV_SERVER_URL` — the same thing the app keys off — so:
+     *
+     *  - **No opt-in** (CI, `ship.sh`'s gate, a plain `./dev.sh`): the widening must be inert —
+     *    no dev host, the shell boots the bundled SPA, LAN URLs stay external. A red here means
+     *    a build nobody opted in acquired a second trusted origin, which is the whole thing the
+     *    fence prevents.
+     *  - **Opt-in** (`./dev.sh --dev`): the configured origin — and only it, by parsed host —
+     *    becomes in-app, and the shell boots it. A prefix-spoof of that host stays external.
+     *
+     * Neither branch can touch a shipped build: `release` has no `DEV_SERVER_URL` and
+     * `Shell.DEV_URL` re-gates on `BuildConfig.DEBUG`, which is false there.
+     */
+    @Test fun theDevOriginExistsOnlyWhenExplicitlyCompiledIn() {
+        val configured = BuildConfig.DEV_SERVER_URL
+        if (configured.isEmpty()) {
+            assertEquals("no -PdevServer: DEV_URL must be empty", "", Shell.DEV_URL)
+            assertNull("no -PdevServer: no dev host", Shell.devHost)
+            assertEquals("the shell must boot the bundled SPA", Shell.LOCAL_URL, Shell.startUrl)
+            assertFalse(WebAuth.isInAppUrl("http://10.1.1.15:5173/"))
+            assertFalse(WebAuth.isInAppUrl("http://localhost:5173/"))
+        } else {
+            val host = java.net.URI(configured).host
+            assertEquals("the compiled-in dev host is trusted", host, Shell.devHost)
+            assertEquals("the shell boots the dev server", configured, Shell.startUrl)
+            assertTrue("the dev origin is in-app", WebAuth.isInAppUrl("$configured/index.html"))
+            // …but only by real host equality, never a prefix.
+            assertFalse(WebAuth.isInAppUrl("http://$host.evil.example.com/"))
+        }
     }
 }

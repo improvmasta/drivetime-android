@@ -327,8 +327,12 @@ class WebViewActivity : AppCompatActivity() {
         // configured the SPA reaches it as a cross-origin *sync target* (absolute URL +
         // Bearer token handed over the bridge, see [NativeBridge]) — the server is never
         // loaded as the page.
+        //
+        // `Shell.startUrl` is that bundled SPA in every build a user can install. It resolves
+        // to a Vite dev server ONLY in a debug build someone explicitly passed `-PdevServer=…`
+        // to (EMULATOR.md) — a developer hot-reloading the UI, never a shipped app.
         hideOverlay()
-        b.webview.loadUrl(Shell.LOCAL_URL)
+        b.webview.loadUrl(Shell.startUrl)
     }
 
     // ---- native action launchers (moved from LoggerActivity) ----
@@ -858,7 +862,6 @@ class WebViewActivity : AppCompatActivity() {
                     "server_url" -> settings.serverUrl = value
                     "server_enabled" -> settings.serverEnabled = value.toBooleanStrictOrNull() ?: settings.serverEnabled
                     "control_token" -> settings.controlToken = value
-                    "updates_enabled" -> settings.updatesEnabled = value.toBooleanStrictOrNull() ?: settings.updatesEnabled
                     "backup_schedule" -> {
                         settings.backupSchedule = value
                         BackupWorker.reschedule(this@WebViewActivity, settings)
@@ -1150,17 +1153,10 @@ class WebViewActivity : AppCompatActivity() {
         @JavascriptInterface
         fun testConnection() { ui.post { this@WebViewActivity.testConnection() } }
 
-        /**
-         * Formerly the interactive check-for-update (More tab). The app no longer updates
-         * itself at all, and the SPA hides the affordance (`updates_supported=false`) — but
-         * the method stays on the bridge, because a WebView holding an older cached snapshot
-         * still has the button and calls this by name. Kept as an honest no-op rather than
-         * removed, so that stale button says something true instead of throwing.
-         */
-        @JavascriptInterface
-        fun checkForUpdate() {
-            ui.post { toast("Updates for this build come from Google Play") }
-        }
+        // `checkForUpdate()` is gone along with the rest of the update plumbing. A stale cached
+        // SPA that still calls it by name is safe: `native.js` probes `typeof b[name] ===
+        // 'function'` before every bridge call, so a missing method is a silent no-op, not a
+        // crash. Do not add an update method back — the app cannot update itself (Play policy).
 
         /** Export settings to a file via the system picker (Sync/Backup). */
         @JavascriptInterface

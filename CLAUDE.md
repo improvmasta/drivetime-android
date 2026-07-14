@@ -6,8 +6,9 @@ actually runs. The website (`drivetime.jupiterns.org`) is a convenience view of 
 support server.
 
 Sibling repo: `/home/lindsay/drivetime` (SPA + FastAPI backend). Read its `NATIVE_APP.md`
-(shell architecture), `STANDALONE.md` (why the app bundles its own web snapshot), and
-`AUTH.md` (device-token pairing) before touching the bridge, auth, or sync.
+(shell architecture), `LOCAL_FIRST.md` (why the app bundles its own web snapshot + the
+offline model), and `AUTH.md` (device-token pairing) before touching the bridge, auth, or
+sync. (`STANDALONE.md` is now just the sealed-rebuild-window invariant + open items.)
 
 ## Behavior
 
@@ -117,42 +118,43 @@ cd /home/lindsay/drivetime && ./sync-web-to-android.sh
 Editing files under `assets/web/` directly is always wrong — the next sync silently overwrites
 it, and the website and the phone drift apart.
 
-## Phone first: update always, ship only when told
+## The loop: emulator first, Play on command
 
-A change to `drivetime/frontend/` that is only committed in `drivetime` updates the *website*
-and nothing else — the phone keeps running the old bundled snapshot. So the two halves are
-deliberately separate:
+**Every change goes to the emulator first; shipping to Play happens only when told.** `EMULATOR.md`
+has the setup. The two steps are different actions with different triggers:
 
-**Update (always, unprompted).** Every frontend change ends with `drivetime`'s
-`./sync-web-to-android.sh`, which refreshes `app/src/main/assets/web/` here. It leaves the new
-snapshot in this repo's **working tree** and pushes/publishes nothing. A dirty `assets/web/` is
-therefore the correct, expected state: it means the app carries the change and is ready to
-ship. **Do not** run `ship.sh` just to clean it up.
+1. **See it on the emulator (always, first — no ship, no commit).**
+   - **SPA / UI change** (`drivetime/frontend/`): run the Vite dev server and `./dev.sh --dev`
+     once; edits then hot-reload live. No build, no sync. Fastest loop.
+   - **Kotlin / native change**: `./dev.sh` rebuilds + installs the real bundled APK.
+   - **Caveat that bit us:** `--dev` serves the SPA from the *server's* origin, so the app runs
+     as the web dashboard — server-bound, login-walled, not standalone. Anything touching
+     standalone / offline / pairing / the app's own data must be checked on a plain `./dev.sh`
+     build (bundled snapshot), not `--dev`.
 
-**Ship (only on explicit instruction).** Shipping means **both repos, ending in a published
-APK** — never one without the other:
+2. **Bundle the change into the app (before shipping, not before testing).** A `drivetime/frontend/`
+   change only becomes permanent in the app when `drivetime`'s `./sync-web-to-android.sh` refreshes
+   `app/src/main/assets/web/` here. A dirty `assets/web/` is the correct, expected state — the app
+   carries the change, ready to ship. **Do not** run `ship.sh` just to tidy it up.
 
-```bash
-cd /home/lindsay/drivetime
-SHIP_TOOL=claude bash ship.sh "message"       # 1. drivetime: commit + push
-./sync-web-to-android.sh                      # 2. re-sync if anything changed since
-cd ../drivetime-android
-SHIP_TOOL=claude bash ship.sh "message"       # 3. commit+push, await CI APK, publish to /dl
-```
+3. **Ship to Play (only on explicit instruction).** Both repos, ending on Play's internal track:
 
-Step 3 blocks on the "Build APK" CI run then calls `drivetime/publish-apk.sh --watch <sha>`.
-What actually reaches a phone is the **Play internal-track upload** that the same CI run does —
-the app no longer self-updates, so the published APK/`/dl` pair is now just an artifact nobody
-polls, and that half of the ship is vestigial (see Distribution). Shipping `drivetime` alone
-leaves the phone on the old snapshot — the single most common way a "fixed" bug survives a ship.
+   ```bash
+   cd /home/lindsay/drivetime && SHIP_TOOL=claude bash ship.sh "msg"   # 1. drivetime: commit+push
+   ./sync-web-to-android.sh                                            # 2. re-sync if changed since
+   cd ../drivetime-android && SHIP_TOOL=claude bash ship.sh "msg"      # 3. local build+test gate, push
+   ```
 
-The one exception: a commit here that changes **nothing the app runs** (docs, CI config) can go
-up with `SHIP_SKIP_PUBLISH=1 bash ship.sh "…"` — pushed, no APK built for users. Anything
-touching `app/` or `assets/web/` publishes.
+   Step 3 builds + runs the unit tests locally as a gate (this host has the toolchain — EMULATOR.md)
+   before pushing; CI then uploads the AAB to Play's **internal track**, the only channel. Nothing
+   to publish and nothing to wait for — the in-app updater is deleted, so `/dl`, `publish-apk.sh`
+   and the CI GitHub release are gone (see Distribution). Shipping `drivetime` alone leaves the
+   phone on the old snapshot — the #1 way a "fixed" bug survives a ship. Docs/CI-only commits that
+   compile nothing can skip the gate with `SHIP_SKIP_GATE=1`.
 
-Verify on the phone, not just in a browser: touch targets, the hardware BACK button (the shell
-calls `window.__dtHandleBack()`), offline / no-server behavior, and the `DrivetimeNative`
-bridge. Where phone and desktop pull apart, the phone wins.
+Verify on the emulator/phone, not just a browser: touch targets, the hardware BACK button (shell
+calls `window.__dtHandleBack()`), offline / no-server behavior, the `DrivetimeNative` bridge.
+Where phone and desktop pull apart, the phone wins.
 
 ## Distribution — two channels, one source tree
 
@@ -163,11 +165,13 @@ cosmetic:
 |---|---|---|
 | Build | `assembleGithubDebug` → APK | `bundlePlayRelease` → AAB |
 | Updates reach users via | nothing — install by hand | Google Play |
-| CI on push to `main` | publishes the APK as a GitHub release | uploads the AAB to **internal testing** |
+| CI on push to `main` | uploads the APK as a **workflow artifact** | uploads the AAB to **internal testing** |
 
 Every real install is on **Play**, and the flavors now differ only by their Drive OAuth client
-(below). The `github` APK is a build artifact you can sideload by hand, not a channel anyone
-is served from.
+(below). The `github` APK is a build artifact you can download from a CI run and sideload by
+hand, not a channel anyone is served from. (It used to be published as a GitHub *release*
+carrying a `version.json` for the in-app updater; the updater is deleted, so the release is
+gone and the APK is just an `actions/upload-artifact` now.)
 
 **A push to `main` reaches Play testers.** CI uploads the AAB to the **internal** track
 automatically (`PLAY_SERVICE_ACCOUNT_JSON` secret; the step is skipped, not failed, when it's
@@ -177,14 +181,16 @@ behind `versionCode` is load-bearing, not a convenience. To stop shipping to tes
 commit, change the track or gate the step on `workflow_dispatch`.
 
 **There is no in-app updater, and adding one back gets the app taken down.** `Updater.kt`,
-`REQUEST_INSTALL_PACKAGES`, and the `UPDATER_ENABLED` flavor flag were deleted (hardening 3.1):
-Play's **Device and Network Abuse** policy forbids an app updating itself by any route other
-than Play, and `REQUEST_INSTALL_PACKAGES` may not be used for self-updates — so the flag only
-ever had one legal setting, and keeping the code meant keeping an APK downloader-and-installer
-no shipped build was allowed to run. The bridge reports `updates_supported=false` (a constant),
-and the SPA hides the whole affordance; `DrivetimeNative.checkForUpdate()` survives as an honest
-no-op toast, because a WebView on a stale cached snapshot still has the button and calls it by
-name.
+`REQUEST_INSTALL_PACKAGES`, and the `UPDATER_ENABLED` flavor flag were deleted in hardening 3.1;
+its whole distribution tail — the server `/dl` route, `publish-apk.sh`, `version.json`, the CI
+GitHub release, the `updates_enabled`/`updates_supported` bridge keys, `checkForUpdate()`, and
+the SPA's check-for-updates card — is gone too. Play's **Device and Network Abuse** policy
+forbids an app updating itself by any route other than Play, and `REQUEST_INSTALL_PACKAGES` may
+not be used for self-updates, so none of it was ever allowed to run in a shipped build. A stale
+cached SPA that still calls `DrivetimeNative.checkForUpdate()` by name is harmless: `native.js`
+probes `typeof` before every bridge call, so a missing method is a silent no-op. **Do not
+re-add any of it** — an update affordance implies an updater, and the updater is what gets the
+app removed.
 
 Flavors rename every Gradle task: it's `testGithubDebugUnitTest`, `lintGithubDebug`,
 `assembleGithubDebug` — not `testDebugUnitTest`.
@@ -223,34 +229,42 @@ The account is **personal** (no D-U-N-S). That matters less than it sounds: the
 12-testers/14-days rule gates **production only**, so internal testing (up to 100 testers, no
 full review) hands the app to testers immediately, while the **closed** track runs the clock
 in the background. Revisit an organization account before monetizing — a personal account
-publishes your full legal address once you charge money. See `PLAY.md`.
+publishes your full legal address once you charge money.
 
-## No local compiler — and never try to render the app yourself
+## There IS a local compiler now — but still never render the app yourself
 
-There is **no JDK or Android SDK on the dev host**, no emulator, and no device here. Do not
-try to build, launch, screenshot, or otherwise *look at* the app — not with an emulator, not
-by serving `app/src/main/assets/web` in a headless browser. The UI only exists once it's a
-real app on a real phone (the WebView's `DrivetimeNative` bridge is what makes the native
-Settings/HUD render at all), so an attempt at it costs time and produces a picture of
-something the user never sees. **Lindsay looks at the phone; you verify by building, testing,
-and reading.** Say what changed and let him look.
+**A JDK + Android SDK live on the dev host** (`~/.local/lib/jdk-17`,
+`~/.local/lib/gradle-8.11.1`, `~/Android/sdk`; `local.properties` points at the SDK). CI is no
+longer the only Kotlin compiler. Build and test locally:
 
-CI is the only Kotlin compiler, so a syntax error costs a full CI round-trip. Read Kotlin edits carefully before pushing; two that
-have bitten us: `*/` inside a comment closes the block early, and a bare `return` in a function
-declared to return `Boolean` won't compile.
+```bash
+export JAVA_HOME=~/.local/lib/jdk-17 ANDROID_HOME=~/Android/sdk
+~/.local/lib/gradle-8.11.1/bin/gradle assembleGithubDebug testGithubDebugUnitTest
+```
+
+`ship.sh` runs exactly this as a gate before it pushes, so a syntax error or a red test is
+caught here in ~2 min instead of a full CI round-trip. The two Kotlin traps that used to cost a
+round-trip — `*/` closing a comment early, a bare `return` in a `Boolean` function — a local
+`gradle` now catches for free; there's little excuse to push either.
+
+**Still do not try to *render* the app.** There is no emulator or device *on this host* (the
+emulator runs on Lindsay's Windows PC — EMULATOR.md), and the UI only exists as a real app: the
+WebView's `DrivetimeNative` bridge is what makes the native Settings/HUD render at all, so
+serving `assets/web` in a headless browser shows a surface the user never sees. **Lindsay looks
+at the phone/emulator; you verify by building, testing, and reading.** Say what changed and let
+him look. (When he wants to see a change live, the path is EMULATOR.md, driven from Windows —
+not a render you produce here.)
 
 CI (`.github/workflows/android.yml`) has two jobs. `compile` (Kotlin, app **and** test sources,
 ~2 min) runs on **every branch** — a test that doesn't compile is indistinguishable from one that
-doesn't exist. `build` — unit tests, lint, the sideload APK, the Play AAB, the GitHub release, the
-Play internal upload — runs only on **main, PRs and `workflow_dispatch`**. So a green push to a
-work branch means "it compiles", *not* "it passes": to actually run the tests on a branch, use
-`gh workflow run android.yml --ref <branch>`.
+doesn't exist. `build` — unit tests, lint, the sideload APK, the Play AAB, the Play internal
+upload — runs only on **main, PRs and `workflow_dispatch`**. A branch push still only *compiles*
+in CI; to run the tests remotely use `gh workflow run android.yml --ref <branch>` — though a
+local `testGithubDebugUnitTest` is now the faster answer.
 
-**That dispatch publishes nothing, so it is the right move even when you have been told not to
-ship.** The GitHub release, the Play staging and the Play upload are each gated on
-`github.event_name == 'push' && github.ref == 'refs/heads/main'` — a branch run builds the APK and
-AAB as CI artifacts and stops there. With no compiler on this host, "I can't verify it" is not a
-reason to hand unverified Kotlin to the user: push the branch and run the tests.
+**A `workflow_dispatch` run publishes nothing, so it stays safe even under "don't ship."** The
+Play staging and Play upload are gated on `github.event_name == 'push' && github.ref ==
+'refs/heads/main'` — a branch run builds the APK and AAB as CI artifacts and stops there.
 
 There is no device on the dev host, so the unit tests *are* the safety net. The ones that exist
 because the thing they cover fails **silently**, which is this app's whole bug class:
@@ -279,8 +293,11 @@ version with no jar for the new level fails every Robolectric test with `initial
 (`DefaultSdkPicker`), which looks like a broken test and is really a stale dependency. 4.13 had
 no SDK 35 jar; we run 4.16.1, which covers 35 and 36.
 
-`ship.sh` here is intentionally leaner than the generic `/home/lindsay/scripts/ship.sh` (no
-ship log to stamp, no local build to gate on); CI plus `--watch` are the pre-publish gate.
+`ship.sh` here is leaner than the generic `/home/lindsay/scripts/ship.sh` (no ship log to
+stamp), but it now **gates on a local `assembleGithubDebug` + `testGithubDebugUnitTest`** before
+pushing — the host has the toolchain, so unverified Kotlin no longer leaves the box. `dev.sh`
+builds + installs onto the Windows emulator over LAN ADB (EMULATOR.md); a UI-only change needs
+neither script — the Vite dev server hot-reloads it.
 
 ## Next up
 
@@ -291,6 +308,13 @@ ship log to stamp, no local build to gate on); CI plus `--watch` are the pre-pub
   activity roots by the system-bar + IME insets (`ViewCompat.setOnApplyWindowInsetsListener`),
   and it needs a real phone to verify. Do it *before* the bump, not with it.
 - **Quick Settings tile** (`TileService`) — the last unbuilt entry-point in the control API.
+- **Origin-scoped bridge** — expose `DrivetimeNative` via `addWebMessageListener` bound to the
+  bundled origin, and stop handing the raw device token through `authHeader()`. Deferred from the
+  hardening pass as higher-regression to the native↔web contract; do it with device verification.
+- **Cloud-restore-arrives-unpaired prompt** — a cloud (not device-to-device) restore lands with
+  settings but no device token (`drivetime_secrets.xml` is excluded from Google's backup on
+  purpose). Detect `settings-restored-but-no-token` on first run and send the user to Settings →
+  Pair a device. The fix is a prompt, not a secret.
 - **OBD reconnect** — backoff retry on a dongle drop (GPS already continues regardless).
 - **"Alive but blind" alarm** — the payoff `Health` was built for, and still unbuilt: heartbeat
   present + motion/OBD says the engine is running + no fixes for minutes = we are losing a drive
@@ -319,16 +343,21 @@ ship log to stamp, no local build to gate on); CI plus `--watch` are the pre-pub
   files must agree** (`res/xml/data_extraction_rules.xml` for API 31+, `backup_rules.xml` for
   ≤ 30). Adding a secret means adding it to `SECRET_KEYS` *and* pointing its accessor at
   `secrets` — `SecretsMigrationTest` fails if you do only one.
-- **A pre-release checklist** — permissions, FGS, boot, queue, OEM battery. Validation is
-  sideload-only, so a checklist is the only gate a device would otherwise provide.
+- **A pre-release checklist** — permissions, FGS, boot, queue, OEM battery. The Windows emulator
+  (EMULATOR.md) now covers much of this without a physical phone; a written checklist still backs
+  the OEM-battery and real-device behaviours an emulator can't reproduce.
+- **R8/minify is OFF, and that is load-bearing.** `isMinifyEnabled = false` on both build types
+  because the `@JavascriptInterface` bridge methods are reached by name from JS — R8 would rename
+  or strip them and the whole `DrivetimeNative` surface goes silently dead. Turning minify on
+  requires keep rules for every bridge class *first*. Don't flip it casually.
 
 ## Read also
 
+- `EMULATOR.md` — **live UI reload + running the app in an emulator.** The compiler is on this
+  host; the emulator is on Windows; they meet over LAN ADB. Read before `dev.sh`, the
+  `-PdevServer` flag, or any "how do I see this change" question.
 - `README.md` — the user-facing pitch: what the app does and why.
 - `AUTOMATION.md` — the routine/shortcut control surface (shortcuts, intents, `SET` keys,
   `STATE_CHANGED`, recipes). Mirrored in-app under Settings → Advanced → Automation.
-- `PLAY.md` — **live plan:** getting the app onto Google Play (account type, signing, the
-  tracks, what Play won't let you skip). Delete it once we're on Play; the durable half is
-  the Distribution section above.
 - `AGENTS.md` — the same instructions for non-Claude agents (keep in sync with this file).
 - Sibling repo: `drivetime/NOTIFICATIONS.md`, `BACKUP.md`, `AUTH.md`, `STANDALONE.md`.

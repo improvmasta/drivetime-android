@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-build overlay. This file is merged ONLY into the `debug` build type — never into
+  `release`, which is the only thing `bundlePlayRelease` produces and the only thing Play
+  ever receives. Nothing here can reach a user.
+
+  It exists for one reason: `-PdevServer=http://<lxc-ip>:5173` (EMULATOR.md) points the
+  WebView at the Vite dev server so SPA edits hot-reload in the emulator with no rebuild.
+  That server is plain HTTP on the LAN, and since targetSdk 28 Android blocks cleartext by
+  default — without this the WebView just shows a blank page and the only clue is a
+  net::ERR_CLEARTEXT_NOT_PERMITTED buried in logcat.
+
+  Deliberately NOT in the main manifest, and deliberately not a network-security-config
+  listing the dev host: the host is a different IP on every network, so a config file would
+  have to be edited per machine or written wide enough to be meaningless. Confining the
+  permission to the build type that can't ship is the stronger fence.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application
+        android:usesCleartextTraffic="true"
+        tools:ignore="UnusedAttribute" />
+
+</manifest>

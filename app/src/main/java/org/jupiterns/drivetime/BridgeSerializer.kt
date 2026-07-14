@@ -12,8 +12,7 @@ import org.json.JSONObject
  * as its default. [BridgeSerializerTest] exists to make that a red test instead of a bug report.
  *
  * It lives outside [WebViewActivity] because it needs nothing from an Activity — only [Settings] —
- * and inside an Activity it was unreachable from a unit test, which is precisely why the one key
- * with a genuine trap in it (`updates_supported`, below) had nothing pinning it.
+ * and inside an Activity it was unreachable from a unit test.
  */
 object BridgeSerializer {
 
@@ -65,14 +64,13 @@ object BridgeSerializer {
         .put("digest_day", s.digestDay)
         .put("digest_time", s.digestTime)
         .put("control_token", s.controlToken)
-        .put("updates_enabled", s.updatesEnabled)
-        // No build self-updates any more (Play policy — the updater is deleted, not disabled), so
-        // the SPA hides the whole "check for updates" affordance rather than offering a dead
-        // button. Reported as a constant `false` rather than dropped, and the difference is not
-        // cosmetic: the SPA tests `updates_supported !== false`, so an ABSENT key reads as
-        // "supported" and puts the dead button straight back. This is the single most deletable-
-        // looking line in the file and the one that must not be deleted.
-        .put("updates_supported", false)
+        // `updates_enabled` and `updates_supported` are deliberately GONE, and the order in which
+        // that happened is the whole point. `updates_supported=false` was load-bearing for as long
+        // as the SPA still rendered a check-for-updates card behind `updates_supported !== false`:
+        // dropping the key made an ABSENT key read as *supported* and put a dead button back in
+        // front of every user. The card is now deleted from the SPA itself, so nothing tests the
+        // key and nothing renders the button — which is what makes removing it safe. Re-adding an
+        // update affordance means re-adding an updater, which Play forbids. Don't.
         // The legacy standalone car/OBD devices. Nothing in the SPA *configures* these any more —
         // the vehicle that owns the device does — but they're reported so the registry can adopt a
         // pre-registry install's devices into a real vehicle exactly once (vehicles.js

@@ -28,12 +28,22 @@ object WebAuth {
      * Confining navigation to the origin the app actually ships closes that with no loss:
      * nothing in the product needs the server rendered as a page, and a link to it now opens
      * in the browser like any other external link (hardening 3.3).
+     *
+     * **The dev server ([Shell.devHost]) is the sole exception, and it cannot exist in a
+     * shipped build.** It is compiled in only when someone builds with `-PdevServer=…` AND the
+     * build type is `debug`; Play only ever gets `release`, where [Shell.DEV_URL] is "" and
+     * [Shell.devHost] is null, so this collapses back to the single-origin test above. That is
+     * what makes hot-reloading the SPA in an emulator (EMULATOR.md) safe to allow at all: the
+     * widening is real, but it is unreachable from anything a user can install.
      */
     fun isInAppUrl(url: String): Boolean {
         val u = runCatching { URI(url) }.getOrNull() ?: return false
         val scheme = u.scheme?.lowercase()
         if (scheme != "http" && scheme != "https") return false
         val host = u.host ?: return false
-        return host.equals(Shell.LOCAL_DOMAIN, ignoreCase = true)
+        if (host.equals(Shell.LOCAL_DOMAIN, ignoreCase = true)) return true
+        // Host equality, never a prefix match — see Shell.devHost.
+        val dev = Shell.devHost ?: return false
+        return host.equals(dev, ignoreCase = true)
     }
 }

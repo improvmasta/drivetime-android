@@ -76,9 +76,9 @@
 
         <!-- The tracker's setup now lives in the SPA's Settings tabs (rendered in the
              WebViewActivity shell); the genuinely-native flows it needs — permission prompts,
-             Bluetooth pairing, backup pickers, the QR scanner, the updater — are hosted by
-             WebViewActivity itself and fired over the DrivetimeNative bridge. There is no
-             separate native Tracker Activity any more. -->
+             Bluetooth pairing, backup pickers, the QR scanner — are hosted by WebViewActivity
+             itself and fired over the DrivetimeNative bridge. There is no separate native
+             Tracker Activity any more, and no updater: the app cannot update itself. -->
 
         <activity
             android:name=".LogActivity"

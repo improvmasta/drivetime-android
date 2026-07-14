@@ -32,19 +32,22 @@ class BridgeSerializerTest {
         s = Settings(ctx)
     }
 
-    @Test fun theUpdatesSupportedKeyIsPresentAndFalse() {
-        // The trap, and the reason this file is testable at all now.
+    @Test fun theBridgeOffersNoUpdateAffordanceAtAll() {
+        // The inverse of the test that used to live here, and the reason the swap was safe.
         //
-        // The self-updater is deleted (hardening 3.1 — Play's Device and Network Abuse policy
-        // forbids it), so this reports a hardcoded `false` and the SPA hides the whole affordance.
-        // But the SPA tests `updates_supported !== false`, so an ABSENT key reads as *supported* —
-        // meaning "tidy up that pointless constant" silently puts a dead Check-for-updates button
-        // back in front of every user. It is the most deletable-looking line in the serializer and
-        // the one that must never be deleted.
+        // `updates_supported=false` was genuinely load-bearing while the SPA still rendered a
+        // check-for-updates card behind `updates_supported !== false` — an ABSENT key read as
+        // *supported* and put a dead button in front of every user, so the constant could not be
+        // tidied away. That card is now deleted from the SPA (drivetime Settings.svelte), which is
+        // what makes dropping both keys safe: nothing reads them, nothing renders the button.
+        //
+        // This asserts the keys stay gone. The app cannot update itself — Play's Device and
+        // Network Abuse policy forbids any update route but Play — so an update key reappearing
+        // on the bridge means someone is rebuilding an updater, and that gets the app removed.
         val json = BridgeSerializer.settings(s)
 
-        assertTrue("the key must be PRESENT, not merely falsy", json.has("updates_supported"))
-        assertFalse(json.getBoolean("updates_supported"))
+        assertFalse("the updater is deleted; nothing may re-advertise it", json.has("updates_supported"))
+        assertFalse("the updater is deleted; nothing may re-advertise it", json.has("updates_enabled"))
     }
 
     @Test fun theDeviceTokenIsNeverHandedToTheWebView() {
@@ -78,7 +81,10 @@ class BridgeSerializerTest {
             "notify_digest_inapp", "notify_check_engine_inapp", "notify_tracking_health_inapp",
             "notify_coverage_gap_inapp", "notify_backup_health_inapp", "notify_auth_failed_inapp",
             "digest_day", "digest_time", "control_token",
-            "updates_enabled", "updates_supported",
+            // `updates_enabled` / `updates_supported` were removed from this list on purpose,
+            // which — per the note above — requires saying out loud that the SPA no longer reads
+            // them. It doesn't: the check-for-updates card is deleted, because the app cannot
+            // update itself. `theBridgeOffersNoUpdateAffordanceAtAll` pins their absence.
             "carBtName", "carBtMac", "obdName", "obdMac",
             "versionName", "versionCode",
         )
