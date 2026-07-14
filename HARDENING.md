@@ -442,6 +442,33 @@ bump, and keep it off the testers' build until it's been seen to render.
 - **`ActivityTransitionReceiver` can stop logging and is not token-gated** — correctly, since it
   is `exported="false"` and therefore unreachable by other apps. Noted only so the next reader
   doesn't "fix" it: it is inside the trust boundary, and `auto_trip` is opt-in and off by default.
+- **A cloud restore arrives unpaired.** 3.4 moved the five secrets into `drivetime_secrets.xml`
+  precisely so Google's backup can exclude them, and that is still the right call. The consequence
+  is that restoring to a new phone *via cloud backup* (not a direct device transfer, which carries
+  everything) lands with the settings but no device token: the app honestly reports "not connected"
+  and nothing tells the user to re-pair. The fix is a prompt, not a secret — detect
+  `settings-restored-but-no-token` on first run and send them to Settings → Pair a device. Open.
+
+## Off mid-drive ends the drive — **DONE** (this commit)
+
+Turning tracking off mid-drive left the durable drive-start mark behind. The Off toggle and every
+routine go through `Control.applyMode`, which calls `stopService` directly and so never runs a line
+of `onStartCommand` — and `reevaluate`'s OFF branch, the *only* thing that cleared the mark, cleared
+it with a bare `driveStartedAt = 0L` that skipped every drive-end effect anyway. So an Off mid-drive
+dropped the drive's ending on the floor (no tag prompt, no gas-stop pair, no battery stamp, no
+after-drive backup) and, on the `Control` path, left the mark to be inherited — start time and
+mileage included — by the next drive within twelve hours (`DriveSession.MAX_DRIVE_MS`).
+
+The ending now lives in one function (`LocationService.endDrive`) with two callers that cannot
+disagree: leaving the DRIVING tier, and `onDestroy` when `loggingEnabled` is clear. `onDestroy` is
+the choke point *every* stop route reaches, and `loggingEnabled` was already how it tells an
+intentional stop from an OS kill — a kill still keeps the mark, because that drive is not over. The
+one route it cannot serve is an Off arriving when the service is already dead (killed mid-drive,
+watchdog pending): `stopService` is a no-op there, so `Control` drops the mark itself. GPS data was
+never at risk — the SPA re-segments from the fixes — but the drive's *identity* was.
+
+Covered by four `LocationServiceTest` cases (the Off, the inheritance it caused, the OS kill that
+must NOT end a drive, and the dead-service Off).
 
 ## Verification model
 
@@ -468,3 +495,7 @@ Phone checks accumulated across the phases, none of them blocking on their own:
   Mark still one-handed at 44px, and a sheet opened from a Modal (Mileage → Tags → New tag) still
   behaving with the focus trap.
 - **5.1** — the one above. This is the blocking one.
+- **Off mid-drive** — drive for a few minutes, switch tracking off *while still driving*, and the
+  drive should end like any other: the "tag your drive" prompt arrives (~16 min later, if enabled),
+  the battery-used stamp lands on it, and the next drive that day starts from zero rather than
+  wearing the old one's clock and mileage.
