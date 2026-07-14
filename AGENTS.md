@@ -199,6 +199,9 @@ ship log to stamp, no local build to gate on); CI plus `--watch` are the pre-pub
 - **Low-accuracy / no-fix handling** — flag or drop poor fixes. ("Location services off" is done:
   `Health` records it and the Drives timeline names it as a gap's cause.)
 - **One logging state machine** — manual, detector, and routine commands can still race.
-- **Credentials in Keystore** — the device token is in plain `SharedPreferences` today.
+- **Credentials in Keystore** — the device token is in plain `SharedPreferences` today. Hardening
+  3.4 excluded those prefs from Google auto-backup and device transfer
+  (`res/xml/data_extraction_rules.xml` + `backup_rules.xml`, which must agree), so credentials no
+  longer leave the phone by a route the user didn't choose — but they are still plaintext at rest.
 - **A pre-release checklist** — permissions, FGS, boot, queue, OEM battery (sideload-only
   validation means the checklist is the only gate a device would otherwise provide).

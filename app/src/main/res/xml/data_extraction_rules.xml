@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  What may leave the device by a route the user did not choose (API 31+; res/xml/backup_rules.xml
+  is the same policy for API 30 and below). Hardening 3.4.
+
+  The `drivetime` SharedPreferences hold every credential the app has: the device token (a bearer
+  credential for the paired server), the control token, the Google Drive OAuth refresh token, and
+  the legacy dashboard password. Google's auto-backup would copy that file off the phone, and a
+  restore would reconstitute a fully-authenticated install on any device the account is signed
+  into. That is not a copy the user asked for.
+
+  It is excluded from device-transfer too, not just cloud-backup: a phone-to-phone transfer would
+  otherwise mint a second install holding the same device token, and pairing exists precisely so a
+  device's authority is something granted to it, not something cloned into it.
+
+  NOTE — the granularity is the whole prefs FILE. Android's backup rules cannot exclude individual
+  keys, and the credentials share `drivetime.xml` with every ordinary setting, so excluding the
+  credentials means excluding the settings with them. That is the right trade here and costs
+  nothing real: this app already has its own backup (Settings → Sync & Backup → BACKUP.md), it
+  carries the settings AND the drives AND the credentials, and it is the restore path the product
+  actually documents. Android's copy was a redundant second one that the user never opted into.
+  The consequence to know: after a cloud restore or a new-device transfer the app comes up
+  unconfigured — re-pair, reconnect Drive, or restore from the app's own backup.
+
+  Everything else (the drive data in filesDir — web_*.jsonl, queue.jsonl) is still included by
+  default. It is the user's own data and carries no credential.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="drivetime.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="drivetime.xml" />
+    </device-transfer>
+</data-extraction-rules>

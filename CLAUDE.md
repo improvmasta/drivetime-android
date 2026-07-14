@@ -265,8 +265,13 @@ ship log to stamp, no local build to gate on); CI plus `--watch` are the pre-pub
   is done: `Health` records it as a `cond` transition and the Drives timeline names it as the
   cause of a gap.)
 - **One logging state machine** — manual, detector, and routine commands can still race.
-- **Credentials in Keystore** — the device token sits in plain `SharedPreferences` today, and
-  `SettingsExport` writes it in cleartext (deliberately, for portability — but it's the gap).
+- **Credentials in Keystore** — the device token, control token, Drive refresh token and legacy
+  password still sit in plain `SharedPreferences`, and `SettingsExport` writes them in cleartext
+  (deliberately, for portability — but it's the gap). Hardening 3.4 closed the *exfiltration*
+  half of this: the `drivetime` prefs are excluded from Google auto-backup and device transfer
+  (`res/xml/data_extraction_rules.xml` + `backup_rules.xml`, which must agree), so a credential
+  no longer leaves the phone by a route the user didn't choose. They are still plaintext **at
+  rest**, which is what Keystore would fix.
 - **A pre-release checklist** — permissions, FGS, boot, queue, OEM battery. Validation is
   sideload-only, so a checklist is the only gate a device would otherwise provide.
 

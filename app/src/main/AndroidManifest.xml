@@ -37,9 +37,16 @@
          falls back to the GPS speed backstop on devices without these sensors. -->
     <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="false" />
 
+    <!-- Backup stays ON (the drive data is worth carrying), but the `drivetime` prefs — device
+         token, control token, Drive refresh token, legacy password — are excluded from it, so a
+         credential never leaves the phone by a route the user didn't pick. BOTH rule files are
+         required and must agree: fullBackupContent is used on API <= 30, dataExtractionRules on
+         31+, and minSdk is 26. Hardening 3.4. -->
     <application
         android:name=".DrivetimeApp"
         android:allowBackup="true"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:label="drivetime"
