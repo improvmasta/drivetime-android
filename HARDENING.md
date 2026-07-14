@@ -203,24 +203,57 @@ as open as before.
 (privacy policy, Play link) now opens in the browser rather than in-app (3.3), and the About card
 should read "Updates arrive through Google Play" with no update button (3.1).
 
-## Phase 4 — UI/UX (SPA — sibling `drivetime/frontend` repo)
+## Phase 4 — UI/UX (SPA — sibling `drivetime/frontend` repo) — **DONE, in the working tree, unshipped**
 
-These live in `drivetime/frontend/src/`, so each ends with `./sync-web-to-android.sh` and
-reaching testers means the two-repo ship. All cosmetic/additive — no data or bridge impact.
+These live in `drivetime/frontend/src/` (not `views/App.svelte` — `App.svelte` is at the root of
+`src/`; the line numbers below were off by that one directory). Done in `drivetime`, synced into
+this repo's `assets/web/` with `./sync-web-to-android.sh`, so **reaching testers is the two-repo
+ship**. No bridge method, prefs key or on-disk format touched (contracts #2/#3/#4 intact).
 
-- **4.1 Header liveness** — `views/App.svelte:303,318`. `pollNative()` also reads `getStatus()`;
-  overlay a warn state on the track icon when `killWarning` is set (stop showing green over a
-  dead logger).
-- **4.2 First-run copy** — `views/Drives.svelte:567`, `views/Login.svelte:38`. Replace the
-  "Connect your phone (More → API token)" empty state and stale path with standalone-true
-  wording. The server is never named as a requirement anywhere.
-- **4.3 Reduced-motion** — `SelectionBar.svelte:148`, `UndoBar.svelte:11`, `Toasts.svelte:8`.
-  Branch to `fade` under `prefers-reduced-motion` (the pattern exists elsewhere already).
-- **4.4 A11y** — focus management/trap on `Modal.svelte`/`Sheet.svelte`; `aria-live` on
-  `Toasts.svelte:6`.
-- **4.5 "All time" 300-drive cap** — `lib/sync.js:878`. Raise/remove, or show "showing 300 of N".
-- **4.6 In-car touch targets** — `ActiveDriveBar.svelte:382` (Mark 34px), `views/App.svelte:691`
-  (header 38px) to ≥44px.
+- **4.1 Header liveness** — ✅ `pollNative()` now also reads `getStatus()` (`nstat`), and the
+  header's tracking light goes **amber + corner dot** when `killWarning` is set, with the
+  tracker's own reason as the tooltip/`aria-label`. The green light was a claim about the
+  *switch*, not the logger — the one lie this app must not tell. Tapping it still opens the
+  turn-off sheet: the *explanation* already lives on the bell's attention feed (`notify.js`
+  reads the same `killWarning`) and in Settings, so the header only had to stop saying "fine".
+- **4.2 First-run copy** — ✅ The Drives empty state no longer says "Connect your phone (More →
+  API token)" — a menu that hasn't existed since the Settings tab rebuild, for a server the app
+  doesn't need. It now branches on `hasNative()`: on the phone, "turn tracking on and drivetime
+  logs your drives by itself"; on the website (which genuinely is waiting on a phone), "drives
+  logged on your phone appear here". `Login.svelte`'s stale "Tracking → Sync" path is now
+  "Settings → Sync", and says the phone logs drives with or without the server.
+- **4.3 Reduced-motion** — ✅ and **factored, not copy-pasted**: `ActiveDriveBar` and
+  `NotificationCenter` had each grown their own `matchMedia` line, and this item would have added
+  three more. The rule now lives in `lib/motion.js` (`reducedMotion()` + `softly(fn, params)`),
+  used by `Toasts`, `UndoBar` and `SelectionBar` (card + both panels). Degrades to a **cross-fade,
+  never a hard cut** — reduced-motion asks for no *travel*, and a snackbar that simply blinks into
+  existence reads as a rendering glitch. Read at call time, so an OS flip mid-session takes effect.
+- **4.4 A11y** — ✅ `lib/focustrap.js`, used by `Modal` and `Sheet`: Tab stays inside the open
+  dialog and focus returns to whatever opened it. Two deliberate details — it focuses the **dialog
+  box, not the first control** (a sheet leading with a text field would otherwise throw the phone's
+  keyboard up over itself), and the initial focus is **deferred a microtask** because `Sheet`
+  portals itself into `<body>` on mount and re-parenting a node blurs it (focusing inline would
+  have silently done nothing for every sheet in the app). `Toasts` is now a `role="status"`
+  `aria-live="polite"` region — it is the app's only confirmation that an action happened.
+- **4.5 "All time" 300-drive cap** — ✅ **the cap moved rather than being raised.** It was never
+  buying anything in `recentTripsLocal`: that function reads *every* drive out of the replica
+  before it slices, so the read costs the same either way — the slice only trimmed what it handed
+  back, and the Drives list then presented 300 rows as the whole of All time while the totals strip
+  above it was (correctly) computed over all 800. `limit: null` now means "no cap" (`limit: 0` too
+  — `?? Infinity` would have turned a falsy limit into a *blank page*), Drives asks for the whole
+  period, and the **view** caps its own rendering at 300 with an honest "Showing 300 of 812" +
+  **Show all**. The cap runs forward to the end of the day it lands in (a half-day would print a
+  partial day roll-up as the day's total), outages before the cutoff aren't folded in, the cap
+  re-arms on a new period/search, and `SelectionHost`'s `total` is now what's *on screen* — "All"
+  can't select rows the user can't see. New test: `frontend/tests/tripscap.test.mjs`.
+- **4.6 In-car touch targets** — ✅ `ActiveDriveBar`'s **Mark** 34px → 44px (the one control
+  pressed while the car is moving; the band measures itself into `--header-h`, so everything below
+  follows) and the header's tracking/mode buttons 38px → **44px on mobile only** (a media query —
+  38px is the right size for a desktop header, and the in-car case is the phone).
+
+*Phone checks owed:* the header light going amber after a real kill (force-stop the app, drive,
+reopen), Mark still one-handed at 44px, and a sheet opened from a Modal (Mileage → Tags → New tag)
+still behaving with the focus trap in place.
 
 ## Phase 5 — structural refactor (highest care; verify on phone before testers)
 

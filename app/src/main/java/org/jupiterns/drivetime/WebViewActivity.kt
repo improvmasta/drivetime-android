@@ -835,6 +835,21 @@ class WebViewActivity : AppCompatActivity() {
                 .put("notify_digest", settings.notifyDigest)
                 .put("notify_tracking_health", settings.notifyTrackingHealth)
                 .put("notify_backup_health", settings.notifyBackupHealth)
+                .put("notify_apply_usual", settings.notifyApplyUsual)
+                .put("notify_coverage_gap", settings.notifyCoverageGap)
+                .put("notify_auth_failed", settings.notifyAuthFailed)
+                // The in-app half of every kind's pair. Nothing native reads these — the SPA's
+                // notify.js does, to gate its own bell (Settings' in-app block explains why they
+                // are stored here anyway). All default ON, which is what the bell has always done.
+                .put("notify_drive_complete_inapp", settings.inAppDriveComplete)
+                .put("notify_gas_stop_inapp", settings.inAppGasStop)
+                .put("notify_apply_usual_inapp", settings.inAppApplyUsual)
+                .put("notify_digest_inapp", settings.inAppDigest)
+                .put("notify_check_engine_inapp", settings.inAppCheckEngine)
+                .put("notify_tracking_health_inapp", settings.inAppTrackingHealth)
+                .put("notify_coverage_gap_inapp", settings.inAppCoverageGap)
+                .put("notify_backup_health_inapp", settings.inAppBackupHealth)
+                .put("notify_auth_failed_inapp", settings.inAppAuthFailed)
                 .put("digest_day", settings.digestDay)
                 .put("digest_time", settings.digestTime)
                 .put("control_token", settings.controlToken)
@@ -936,6 +951,52 @@ class WebViewActivity : AppCompatActivity() {
                                 this@WebViewActivity, Notify.KIND_BACKUP_HEALTH, Notify.HEALTH_ID)
                         }
                     }
+                    // The three kinds that used to be in-app only. Like the two above, switching
+                    // one OFF also retracts the notification it already put in the shade: a toggle
+                    // that leaves its own notification sitting there reads as broken. (A coverage
+                    // gap is keyed by the outage, not by HEALTH_ID, so there is no single id to
+                    // cancel — an old one simply stops being joined by new ones.)
+                    "notify_apply_usual" -> {
+                        settings.notifyApplyUsual =
+                            value.toBooleanStrictOrNull() ?: settings.notifyApplyUsual
+                        if (!settings.notifyApplyUsual) {
+                            Notify.cancel(
+                                this@WebViewActivity, Notify.KIND_APPLY_USUAL, Notify.HEALTH_ID)
+                        }
+                    }
+                    "notify_coverage_gap" -> settings.notifyCoverageGap =
+                        value.toBooleanStrictOrNull() ?: settings.notifyCoverageGap
+                    "notify_auth_failed" -> {
+                        settings.notifyAuthFailed =
+                            value.toBooleanStrictOrNull() ?: settings.notifyAuthFailed
+                        if (!settings.notifyAuthFailed) {
+                            Notify.cancel(
+                                this@WebViewActivity, Notify.KIND_AUTH_FAILED, Notify.HEALTH_ID)
+                        }
+                    }
+                    // The in-app column. Pure storage as far as the phone is concerned: the SPA
+                    // reads them back over getSettings() and gates its own bell. No channel to
+                    // touch, no worker to re-arm, no notification to retract — an in-app notice is
+                    // recomputed from scratch on the next refresh, so switching one off simply
+                    // stops it being produced.
+                    "notify_drive_complete_inapp" -> settings.inAppDriveComplete =
+                        value.toBooleanStrictOrNull() ?: settings.inAppDriveComplete
+                    "notify_gas_stop_inapp" -> settings.inAppGasStop =
+                        value.toBooleanStrictOrNull() ?: settings.inAppGasStop
+                    "notify_apply_usual_inapp" -> settings.inAppApplyUsual =
+                        value.toBooleanStrictOrNull() ?: settings.inAppApplyUsual
+                    "notify_digest_inapp" -> settings.inAppDigest =
+                        value.toBooleanStrictOrNull() ?: settings.inAppDigest
+                    "notify_check_engine_inapp" -> settings.inAppCheckEngine =
+                        value.toBooleanStrictOrNull() ?: settings.inAppCheckEngine
+                    "notify_tracking_health_inapp" -> settings.inAppTrackingHealth =
+                        value.toBooleanStrictOrNull() ?: settings.inAppTrackingHealth
+                    "notify_coverage_gap_inapp" -> settings.inAppCoverageGap =
+                        value.toBooleanStrictOrNull() ?: settings.inAppCoverageGap
+                    "notify_backup_health_inapp" -> settings.inAppBackupHealth =
+                        value.toBooleanStrictOrNull() ?: settings.inAppBackupHealth
+                    "notify_auth_failed_inapp" -> settings.inAppAuthFailed =
+                        value.toBooleanStrictOrNull() ?: settings.inAppAuthFailed
                     // The digest keys own a scheduled worker, so each write re-arms it (the
                     // backup_schedule precedent above).
                     "notify_digest" -> {
@@ -1201,6 +1262,12 @@ class WebViewActivity : AppCompatActivity() {
                 .put("lastBackupAt", settings.backupLastAt)
                 .put("lastBackupOk", settings.backupLastOk)
                 .put("lastBackupResult", settings.backupLastResult)
+                // Consecutive failed AUTOMATIC runs (BackupWorker.FAIL_STREAK is when it notifies).
+                // The SPA's bell reads this to raise its own "backups are failing" notice — the
+                // in-app half of KIND_BACKUP_HEALTH — so the two say the same thing for the same
+                // reason instead of the bell guessing from `lastBackupOk`, which a single manual
+                // retry would clear while the schedule was still quietly broken.
+                .put("failStreak", settings.backupFailStreak)
                 .put("snapshotAt", settings.backupSnapshotAt)
                 .toString()
         }.getOrDefault("{}")

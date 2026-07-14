@@ -2,13 +2,60 @@ name: Build APK
 
 on:
   push:
-    branches: [main]
+    # `compile` (below) runs on EVERY branch; `build` gates itself back to main. There is no JDK or
+    # Android SDK on the dev host, so CI is the only Kotlin compiler that exists — and until now it
+    # only ran on main, which meant a work branch had no compiler at all and a syntax error was
+    # found by *shipping*. See the compile job.
+    branches: ["**"]
   pull_request:
     branches: [main]
   workflow_dispatch:
 
 jobs:
+  # ---------------------------------------------------------------------------------------------
+  # The fast one (HARDENING.md 5.6). Compiles the Kotlin — app sources AND unit-test sources — and
+  # nothing else: no lint, no APK, no AAB, no Play upload. It exists because the full `build` below
+  # takes many minutes, and the dev host cannot compile Kotlin at all, so the cost of a typo used
+  # to be a whole build matrix. This fails in ~2 minutes instead.
+  #
+  # It runs on every branch and every PR, so a work-in-progress branch gets a compiler.
+  # ---------------------------------------------------------------------------------------------
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Generate Gradle wrapper
+        run: gradle wrapper --gradle-version 8.11.1
+
+      # Test sources too: they are Kotlin, they break the same way, and a test that doesn't compile
+      # is indistinguishable from one that doesn't exist.
+      - name: Compile Kotlin (app + unit tests)
+        run: ./gradlew compileGithubDebugKotlin compileGithubDebugUnitTestKotlin --stacktrace
+
   build:
+    # The expensive path — tests, lint, both artifacts, the GitHub release, the Play upload.
+    #
+    # Everything it used to run on, it still runs on: pushes to main, PRs into main, and manual
+    # dispatch. The ONLY thing that changed is that a push to some other branch no longer drops
+    # through to it — that push now gets `compile` and stops. (Keep `pull_request` in this list:
+    # without it a PR's ref is refs/pull/N/merge, so a branch-name test alone would silently stop
+    # running the tests and lint on every PR.)
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.event_name == 'workflow_dispatch' ||
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # contents: write — the release step below publishes the sideload APK as a GitHub release.
     permissions:

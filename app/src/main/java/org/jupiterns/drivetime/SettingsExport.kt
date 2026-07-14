@@ -55,6 +55,20 @@ object SettingsExport {
         o.put("digest_time", s.digestTime)
         o.put("notify_tracking_health", s.notifyTrackingHealth)
         o.put("notify_backup_health", s.notifyBackupHealth)
+        o.put("notify_apply_usual", s.notifyApplyUsual)
+        o.put("notify_coverage_gap", s.notifyCoverageGap)
+        o.put("notify_auth_failed", s.notifyAuthFailed)
+        // …and the in-app half of each pair. The phone never reads these (the SPA's bell does),
+        // but they are settings the user set, so they restore like any other.
+        o.put("notify_drive_complete_inapp", s.inAppDriveComplete)
+        o.put("notify_gas_stop_inapp", s.inAppGasStop)
+        o.put("notify_apply_usual_inapp", s.inAppApplyUsual)
+        o.put("notify_digest_inapp", s.inAppDigest)
+        o.put("notify_check_engine_inapp", s.inAppCheckEngine)
+        o.put("notify_tracking_health_inapp", s.inAppTrackingHealth)
+        o.put("notify_coverage_gap_inapp", s.inAppCoverageGap)
+        o.put("notify_backup_health_inapp", s.inAppBackupHealth)
+        o.put("notify_auth_failed_inapp", s.inAppAuthFailed)
         // Backup config rides along so a restored phone keeps backing itself up. The folder
         // URI stays out (its permission grant is per-device — re-pick it); the Drive refresh
         // token IS portable, so Drive backups resume with no re-consent.
@@ -136,6 +150,44 @@ object SettingsExport {
         }
         if (o.has("notify_backup_health")) {
             s.notifyBackupHealth = o.optBoolean("notify_backup_health", s.notifyBackupHealth); applied++
+        }
+        if (o.has("notify_apply_usual")) {
+            s.notifyApplyUsual = o.optBoolean("notify_apply_usual", s.notifyApplyUsual); applied++
+        }
+        if (o.has("notify_coverage_gap")) {
+            s.notifyCoverageGap = o.optBoolean("notify_coverage_gap", s.notifyCoverageGap); applied++
+        }
+        if (o.has("notify_auth_failed")) {
+            s.notifyAuthFailed = o.optBoolean("notify_auth_failed", s.notifyAuthFailed); applied++
+        }
+        // The in-app column. An archive written before these existed simply has no key, and the
+        // getter's default (ON) then stands — which is the behaviour that archive was taken under.
+        if (o.has("notify_drive_complete_inapp")) {
+            s.inAppDriveComplete = o.optBoolean("notify_drive_complete_inapp", s.inAppDriveComplete); applied++
+        }
+        if (o.has("notify_gas_stop_inapp")) {
+            s.inAppGasStop = o.optBoolean("notify_gas_stop_inapp", s.inAppGasStop); applied++
+        }
+        if (o.has("notify_apply_usual_inapp")) {
+            s.inAppApplyUsual = o.optBoolean("notify_apply_usual_inapp", s.inAppApplyUsual); applied++
+        }
+        if (o.has("notify_digest_inapp")) {
+            s.inAppDigest = o.optBoolean("notify_digest_inapp", s.inAppDigest); applied++
+        }
+        if (o.has("notify_check_engine_inapp")) {
+            s.inAppCheckEngine = o.optBoolean("notify_check_engine_inapp", s.inAppCheckEngine); applied++
+        }
+        if (o.has("notify_tracking_health_inapp")) {
+            s.inAppTrackingHealth = o.optBoolean("notify_tracking_health_inapp", s.inAppTrackingHealth); applied++
+        }
+        if (o.has("notify_coverage_gap_inapp")) {
+            s.inAppCoverageGap = o.optBoolean("notify_coverage_gap_inapp", s.inAppCoverageGap); applied++
+        }
+        if (o.has("notify_backup_health_inapp")) {
+            s.inAppBackupHealth = o.optBoolean("notify_backup_health_inapp", s.inAppBackupHealth); applied++
+        }
+        if (o.has("notify_auth_failed_inapp")) {
+            s.inAppAuthFailed = o.optBoolean("notify_auth_failed_inapp", s.inAppAuthFailed); applied++
         }
         // Guarded like the backup reschedule below: a restore can run before WorkManager is up.
         if (digestChanged) runCatching { DigestWorker.reschedule(context, s) }

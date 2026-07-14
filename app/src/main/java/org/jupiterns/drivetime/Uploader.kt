@@ -41,6 +41,10 @@ import kotlin.random.Random
 class Uploader(context: Context, private val settings: Settings) {
     private val queueFile = File(context.filesDir, QUEUE)
     private val tmpFile = File(context.filesDir, QUEUE_TMP)
+    /** For the auth-failure notification below. Application context: an Uploader outlives the
+     *  activity that made it (it flushes from the logging service), so holding anything shorter
+     *  would leak it. */
+    private val app = context.applicationContext
 
     @Synchronized
     fun enqueue(lat: Double, lon: Double, epochSec: Long, speedMps: Float?, accuracyM: Float?,
@@ -125,6 +129,27 @@ class Uploader(context: Context, private val settings: Settings) {
                     e.message ?: e.javaClass.simpleName
                 }
                 lastAuthFailed = was401
+                // The server is refusing our credentials (the device token was rotated or
+                // revoked) — nothing we upload will land until the user re-pairs. Say it once,
+                // and take it back the moment an upload gets through.
+                //
+                // The `authNotified` latch is load-bearing, not an optimisation: a flush runs
+                // every ~10 s while driving, and Notify.post addresses one notification id per
+                // (kind, id) — so without it a stale token would re-post, and therefore re-buzz
+                // the phone, every ten seconds for the length of the drive.
+                if (was401 && !authNotified) {
+                    authNotified = true
+                    Notify.post(
+                        app, Notify.KIND_AUTH_FAILED, Notify.HEALTH_ID,
+                        "Server sign-in failed",
+                        "drivetime can't sign in to your server — the pairing token may have been " +
+                            "rotated. Your drives are safe on the phone; re-pair to resume syncing.",
+                        "/settings",
+                    )
+                } else if (err == null && authNotified) {
+                    authNotified = false
+                    Notify.cancel(app, Notify.KIND_AUTH_FAILED, Notify.HEALTH_ID)
+                }
                 if (err == null) {
                     // Drop exactly the lines we sent — matched by CONTENT, not count.
                     // While the POST was in flight, enqueue may have appended AND its cap
@@ -259,6 +284,9 @@ class Uploader(context: Context, private val settings: Settings) {
         @Volatile private var lastAttemptAt = 0L
         @Volatile private var lastError: String? = null
         @Volatile private var lastAuthFailed = false   // last failure was a 401 (typed, not string-matched)
+        /** Have we already told the user the server is refusing us? One notification per episode,
+         *  not one per flush. Process-global like the rest of the upload health above. */
+        @Volatile private var authNotified = false
         @Volatile private var queuedApprox = -1   // -1 = not yet seeded from disk
 
         /** Test-only: forget the process-global queue state — the cached count (so the next
@@ -273,6 +301,7 @@ class Uploader(context: Context, private val settings: Settings) {
                 nextAttemptAt = 0L
                 lastError = null
                 lastAuthFailed = false
+                authNotified = false
             }
         }
 

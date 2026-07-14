@@ -344,6 +344,88 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("notify_digest", false)
         set(v) = prefs.edit().putBoolean("notify_digest", v).apply()
 
+    /**
+     * Post a system notification when drives are sitting on a route default they could just be
+     * given ([Notify.KIND_APPLY_USUAL] — "3 drives match a usual tag"). The count comes from the
+     * SPA's attention payload, which is the only thing that knows what a route default IS; the
+     * phone just reports the number it was handed. Default OFF, like every other nag.
+     */
+    var notifyApplyUsual: Boolean
+        get() = prefs.getBoolean("notify_apply_usual", false)
+        set(v) = prefs.edit().putBoolean("notify_apply_usual", v).apply()
+
+    /**
+     * Post a system notification when the tracker RECORDS a fault outage — a window it has
+     * stated it was not running ([Notify.KIND_COVERAGE_GAP], from [Health]'s ledger).
+     *
+     * Overlaps [notifyTrackingHealth] on purpose: that one fires when a kill is *detected*, this
+     * one when the lost window is *written down* and its length is known ("you lost 14:02–15:10").
+     * Default OFF precisely because of that overlap — a user who wants both opts in.
+     */
+    var notifyCoverageGap: Boolean
+        get() = prefs.getBoolean("notify_coverage_gap", false)
+        set(v) = prefs.edit().putBoolean("notify_coverage_gap", v).apply()
+
+    /**
+     * Post a system notification when the server rejects our credentials ([Notify.KIND_AUTH_FAILED]
+     * — the device token was rotated or revoked, so nothing is reaching the server). Retracted by
+     * the first upload that succeeds.
+     *
+     * Default OFF: the app is standalone (STANDALONE.md), the queue is durable, and a server that
+     * has stopped accepting us costs the user nothing until they go looking for the website.
+     */
+    var notifyAuthFailed: Boolean
+        get() = prefs.getBoolean("notify_auth_failed", false)
+        set(v) = prefs.edit().putBoolean("notify_auth_failed", v).apply()
+
+    // ---- in-app notifications (the bell inside the SPA) ----
+    //
+    // The SECOND toggle every kind now has. The pref above decides whether the OS shows a
+    // notification; the pref here decides whether the kind appears in the app's own notification
+    // centre. They are genuinely independent — "tell me in the app but don't buzz my phone" is the
+    // default posture, and it is what the app has always done (the bell has never consulted a
+    // setting; it showed everything).
+    //
+    // So these all default **ON**: that IS the current behaviour, and a default of OFF would
+    // silently empty the bell for every installed phone on upgrade.
+    //
+    // NOTHING IN THE ANDROID CODE READS THESE. They are stored here — rather than in the SPA's own
+    // localStorage — for exactly two reasons: they ride [SettingsExport] with every other setting
+    // (so a backup/restore carries them), and Settings is one screen with one storage. `notify.js`
+    // reads them over `getSettings()` and gates the feed; a plain browser gets no bridge, no
+    // settings, and therefore every kind — which is the honest answer, since the website has no
+    // notification settings UI to have turned one off with.
+    private fun inApp(key: String) = prefs.getBoolean(key, true)
+    private fun setInApp(key: String, v: Boolean) = prefs.edit().putBoolean(key, v).apply()
+
+    var inAppDriveComplete: Boolean
+        get() = inApp("notify_drive_complete_inapp")
+        set(v) = setInApp("notify_drive_complete_inapp", v)
+    var inAppGasStop: Boolean
+        get() = inApp("notify_gas_stop_inapp")
+        set(v) = setInApp("notify_gas_stop_inapp", v)
+    var inAppApplyUsual: Boolean
+        get() = inApp("notify_apply_usual_inapp")
+        set(v) = setInApp("notify_apply_usual_inapp", v)
+    var inAppDigest: Boolean
+        get() = inApp("notify_digest_inapp")
+        set(v) = setInApp("notify_digest_inapp", v)
+    var inAppCheckEngine: Boolean
+        get() = inApp("notify_check_engine_inapp")
+        set(v) = setInApp("notify_check_engine_inapp", v)
+    var inAppTrackingHealth: Boolean
+        get() = inApp("notify_tracking_health_inapp")
+        set(v) = setInApp("notify_tracking_health_inapp", v)
+    var inAppCoverageGap: Boolean
+        get() = inApp("notify_coverage_gap_inapp")
+        set(v) = setInApp("notify_coverage_gap_inapp", v)
+    var inAppBackupHealth: Boolean
+        get() = inApp("notify_backup_health_inapp")
+        set(v) = setInApp("notify_backup_health_inapp", v)
+    var inAppAuthFailed: Boolean
+        get() = inApp("notify_auth_failed_inapp")
+        set(v) = setInApp("notify_auth_failed_inapp", v)
+
     /** Day the weekly digest fires, in the SPA's `Date.getDay()` numbering (0 = Sunday …
      *  6 = Saturday). Default Monday — the week's drives are in, the week ahead isn't. */
     var digestDay: Int

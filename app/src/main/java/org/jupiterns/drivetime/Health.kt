@@ -163,6 +163,24 @@ object Health {
         // but the shade only speaks for an outage long enough to have swallowed a real drive.
         s.lastKillDetectedAt = toMs
         if (toMs - fromMs < NOTIFY_DOWN_MS) return
+
+        // The gap, as a recorded fact with both ends known — the same row the app's own bell has
+        // always shown as a "coverage gap", now available to the OS too (default OFF; the two
+        // deliberately overlap, see Settings.notifyCoverageGap).
+        //
+        // Posted BEFORE the watchdog gate below and keyed by `fromMs` rather than HEALTH_ID: this
+        // one is not a standing condition to be replaced in place, it is a dated entry in a log —
+        // two outages are two facts, and neither retracts the other. It also therefore posts even
+        // when the watchdog already cried out mid-episode, because "the tracker seems to be dead"
+        // and "you lost 14:02–15:10" are different statements and only this one is final.
+        Notify.post(
+            context, Notify.KIND_COVERAGE_GAP, (fromMs / 1000).toString(),
+            "Tracking gap: ~${mins} min",
+            "The tracker recorded that it was not running from ${clock(fromMs)} to ${clock(toMs)}. " +
+                "Any drives in that window were not captured.",
+            "/drives",
+        )
+
         if (s.lastKillNotifiedAt >= fromMs) return   // the watchdog already said it
         s.lastKillNotifiedAt = toMs
         Notify.post(
@@ -173,6 +191,10 @@ object Health {
             "/settings",
         )
     }
+
+    /** Wall-clock HH:mm for the coverage-gap body — the user thinks in clock time, not epochs. */
+    private fun clock(ms: Long): String =
+        java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(ms))
 
     /** JSON array (string) of every health row at or after [sinceTs] — at-or-after, like markers:
      *  two rows can share a second, and the SPA keys them by `kind|ts`, so re-delivery is a no-op
