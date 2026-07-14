@@ -257,7 +257,9 @@ still behaving with the focus trap in place.
 
 ## Phase 5 — structural refactor (highest care; verify on phone before testers)
 
-Ordered so each is a safe standalone step (CI is the only compiler — no giant single commit):
+Ordered so each is a safe standalone step (CI is the only compiler — no giant single commit).
+**Done so far: 5.6 and 5.3.** They were taken out of order deliberately: 5.6 is the thing that makes
+every other item here cheaper to attempt, so it went first.
 
 1. **`TierReconciler`** — the keystone. One serial dispatcher every trigger posts events to
    (`Fix`, `CarBt`, `Obd`, `Command`, `Motion`); nothing mutates tier fields directly. Fixes the
@@ -267,15 +269,34 @@ Ordered so each is a safe standalone step (CI is the only compiler — no giant 
    connect/disconnect, OBD drive) before it reaches testers.
 2. **`ObdSession`** — extract the loop + socket lifecycle (1.1 shipped surgically; this makes it
    testable).
-3. **`JsonlRing`** — collapse the four `Web*Buffer` copies into one class. **Keep the four
-   filenames and the per-buffer `>` vs `>=` inclusivity** (contract #2); kills the
-   `WebBatteryBuffer.kt:38,49` cross-reference into `WebVehicleBuffer`.
+3. **`JsonlRing`** — ✅ done. The four `Web*Buffer` objects are now thin wrappers over one
+   `JsonlRing(fileName, maxLines, inclusive, trimEvery, label)`; each keeps its filename, its cap,
+   its trim cadence, and its own lock (contract #2 intact — no on-disk change at all). The
+   `WebBatteryBuffer` → `WebVehicleBuffer` cross-reference is gone: battery had no trim/select of
+   its own and was calling the vehicle buffer's, which is not a design, it is the last stage before
+   four copies drift.
+   - **The `>` vs `>=` split is a parameter, not an inconsistency to be tidied away**, and it is
+     the one thing this refactor could have silently broken. Fixes drain **strictly-after** (one
+     per second — re-delivering the boundary is a duplicate); markers/vehicles/battery drain
+     **at-or-after** (two can share a second, so a strictly-after cursor on the boundary drops one
+     *forever*, while re-delivery is free because all three are written idempotently by the SPA).
+     The failure modes are asymmetric and both are silent, so `JsonlRingTest` pins which side each
+     of the four is wired to — not merely that the two modes exist.
+   - `selectSince(lines, sinceTs, inclusive)` takes no default for `inclusive`, on purpose: a
+     caller that hasn't decided whether its events can share a second is a caller for whom either
+     answer is silently wrong.
 4. **`Clock` seam + the five missing safety-net tests** — `Watchdog.doWork`, the `onStartCommand`
    OFF path, `markDriveStart` resume, `Health` kill-classification, the `startForeground`
    degrade. This is the net built to prevent silent-stop and is currently almost untested.
 5. **`BridgeSerializer` / `DriveEndProcessor` / `DriveNotification`** — pure-logic extractions,
    low risk once the above are in. `DriveEndProcessor` finally tests the gas-stop heuristic.
-6. **Fast `compileGithubDebugKotlin` CI job** so a syntax error fails in ~2 min, not a full matrix.
+6. **Fast Kotlin-compile CI job** — ✅ done, and done **first**, because it is what makes the rest
+   of this phase affordable. There is no JDK on the dev host, so CI is the only Kotlin compiler in
+   existence for this repo — and it only ran on `main`, which meant a work branch had *no compiler
+   at all* and a syntax error was discovered by shipping. The new `compile` job
+   (`compileGithubDebugKotlin` + `compileGithubDebugUnitTestKotlin`, ~2 min) runs on **every**
+   branch; the full `build` still runs on main, PRs and dispatch, exactly as before. Test sources
+   are compiled too — a test that doesn't compile is indistinguishable from one that doesn't exist.
 
 ## Phase 6 — targetSdk 36 + edge-to-edge (hard deadline 2026-08-31, needs device)
 
