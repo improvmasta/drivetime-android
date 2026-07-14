@@ -147,8 +147,9 @@
             android:name=".ActivityTransitionReceiver"
             android:exported="false" />
 
-        <!-- Shares the downloaded update APK with the system installer via a content:// URI
-             (a file:// URI is illegal to hand across processes on API 24+). -->
+        <!-- Hands generated files (the mileage export, the report-a-problem diagnostic) to
+             other apps via a content:// URI — a file:// URI is illegal to pass across
+             processes on API 24+. See res/xml/file_paths.xml for the roots. -->
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

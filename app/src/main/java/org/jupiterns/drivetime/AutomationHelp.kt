@@ -45,8 +45,14 @@ object AutomationHelp {
           onset_speed_mps                 1+    Doppler = vehicular threshold
           onset_accel_rms                 0+    accel on-foot threshold (×100 m/s²)
 
-        Optional token (extra token=<value>) — if set in Settings,
-        SET / QUERY must include it. START/STOP/TOGGLE/mode-actions ignore it.
+        Optional token (extra token=<value>) — if set in Settings, every
+        SET / QUERY / MARK / STOP / TOGGLE from outside the app must carry it.
+        START and the MODE_* actions stay open: they can't stop logging, so a
+        routine can always get tracking back without the secret.
+        Heads-up: the built-in Stop shortcut is static and can't carry a token,
+        so once you set one, stop logging with a STOP intent that sends the
+        token extra (or from the app itself — the app never needs the token).
+        Rejected intents are logged to the Activity log.
 
         State broadcast (subscribe to this in your routine):
           org.jupiterns.drivetime.event.STATE_CHANGED

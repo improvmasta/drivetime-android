@@ -26,9 +26,32 @@ import android.os.Build
  *                      setting; see [SET_KEYS] for the supported keys
  *   QUERY             → emit a [StateBroadcaster] STATE_CHANGED back (no state change)
  *
- * SET/QUERY are gated by [Settings.controlToken] if it's set — the intent must carry
- * a matching `token` extra. START/STOP/TOGGLE/mode actions remain open even when a
- * token is set so a routine can always *stop* the app regardless of secrets.
+ * ## The control token
+ *
+ * [Settings.controlToken] gates the **exported** surface — and only that surface. Everything
+ * arriving through [ControlActivity] or [ControlReceiver] came from outside this app (any
+ * installed app can start an exported activity or send us a broadcast; neither needs a
+ * permission), so it lands in [applyExternal], which is where the token is checked. The in-app
+ * switches, the resume alarm and the activity-recognition receiver (`exported=false`) call
+ * [apply] directly: they are this app talking to itself, and a user must never need a secret
+ * to press their own Off switch.
+ *
+ * With a token set, an external intent must carry a matching `token` extra to use:
+ *   - **SET / QUERY / MARK** — as before, and
+ *   - **STOP / TOGGLE** — new. These are the verbs that can turn the logger OFF, and "the app
+ *     quietly stopped logging" is this project's #1 bug class; a token that protects the
+ *     settings but lets any app on the phone silently kill tracking protects the wrong thing.
+ *
+ * **START and the MODE_\* verbs stay open even with a token set.** They cannot stop logging —
+ * the worst they do is start it or change the sampling tier — so leaving them open costs
+ * nothing and keeps a routine always able to *recover* tracking without the secret.
+ *
+ * With a **blank token — the default — every verb stays open exactly as before**, so no
+ * existing routine changes behaviour. The cost of opting in is real and worth stating: the
+ * built-in **Off** App Shortcut (`res/xml/shortcuts.xml`) is static XML and cannot carry a
+ * runtime secret, so once a token is set that shortcut stops working and a STOP recipe must
+ * send the `token` extra itself. Driving/Auto/Eco shortcuts are unaffected. A rejected intent
+ * is logged to the in-app Activity log, never silently dropped.
  */
 object Control {
     const val ACTION_START = "org.jupiterns.drivetime.action.START"
@@ -66,8 +89,53 @@ object Control {
         "onset_speed_mps", "onset_accel_rms",
     )
 
+    /**
+     * The verbs an **external** caller must present the token for, once one is set: the ones
+     * that change settings ([ACTION_SET]), read state back ([ACTION_QUERY]), write data
+     * ([ACTION_MARK]), or **turn the logger off** ([ACTION_STOP], [ACTION_TOGGLE]).
+     *
+     * START and the MODE_* verbs are absent on purpose — they cannot stop logging, so leaving
+     * them open keeps a routine able to recover tracking without the secret.
+     */
+    val TOKEN_GATED = setOf(ACTION_SET, ACTION_QUERY, ACTION_MARK, ACTION_STOP, ACTION_TOGGLE)
+
+    /**
+     * The gate decision, kept **pure** so it's unit-testable on the JVM with no Android and no
+     * Context — same idiom as [ControlParse]. [required] is the configured token ("" = none),
+     * [given] the `token` extra the intent actually carried.
+     *
+     * Blank [required] allows everything, which is why setting no token leaves the surface
+     * exactly as open as it has always been.
+     */
+    fun externalAllowed(action: String?, required: String, given: String): Boolean {
+        if (required.isBlank()) return true
+        if (action.orEmpty() !in TOKEN_GATED) return true
+        return given == required
+    }
+
+    /**
+     * Apply an intent that arrived from **outside** the app. The exported [ControlActivity]
+     * and [ControlReceiver] are the only callers, because they are the only untrusted entry
+     * points: any installed app can start an exported activity or send us a broadcast, with
+     * no permission and no user gesture.
+     *
+     * This is the **one** place [Settings.controlToken] is enforced. A new exported entry
+     * point must route through here, not [apply] — putting the check in the shared applier
+     * instead would gate the app's own Off switch behind the user's own secret.
+     */
+    fun applyExternal(context: Context, intent: Intent?): String {
+        val settings = Settings(context)
+        val action = intent?.action
+        val given = intent?.getStringExtra(EXTRA_TOKEN).orEmpty()
+        if (!externalAllowed(action, settings.controlToken, given)) {
+            EventLog.warn("Control intent $action rejected — bad/missing token")
+            return settings.trackingMode
+        }
+        return apply(context, intent)
+    }
+
     /** Convenience for callers that only have an action string (the activity-recognition
-     *  receiver, a routine broadcast). The optional [source] tags the resulting
+     *  receiver, the in-app switches). The optional [source] tags the resulting
      *  STATE_CHANGED so a routine can distinguish, say, an activity-recognition
      *  auto-start from a user shortcut. */
     fun apply(context: Context, action: String?, source: String? = null): String {
@@ -76,14 +144,23 @@ object Control {
         return apply(context, intent)
     }
 
-    /** Apply a control intent. Returns the resulting desired [Settings.trackingMode]. */
+    /**
+     * Apply a control intent from a **trusted** caller — the in-app switches, the resume
+     * alarm, the `exported=false` activity-recognition receiver. Returns the resulting
+     * desired [Settings.trackingMode].
+     *
+     * Deliberately does **no** token check: this app does not need the user's secret to obey
+     * the user. Anything from outside goes through [applyExternal] instead.
+     */
     fun apply(context: Context, intent: Intent?): String {
         val settings = Settings(context)
         val action = intent?.action
 
-        // QUERY is read-only; honour token if set, then emit the snapshot.
+        // The token was already checked at the boundary ([applyExternal]) if this intent came
+        // from outside; a caller that reaches here directly is this app itself.
+
+        // QUERY is read-only — emit the snapshot.
         if (action == ACTION_QUERY) {
-            if (!tokenOk(settings, intent)) return settings.trackingMode
             StateBroadcaster.emit(context, source(intent, default = "query"))
             return settings.trackingMode
         }
@@ -94,7 +171,6 @@ object Control {
         // marker buffer. Nothing to mark when we aren't logging, and starting the service
         // from a background broadcast just to mark would be refused on Android 12+ anyway.
         if (action == ACTION_MARK) {
-            if (!tokenOk(settings, intent)) return settings.trackingMode
             if (!LocationService.isRunning) {
                 EventLog.warn("MARK ignored — not logging")
                 return settings.trackingMode
@@ -105,16 +181,13 @@ object Control {
             return settings.trackingMode
         }
 
-        // SET is parameter-only (mode-set rare path is special-cased below); honour token.
+        // SET is parameter-only (the mode-set rare path is special-cased below).
         if (action == ACTION_SET) {
-            if (!tokenOk(settings, intent)) return settings.trackingMode
             val src = source(intent, default = "routine")
             applySet(context, intent, src)
             return settings.trackingMode
         }
 
-        // Mode-changing actions: always open (per AUTOMATION.md — START/STOP must work even
-        // when SET is locked).
         val mode = when (action) {
             ACTION_START, ACTION_MODE_AUTO -> Settings.MODE_AUTO
             ACTION_STOP -> Settings.MODE_OFF
@@ -248,15 +321,6 @@ object Control {
         ACTION_TOGGLE -> "shortcut"
         ACTION_MODE_DRIVING, ACTION_MODE_ECO -> "shortcut"
         else -> "routine"
-    }
-
-    private fun tokenOk(settings: Settings, intent: Intent?): Boolean {
-        val required = settings.controlToken
-        if (required.isBlank()) return true
-        val given = intent?.getStringExtra(EXTRA_TOKEN).orEmpty()
-        if (given == required) return true
-        EventLog.warn("Control intent ${intent?.action} rejected — bad/missing token")
-        return false
     }
 
     private fun applyMode(context: Context, settings: Settings, mode: String, source: String) {
