@@ -12,8 +12,17 @@ There are **two loops**, and confusing them is what makes this feel harder than 
 
 | Change | What it takes | How long |
 |---|---|---|
-| **SPA / UI** (Svelte, CSS — nearly all visible work) | nothing. Vite hot-reloads it into the running emulator | instant |
+| **SPA / UI** (Svelte, CSS — nearly all visible work) | Vite dev server running + a `--dev` install → hot-reloads into the emulator | instant |
+| **SPA / UI, bundled check** (or no dev server running) | `sync-web-to-android.sh` → `./dev.sh` (builds the APK, `adb install`s it) | ~1 min |
 | **Kotlin / native** (logger, bridge, manifest) | a real compile → `./dev.sh` | ~1 min |
+
+> **The emulator does NOT update itself.** A code change reaches it exactly one of two ways:
+> the **Vite HMR loop** (dev server running *and* the app was installed with `./dev.sh --dev`),
+> **or** you **push a fresh APK over adb** with `./dev.sh`. If you edited files and nothing
+> changed on screen, you are in neither loop — you have not pushed the APK. For SPA edits the
+> push is `./sync-web-to-android.sh` (rebuild the bundled snapshot) then `./dev.sh` (`adb
+> install`). This is the default when working from an agent/CLI that isn't babysitting a Vite
+> server.
 
 ## One-time setup
 
@@ -83,9 +92,16 @@ cd ~/drivetime          && npm --prefix frontend run dev     # Vite on 0.0.0.0:5
 cd ~/drivetime-android  && ./dev.sh --dev                    # build + install, pointed at Vite
 ```
 
-**3. Edit `drivetime/frontend/**` and watch the emulator.** That's the whole loop. No rebuild,
-no `sync-web-to-android.sh`, no APK, no push. Kotlin changes need `./dev.sh --dev` again (or
-`./dev.sh --dev --watch` to rebuild on save).
+**3. Edit `drivetime/frontend/**` and watch the emulator.** With the Vite server up and a
+`--dev` install in place, that's the whole loop — no rebuild, no `sync-web-to-android.sh`, no
+APK, no push. Kotlin changes need `./dev.sh --dev` again (or `./dev.sh --dev --watch` to rebuild
+on save).
+
+**Not running the Vite server (an agent making changes, or checking the real bundled build)?**
+Then there is no hot reload — push a fresh APK: `./sync-web-to-android.sh` (in `../drivetime`,
+rebuilds the bundled snapshot) then `./dev.sh` (builds + `adb install`s to the emulator). Skip
+this and the emulator keeps showing the previously installed APK, which is the usual cause of
+"I made the change but I don't see it."
 
 Other things worth knowing:
 
