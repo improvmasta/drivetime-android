@@ -191,10 +191,21 @@ class Settings(context: Context) {
         get() = bound("stationary_stop_min", prefs.getInt("stationary_stop_min", 5))
         set(v) = prefs.edit().putInt("stationary_stop_min", bound("stationary_stop_min", v)).apply()
 
-    /** Whether the logging service is currently meant to be running. */
+    /** Whether the logging service is currently meant to be running.
+     *
+     *  This is the **master switch** — the answer to "is tracking on". [trackingMode] is not, and
+     *  never was: it is the desired *tier* and defaults to `auto`, so an install that has never
+     *  logged a metre still reports `auto`. Every UI surface that asked the mode instead of this
+     *  flag told its user tracking was running when nothing was ([Control.repairNeverStarted]). */
     var loggingEnabled: Boolean
         get() = prefs.getBoolean("logging_enabled", false)
         set(v) = prefs.edit().putBoolean("logging_enabled", v).apply()
+
+    /** Whether the one-time [Control.repairNeverStarted] pass has run on this install. Set once,
+     *  forever, whatever the outcome — it is a repair for a specific shipped bug, not a policy. */
+    var trackingRepairDone: Boolean
+        get() = prefs.getBoolean("tracking_repair_done", false)
+        set(v) = prefs.edit().putBoolean("tracking_repair_done", v).apply()
 
     /** Paired OBD-II (ELM327) dongle — the LEGACY single-adapter setting, from when the app
      *  assumed a one-car household. Still honoured as the fallback (see [obdTarget]) so an

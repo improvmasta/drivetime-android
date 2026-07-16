@@ -50,6 +50,43 @@ class BridgeSerializerTest {
         assertFalse("the updater is deleted; nothing may re-advertise it", json.has("updates_enabled"))
     }
 
+    @Test fun aFreshInstallReportsTrackingOffEvenThoughTheModeIsAuto() {
+        // The bug this exists to prevent, in one assertion pair.
+        //
+        // `trackingMode` defaults to `auto` — it is the desired *tier*, not a claim that anything
+        // is running — while `loggingEnabled` (the master switch) defaults to false. For a while
+        // the bridge shipped only the first, so the SPA derived "on" from `trackingMode !== 'off'`
+        // and told a fresh install it was already tracking: green pill, switch pre-flipped, wizard
+        // step reading "✓ Tracking is on". The logger never ran, and the user's first tap on that
+        // switch would have called setTracking(FALSE).
+        //
+        // So: a phone nobody has started must say so on the bridge, and it must say so in the key
+        // the UI reads. If `loggingEnabled` ever disappears from this payload, the SPA falls back
+        // to inferring state from the mode and the whole thing silently returns.
+        val json = BridgeSerializer.settings(s)
+
+        assertTrue("the master switch must reach the SPA", json.has("loggingEnabled"))
+        assertFalse("a fresh install has never started the logger", json.getBoolean("loggingEnabled"))
+        assertEquals("...and the mode still defaults to auto, which is exactly the trap", "auto", json.getString("trackingMode"))
+    }
+
+    @Test fun startingTheLoggerIsWhatFlipsTheMasterSwitch() {
+        // The other half: `loggingEnabled` tracks the master switch, not the mode. Forcing a tier
+        // on an install that never started must not read as running, and starting must read as
+        // running regardless of which tier the detector lands on.
+        s.trackingMode = Settings.MODE_DRIVING
+        assertFalse(
+            "a mode without a start is still not logging",
+            BridgeSerializer.settings(s).getBoolean("loggingEnabled"),
+        )
+
+        s.loggingEnabled = true
+        assertTrue(
+            "started is started, whatever the tier",
+            BridgeSerializer.settings(s).getBoolean("loggingEnabled"),
+        )
+    }
+
     @Test fun theDeviceTokenIsNeverHandedToTheWebView() {
         // AUTH.md: pairing is a native-only flow. The SPA is told *whether* a token exists, never
         // what it is — so a compromised or stale WebView snapshot cannot exfiltrate the credential

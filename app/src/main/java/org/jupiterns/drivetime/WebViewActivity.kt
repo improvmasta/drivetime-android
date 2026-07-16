@@ -309,6 +309,14 @@ class WebViewActivity : AppCompatActivity() {
         // The SPA authenticates to the server per-request with the device token (no cookie
         // session to keep alive), so a resume just retries the load if it never came up.
         if (!loadedOnce) loadDashboard()
+        // Rescue an install that was told tracking was on while the logger had never started
+        // (Control.repairNeverStarted). It runs from onResume, not Application.onCreate, because
+        // it starts a foreground service and only a foregrounded app is allowed to: from here the
+        // start is legal, and the user is looking at the screen that says what we just did. It
+        // no-ops on every subsequent resume — the flag is claimed on the first pass.
+        if (Control.repairNeverStarted(this, settings)) {
+            snack("Tracking was set up but never actually started — it's on now")
+        }
     }
 
 
@@ -687,7 +695,17 @@ class WebViewActivity : AppCompatActivity() {
             append("App: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})\n")
             append("Device: ${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})\n")
             append("Server configured: ${settings.isConfigured}\n")
-            append("Tracking mode: ${settings.trackingMode}\n")
+            // Report the master switch and actual liveness FIRST, and never the mode alone. A
+            // report that said only "Tracking mode: auto" once sent us hunting an OEM battery
+            // kill for a phone whose logger had simply never been started: `trackingMode`
+            // defaults to `auto`, so that line reads as "tracking is on" on an install that has
+            // never logged a metre. These three lines are the question every report is really
+            // asking — is it meant to run, is it running, and when did it last do anything.
+            append("Tracking enabled (master switch): ${settings.loggingEnabled}\n")
+            append("Logging service running now: ${LiveState.logging}\n")
+            append("Tracking mode (desired tier): ${settings.trackingMode}\n")
+            val beat = settings.lifeBeatAt
+            append("Last proof of life: ${if (beat > 0) fmt.format(Date(beat)) else "never — the logger has not run"}\n")
             append("Battery exempt: ${Battery.isExempt(this@WebViewActivity)}\n")
             for (c in Permissions.checklist(this@WebViewActivity, settings)) {
                 append("Permission — ${c.label}: ${if (c.granted) "granted" else "MISSING"}\n")

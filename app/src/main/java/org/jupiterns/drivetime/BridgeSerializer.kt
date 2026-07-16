@@ -29,7 +29,16 @@ object BridgeSerializer {
         .put("isConfigured", s.isConfigured)
         .put("standalone", !s.isConfigured)
         .put("deviceTokenSet", s.deviceToken.isNotBlank())
+        // `trackingMode` is the *desired tier* (auto/driving/light/off) and `loggingEnabled` is
+        // the **master switch** — whether the user has actually started the logger. They are not
+        // interchangeable, and shipping only the first one cost us a bug report: `trackingMode`
+        // defaults to `auto` on a fresh install, so the SPA (which had nothing else to read)
+        // derived "tracking is on" from `trackingMode !== 'off'` and rendered a green
+        // "enabled (idle)" pill, a pre-flipped switch, and a wizard step reading "✓ Tracking is
+        // on" — on a phone whose service had never once run. Nobody turns on what the app says is
+        // already on. Send the master switch, and let the UI read the switch.
         .put("trackingMode", s.trackingMode)
+        .put("loggingEnabled", s.loggingEnabled)
         .put("interval_sec", s.intervalSec)
         .put("idle_interval_sec", s.idleIntervalSec)
         .put("light_interval_sec", s.lightIntervalSec)

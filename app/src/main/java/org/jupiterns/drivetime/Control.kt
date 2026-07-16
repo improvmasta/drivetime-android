@@ -323,6 +323,58 @@ object Control {
         else -> "routine"
     }
 
+    /**
+     * One-time repair for the installs stranded by the "tracking looks on but never started" bug.
+     *
+     * Every UI surface used to derive "tracking is on" from [Settings.trackingMode], which is the
+     * desired *tier* and defaults to `auto`. So a fresh install rendered a green "Tracking on"
+     * header light, a green "enabled (idle)" pill, a pre-flipped switch, and a wizard step reading
+     * "✓ Tracking is on" that consequently never showed its own "Turn on tracking" button. Nobody
+     * turns on what the app insists is already on, so [Settings.loggingEnabled] stayed false and
+     * the logger never ran. Fixing the UI makes those phones finally render "off" — but it does
+     * not record the drives they are losing today, and it only helps a user who goes looking.
+     *
+     * So this repairs them. It is deliberately **not** a policy of "start tracking if it's off":
+     * it fires once, only for the exact signature of the bug, and every clause is a way for a user
+     * who genuinely meant "off" to be left alone.
+     *
+     *  - [Settings.loggingEnabled] false — never started. (If it's true there is nothing to fix;
+     *    a killed-but-enabled logger is [Watchdog]'s job, not this.)
+     *  - [Settings.trackingMode] != OFF — never *deliberately* turned off. Every route to off
+     *    (the switch, a routine, a snooze) goes through [applyMode] and writes OFF, so this alone
+     *    excludes anyone who chose it.
+     *  - [Settings.lifeBeatAt] == 0 — has never run **once**, ever. `Health.startLife` stamps a
+     *    beat the instant the service starts and nothing ever clears it, so zero is durable proof
+     *    the logger has never lived. A user who ran it and stopped is excluded here too.
+     *  - Fine location granted — they went through setup and meant it. A half-configured install
+     *    that never finished is not owed a background GPS service it never asked for.
+     *
+     * What's left is a user who was *told* tracking was on, believed it, and wanted it — whose
+     * consent the app took and then didn't honour. Starting the logger is honouring the consent
+     * that was already given, not making a new decision on their behalf. It is logged, and the
+     * caller says so on screen: a GPS service that silently switches itself on is its own bug.
+     *
+     * @return true when the repair actually started tracking (the caller should tell the user).
+     */
+    fun repairNeverStarted(context: Context, settings: Settings): Boolean {
+        if (settings.trackingRepairDone) return false
+        // Claim the one shot up front, whatever happens below — a repair that retries forever is
+        // a policy, and this is not one.
+        settings.trackingRepairDone = true
+
+        if (settings.loggingEnabled) return false
+        if (settings.trackingMode == Settings.MODE_OFF) return false
+        if (settings.lifeBeatAt != 0L) return false
+        if (!Permissions.snapshot(context, settings).hasFineLocation) return false
+
+        EventLog.warn(
+            "Tracking was set up but had never actually started (a bug in an older version " +
+                "showed it as on) — starting it now"
+        )
+        applyMode(context, settings, Settings.MODE_AUTO, "repair")
+        return true
+    }
+
     private fun applyMode(context: Context, settings: Settings, mode: String, source: String) {
         settings.lastCommandSource = source
         // Any pending "off for N hours" auto-resume is moot the moment the mode is set
