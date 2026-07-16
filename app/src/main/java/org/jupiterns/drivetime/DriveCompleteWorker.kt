@@ -12,9 +12,9 @@ import kotlin.math.abs
 
 /**
  * The "drive completed — tag it" notification (NOTIFICATIONS.md P3a), native-armed and
- * SPA-informed. Armed at drive end ([LocationService] drive-end branch) with a 16-minute
- * delay — deliberately past the 15-minute gas-gap window, so a fuel stop's first leg never
- * prompts mid-chain (re-entering DRIVING cancels the pending work and the final leg re-arms).
+ * SPA-informed. Armed at drive end ([LocationService] drive-end branch) with a [DELAY_MIN]
+ * delay, so a stop that is only a pause in a longer journey never prompts mid-chain
+ * (re-entering DRIVING cancels the pending work and the final leg re-arms).
  *
  * At fire time the SPA's last pending-attention push decides what to say:
  *  - SPA ticked after the drive ended and still lists it → post with the SPA's label
@@ -98,9 +98,25 @@ class DriveCompleteWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, 
 
     companion object {
         private const val WORK = "drivetime-drive-complete"
-        /** One minute past the 15-min gas-gap window: a stop short enough to be a gas-stop
-         *  split re-enters DRIVING (cancelling this) before the prompt can fire. */
-        private const val DELAY_MIN = 16L
+        /**
+         * How long after a drive seals before the prompt fires — the only thing standing
+         * between "your drive is ready to tag" and a driver who is still on the journey.
+         * A drive seals on a **5-minute park** (`DriveDetector`'s `STOP_MS`), so every fuel
+         * stop, errand, drop-off and lunch break ends one, whether or not the driver thinks
+         * they have finished.
+         *
+         * It was 16 min — one minute past the 15-min gas-gap window, the shortest value that
+         * keeps a fuel stop's first leg from prompting mid-chain. That cleared the gas stop
+         * and nothing else: a 20-minute errand still fired while the car sat outside the
+         * shop, so the prompt buzzed, and was then still sitting in the shade, as the driver
+         * pulled away. 30 min clears the gas-gap window by a wide margin (the old invariant
+         * holds a fortiori) and now covers the ordinary mid-journey stop too — anything
+         * shorter re-enters DRIVING, cancels the pending work, and the journey's final leg
+         * re-arms.
+         *
+         * Raising it is cheap. Below 16 silently resurrects the gas-stop bug.
+         */
+        private const val DELAY_MIN = 30L
         private const val KEY_START_MS = "start_ms"
         private const val KEY_END_MS = "end_ms"
         private const val KEY_METERS = "meters"

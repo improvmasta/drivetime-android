@@ -1,5 +1,7 @@
 package org.jupiterns.drivetime
 
+import android.location.Location
+
 /**
  * Decides whether we're **driving** from a *layered* set of signals — never tied
  * to one trigger, and deliberately *not* using Android activity-recognition
@@ -13,22 +15,32 @@ package org.jupiterns.drivetime
  *   4. **Sustained / high GPS speed** — the backstop when there's no connection
  *      signal (a car with no BT pairing and no dongle).
  *
- * Connection signals (2,3) hold DRIVING through a dead stop (a red light, a pump), so a stop
- * never drops the tier — but that hold is BOUNDED by [parked]. It has to be: an OBD-II port is
- * permanently powered and a car head unit can sit on accessory power, so both stay *connected*
- * with the ignition off. An unbounded hold therefore pinned DRIVING for as long as the phone
- * sat in a parking lot, which burned battery, invented phantom drives out of parked GPS drift,
- * and had the app insisting you were driving when you were sitting still. Connection signals
- * are for *starting fast*, not for deciding you never stopped.
+ * **Presence is evidence; absence is not.** That asymmetry is the rule the whole file turns on.
+ * A connection signal proves you are in the car, so it may *hold* a drive open — but only until
+ * [parked], because an OBD-II port is permanently powered and a head unit can sit on accessory
+ * power, so both stay *connected* with the ignition off. An unbounded hold pinned DRIVING for as
+ * long as the phone sat in a parking lot: dense GPS forever, phantom drives out of parked drift,
+ * and an app insisting you were driving while you sat still. Connection signals are for *starting
+ * fast*, not for deciding you never stopped. Equally, a signal going *away* proves nothing —
+ * Bluetooth drops mid-drive all the time — so nothing here ever ends a drive because a signal
+ * vanished. **Only affirmative evidence ends a drive**, and there are exactly two kinds:
+ *
+ *   - **[parked] by dwell** — the vehicle demonstrably has not gone anywhere. Positional, and
+ *     that is not a detail: see the note on [PARK_ANCHOR_M].
+ *   - **[parked] by egress** — you demonstrably got out and walked away ([confirmEgress]).
+ *
+ * Either ends the drive; neither is required; the absence of both is not evidence of driving.
  *
  * Three things are kept deliberately separate here, because collapsing them is what caused
- * that bug:
+ * the parked-car-pins-DRIVING bug:
  *   - [isMoving] — are the wheels turning right now? The honest live state; what the UI shows.
  *   - [tier]     — how fast to sample. Stays DRIVING through a stop, until [parked].
  *   - the drive session (LocationService.markDriveStart) — ends when the tier leaves DRIVING.
  *
- * The detector owns no Android objects and no threads — callers feed it signal
- * updates and read [tier]; LocationService maps the tier to a sampling rate.
+ * The detector owns no Android objects and no threads — callers feed it fixes via [onFix] and
+ * read [tier]; LocationService maps the tier to a sampling rate. (It does call the framework's
+ * static geodesy, [Location.distanceBetween], which is why its tests run under Robolectric —
+ * the same reason [DriveEndProcessor]'s do.)
  */
 class DriveDetector(private val settings: Settings) {
 
@@ -59,41 +71,62 @@ class DriveDetector(private val settings: Settings) {
     @Volatile private var stoppedAt = 0L
     val stoppedSince: Long get() = stoppedAt
 
-    /** Stationary for a full [STOP_MS] with the engine not turning. This is the bound on the
-     *  connection signals — the thing that lets a parked car actually end the drive even though
-     *  the dongle/head unit is still connected. Cleared by the first moving fix, so re-promotion
-     *  is instant: the connection signal never dropped, so there is nothing to re-acquire. */
+    /** The vehicle has stopped — by dwell or by egress. This is the bound on the connection
+     *  signals, and the thing that clears every driving latch below. */
     @Volatile private var parked = false
     val isParked: Boolean get() = parked
 
+    /** Egress confirmed: you are on foot, so whatever the speed latches still believe, the drive
+     *  is over. Cleared by [VEHICLE_MPS] — a fix that fast is a vehicle, not a walk, so you are
+     *  demonstrably back in the car. */
+    @Volatile private var onFoot = false
+
     /** Set by the motion-onset confirmer in LocationService (significant-motion wake →
      *  instant GPS Doppler + a short accelerometer check). The fast, device-agnostic
-     *  start signal that works in ANY car — see [confirmOnset]. Cleared on a sustained
-     *  stop by [onSpeed], independent of the speed backstop's own toggle. */
+     *  start signal that works in ANY car — see [confirmOnset]. Cleared by [parked],
+     *  independent of the speed backstop's own toggle. */
     @Volatile var motionDriving = false
 
     /** Set by LocationService when the process restarts in the *middle* of a drive (app
      *  update, OEM kill): the persisted drive start survived but the in-memory driving
      *  signals ([speedDriving] etc.) did not, so the cold detector would resolve LIGHT and
      *  end the drive — resetting its live clock and miles — before the first speed fix lands.
-     *  This latch holds DRIVING across that cold start and clears on the same sustained stop
-     *  as the speed/motion latches, so a drive that truly ended still ends. Independent of the
-     *  speed-backstop toggle, mirroring [motionDriving]. */
+     *  This latch holds DRIVING across that cold start and clears on [parked], so a drive that
+     *  truly ended still ends. Independent of the speed-backstop toggle, mirroring
+     *  [motionDriving]. */
     @Volatile var resumeDriving = false
 
     // Speed-backstop state (hysteresis). NO_TS = "window not started" — a distinct
     // sentinel rather than 0L, so a sample stamped at t=0 still accumulates the window.
     @Volatile private var speedDriving = false
     private var fastSince = NO_TS
-    private var slowSince = NO_TS
-    private var motionSlowSince = NO_TS   // sustained-stop timer for the motion latch
-    private var resumeSlowSince = NO_TS   // sustained-stop timer for the resume latch
     private var stillSince = NO_TS        // debounce timer for the signal light
-    private var parkedSince = NO_TS       // sustained-stop timer for [parked]
-    private var stationarySince = NO_TS   // wheels-still timer; engineRunning cannot reset it
 
-    /** Feed a GPS speed sample (m/s) to drive the speed backstop. */
-    fun onSpeed(mps: Float, now: Long) {
+    // Positional dwell state: the tight jitter-proof anchor and the wider drift anchor.
+    private var anchorLat = 0.0
+    private var anchorLon = 0.0
+    private var anchorSince = NO_TS
+    private var driftLat = 0.0
+    private var driftLon = 0.0
+    private var driftSince = NO_TS
+
+    // Egress candidacy: the cheap conjuncts, and where/when they started holding.
+    private var egressLat = 0.0
+    private var egressLon = 0.0
+    private var egressSince = NO_TS
+
+    /** The cheap egress conjuncts have held for [EGRESS_MS] — worth spending an accelerometer
+     *  sample to settle it. LocationService polls this and calls [confirmEgress]; it is a
+     *  *candidacy*, never a decision. */
+    @Volatile private var egressReady = false
+    val egressPending: Boolean get() = egressReady
+
+    /**
+     * Feed a GPS fix. **Position matters as much as speed here**, which is the whole point of
+     * this signature: the old `onSpeed(mps, now)` could only ever ask "is the Doppler low?", and
+     * that question cannot tell a 3 mph walk from a 3 mph crawl.
+     */
+    fun onFix(lat: Double, lon: Double, mps: Float, now: Long) {
         val stopped = mps < EXIT_MPS
 
         // The drive's signal light. It goes green on the first moving fix — no debounce, pulling
@@ -106,72 +139,170 @@ class DriveDetector(private val settings: Settings) {
             if (now - stillSince >= MOVING_OFF_MS) moving = false
         }
 
-        // How long the wheels have been still, regardless of what the dongle claims. Nothing but
-        // motion resets it — that is the whole point: it is the one stationary clock the OBD
-        // signal cannot touch.
-        if (stopped) { if (stationarySince == NO_TS) stationarySince = now } else stationarySince = NO_TS
+        val dwell = updateDwell(lat, lon, mps, stopped, now)
+        updateEgressCandidacy(lat, lon, mps, now)
+        // A fix at unambiguously vehicular speed says you are back in the car, whatever the
+        // accelerometer concluded a minute ago.
+        if (mps >= VEHICLE_MPS) onFoot = false
 
-        // Parked: stationary for a full sustained stop with the engine not turning. Any moving
-        // fix clears it outright — you are demonstrably not parked — so pulling away out of a
-        // gas station re-promotes on the very next fix without waiting on any timer.
-        if (stopped && !engineRunning) {
-            if (parkedSince == NO_TS) parkedSince = now
-            if (now - parkedSince >= STOP_MS) parked = true
-        } else { parkedSince = NO_TS; parked = false }
+        // The one stop rule. The engine may *extend* the dwell we tolerate — idling is genuinely
+        // not parked, which is what makes a drive-through or a long light read as one drive — but
+        // it may not abolish it, so the bar it raises is a ceiling and not a veto. However long
+        // the dongle insists the engine is turning, a car that has not moved for half an hour is
+        // parked. Egress bypasses both bars: if you are on foot, the car is not going anywhere
+        // regardless of what any of this says.
+        val bar = if (engineRunning) ENGINE_HOLD_MAX_MS else STOP_MS
+        parked = onFoot || dwell >= bar
 
-        // The bound on [engineRunning], and the reason it is a bound rather than a veto.
-        //
-        // An idling engine is genuinely not parked, so rpm > 0 has to be able to hold the latch
-        // off — that is what makes a drive-through or a long light read correctly. But the dongle
-        // is the *least* reliable signal this app has: an OBD-II port stays powered with the
-        // ignition off, and a cheap ELM327 clone will happily keep serving a stale nonzero rpm
-        // frame to a socket that is still open. Given the veto above, one such frame every five
-        // minutes is enough to reset [parkedSince] forever — so the car never parks, the tier
-        // never leaves DRIVING, and the OBD loop (which exits on `!isParked`) never lets go
-        // either. That is a closed loop with no exit: dense GPS and a phantom drive in a parking
-        // lot, for as long as the socket lives. It is the exact bug [parked] was introduced to
-        // kill, reopened through an rpm-shaped hole.
-        //
-        // So the engine may *extend* the stop we tolerate — 5 minutes becomes 30 — but it may not
-        // abolish it. However long the dongle insists the engine is turning, a car that has not
-        // moved for half an hour is parked. GPS is the authority on whether the wheels turned;
-        // OBD only ever gets to add to what GPS already knows.
-        if (stopped && now - stationarySince >= ENGINE_HOLD_MAX_MS) parked = true
-
-        // The motion-onset latch clears after the same sustained stop (STOP_MS) as the
-        // speed backstop, but independent of driveBySpeed — the onset path has its own
-        // master switch, so a user who turned off the speed backstop still gets a clean
-        // end to a motion-detected drive.
-        if (motionDriving) {
-            if (mps < EXIT_MPS) {
-                if (motionSlowSince == NO_TS) motionSlowSince = now
-                if (now - motionSlowSince >= STOP_MS) { motionDriving = false; motionSlowSince = NO_TS }
-            } else motionSlowSince = NO_TS
+        // Parked clears every driving latch. This is the ONE sustained-stop rule in the file —
+        // the speed, motion and resume latches used to carry three near-identical copies of it,
+        // each keyed on `mps < EXIT_MPS`, and every one of them was defeated by the same thing: a
+        // walk registers as speed, so it reset all three timers at once and the drive never ended.
+        if (parked) {
+            speedDriving = false
+            motionDriving = false
+            resumeDriving = false
+            fastSince = NO_TS
         }
-        // The resume latch ends the same way — a sustained stop — so a drive resumed across a
-        // mid-drive restart that has actually finished (you parked during the update) still
-        // ends cleanly, independent of driveBySpeed.
-        if (resumeDriving) {
-            if (mps < EXIT_MPS) {
-                if (resumeSlowSince == NO_TS) resumeSlowSince = now
-                if (now - resumeSlowSince >= STOP_MS) { resumeDriving = false; resumeSlowSince = NO_TS }
-            } else resumeSlowSince = NO_TS
-        }
-        if (!settings.driveBySpeed) { speedDriving = false; fastSince = NO_TS; slowSince = NO_TS; return }
+
+        if (!settings.driveBySpeed) { speedDriving = false; fastSince = NO_TS; return }
+        // Deliberately after the clear above, so a genuinely fast fix re-latches in the same call
+        // and pulling out of a parking space needs no timer to wait out.
         when {
-            mps >= ENTER_FAST_MPS -> { speedDriving = true; fastSince = NO_TS; slowSince = NO_TS }  // unambiguous
+            mps >= ENTER_FAST_MPS -> { speedDriving = true; fastSince = NO_TS }  // unambiguous
             mps >= ENTER_MPS -> {                 // moderate speed: confirm it's sustained
-                slowSince = NO_TS
                 if (fastSince == NO_TS) fastSince = now
                 if (now - fastSince >= ENTER_MS) speedDriving = true
             }
-            mps < EXIT_MPS -> {                   // near-stopped: exit only after a sustained stop
-                fastSince = NO_TS
-                if (slowSince == NO_TS) slowSince = now
-                if (now - slowSince >= STOP_MS) speedDriving = false
-            }
-            else -> { fastSince = NO_TS; slowSince = NO_TS }  // between thresholds: hold current state
+            else -> fastSince = NO_TS             // below the entry bar: only [parked] exits
         }
+    }
+
+    /**
+     * How long (ms) the **vehicle** has demonstrably not gone anywhere — a port of `segment.js`'s
+     * dual positional park detection, and the reason this detector needed position at all.
+     *
+     * `STOP_MS`'s comment has always claimed the live app and the drive log agree on what a stop
+     * is. They shared the five *minutes* and nothing else: `segment.js` asks "have you moved 40 m?"
+     * while this asked "is the Doppler under 2.9 mph?" — and 2.9 mph is *walking pace*. Park at a
+     * shop and walk around inside it and every stop timer here reset on every step, so the tier
+     * never left DRIVING while the segmenter, reading the same fixes positionally, had long since
+     * ended the drive. Two answers to one question, and the phone believed the wrong one.
+     *
+     * Two anchors, because either alone is wrong:
+     *  - **[PARK_ANCHOR_M]** (tight, 40 m, *no* speed condition) — the jitter-proof one, and the
+     *    one that catches a walk: a speed reading cannot block a park it knows nothing about.
+     *  - **[PARK_DRIFT_M]** (wide, 100 m, *requires* stopped speed) — the drift-tolerant one: GPS
+     *    multipath in a parking garage can wander further than 40 m and would otherwise reset the
+     *    tight anchor forever.
+     *
+     * Either dwelling [STOP_MS] is a park, so the dwell is the **max** of the two.
+     *
+     * Unlike `segment.js`, which smooths its positions first, this reads raw fixes — it has no
+     * lookahead to smooth with. The tight anchor absorbs ordinary jitter (~5–10 m) and the drift
+     * anchor absorbs the rest.
+     */
+    private fun updateDwell(lat: Double, lon: Double, mps: Float, stopped: Boolean, now: Long): Long {
+        // Proof the vehicle is moving resets both anchors outright, rather than waiting to
+        // accumulate 40 m of displacement — so pulling away re-promotes on the very next fix.
+        // Two things count as proof, and the second one is not optional:
+        //
+        //  - **Unambiguously vehicular speed** ([VEHICLE_MPS]). Below it, only *displacement*
+        //    counts, which is exactly what a walk cannot produce and a crawl in traffic can:
+        //    3 mph for five minutes is 400 m of road, and 40 m of shop floor.
+        //  - **Any motion at all while something that only exists inside a car says you are in
+        //    one.** Without this the dwell is a trap: park overnight and it is EIGHT HOURS old,
+        //    so the next morning's gentle pull-out is still "parked" until it clears 40 m or
+        //    9 mph — and `parked` clears the driving latches, so it would undo the very start
+        //    that had just been detected and drop the first quarter-mile back to LIGHT. A car
+        //    that is *stopped* still parks on schedule (a lying dongle and a head unit on
+        //    accessory power are both stationary, which is what bounds them); this only says a
+        //    car that is *rolling* is not parked, whatever a stale clock believes.
+        val inCarAndRolling = !stopped && (carConnected || engineRunning)
+        if (mps >= VEHICLE_MPS || inCarAndRolling) {
+            anchorLat = lat; anchorLon = lon; anchorSince = now
+            driftLat = lat; driftLon = lon; driftSince = now
+            return 0L
+        }
+        if (anchorSince == NO_TS || metersBetween(anchorLat, anchorLon, lat, lon) > PARK_ANCHOR_M) {
+            anchorLat = lat; anchorLon = lon; anchorSince = now
+        }
+        if (driftSince == NO_TS || !stopped ||
+            metersBetween(driftLat, driftLon, lat, lon) > PARK_DRIFT_M
+        ) {
+            driftLat = lat; driftLon = lon; driftSince = now
+        }
+        return maxOf(now - anchorSince, now - driftSince)
+    }
+
+    /**
+     * The three *cheap* egress conjuncts, tracked per fix. All must hold continuously for
+     * [EGRESS_MS] before [confirmEgress] is worth an accelerometer sample:
+     *
+     *  1. **on-foot speed band** — fast enough that the dwell rule above is being defeated
+     *     ([EXIT_MPS]), slow enough not to be a vehicle ([VEHICLE_MPS]).
+     *  2. **no car connection** — this is where Bluetooth earns its keep, and note that it is
+     *     doing the *opposite* of "Bluetooth wins": BT never ends a drive, it only *vetoes* the
+     *     end. Its ~10 m range is the feature — walk into a shop and it drops, but stand at the
+     *     pump and it holds, so a fuel stop can't be mistaken for egress. `engineRunning` vetoes
+     *     for the same reason and is honest where `obdConnected` is not (the port stays powered
+     *     with the ignition off, so a *connected* dongle proves nothing and is not consulted).
+     *  3. **no vehicle-scale displacement** — you are milling about, not being carried. This is
+     *     the conjunct that kills the false positive that matters: a phone loose in a cupholder in
+     *     stop-and-go traffic on a rough road can satisfy 1, 2 *and* the accelerometer, but it is
+     *     still advancing down the road. In [EGRESS_MS] a jam covers hundreds of metres; a shop
+     *     floor covers none.
+     *
+     * Known gap, accepted: walking away from the car *in a straight line* keeps relocating past
+     * [EGRESS_MOVE_M], so it never confirms, and the tight dwell anchor keeps resetting too. That
+     * walk rides on the end of the drive until you arrive somewhere and stand still, and then the
+     * dwell rule ends it [STOP_MS] later. It costs a drive that is long by a few hundred metres
+     * — visible, fixable with a split, and much rarer than the shop case, which is why it buys
+     * nothing to chase it with a looser rule that would start ending real drives in traffic.
+     */
+    private fun updateEgressCandidacy(lat: Double, lon: Double, mps: Float, now: Long) {
+        val onFootBand = mps >= EXIT_MPS && mps < VEHICLE_MPS
+        if (!onFootBand || carConnected || engineRunning) {
+            egressSince = NO_TS
+            egressReady = false
+            return
+        }
+        if (egressSince == NO_TS || metersBetween(egressLat, egressLon, lat, lon) > EGRESS_MOVE_M) {
+            egressLat = lat; egressLon = lon; egressSince = now
+        }
+        egressReady = now - egressSince >= EGRESS_MS
+    }
+
+    /**
+     * The mirror of [confirmOnset], and the question this detector never used to ask.
+     *
+     * `confirmOnset` already knew how to tell a walk from a car at an ambiguous ground speed — a
+     * car crawling out of a driveway is *smooth* (low accel RMS) while a body on foot is *bouncy*
+     * (high) — but it only ever asked on the way *in*. Nothing asked on the way out, so a drive
+     * that ended in a shop car park stayed "driving" for as long as its owner kept walking around.
+     * Same physics, same tuned threshold ([Settings.onsetAccelRms]), opposite end of the drive.
+     *
+     * Called by LocationService only while [egressPending], so by the time we get here the three
+     * cheap conjuncts have already held for [EGRESS_MS]; the accelerometer is the fourth and last.
+     * Returns whether egress was confirmed.
+     */
+    fun confirmEgress(accelRmsMs2: Float?, now: Long): Boolean {
+        // A user knob may not silently disable a *correctness* rule, so this only ever gates the
+        // fast path: 0 means "no on-foot discriminator" (see ControlParse.BOUNDS), which here has
+        // to mean "can't confirm", never "confirm anything". The dwell rule still ends the drive.
+        if (settings.onsetAccelRms <= 0) return false
+        if (!egressReady) return false                    // conditions lapsed while we sampled
+        val rms = accelRmsMs2 ?: return false             // no accelerometer ⇒ dwell is the only path
+        if (rms < settings.onsetAccelRms / 100f) return false  // smooth ⇒ still in a vehicle
+        onFoot = true
+        parked = true
+        speedDriving = false
+        motionDriving = false
+        resumeDriving = false
+        fastSince = NO_TS
+        egressSince = NO_TS
+        egressReady = false
+        return true
     }
 
     /** Resolve the desired tier from the override + signals. */
@@ -180,8 +311,8 @@ class DriveDetector(private val settings: Settings) {
         Settings.MODE_DRIVING -> Tier.DRIVING
         Settings.MODE_LIGHT -> Tier.LIGHT
         // The connection signals hold the tier through a stop, but only until [parked] — see the
-        // class doc. The speed/motion/resume latches carry their own sustained-stop timers, so
-        // they need no gate here.
+        // class doc. The speed/motion/resume latches are cleared by [parked] directly, so they
+        // need no gate here.
         else -> if (((carConnected || obdConnected) && !parked) || motionDriving || speedDriving || resumeDriving)
             Tier.DRIVING else Tier.LIGHT
     }
@@ -219,8 +350,24 @@ class DriveDetector(private val settings: Settings) {
             v >= ONSET_MIN_MPS -> (accelRmsMs2 ?: 0f) < settings.onsetAccelRms / 100f  // smooth ⇒ vehicle
             else -> false                                                        // not moving yet
         }
-        if (confirmed) { motionDriving = true; motionSlowSince = NO_TS }
+        // Confirming is an affirmative statement that the vehicle is moving, so it must reset the
+        // dwell as surely as a vehicular fix does — otherwise the stale clock from the park this
+        // wake just ended would read as [parked] on the very next fix and clear [motionDriving]
+        // again. Dropping the anchors (rather than stamping them here) lets the next fix re-anchor
+        // at a real position: this confirmer has a Doppler speed but no coordinates.
+        if (confirmed) {
+            motionDriving = true
+            onFoot = false
+            anchorSince = NO_TS
+            driftSince = NO_TS
+        }
         return confirmed
+    }
+
+    private fun metersBetween(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Float {
+        val out = FloatArray(1)
+        Location.distanceBetween(lat1, lon1, lat2, lon2, out)
+        return out[0]
     }
 
     companion object {
@@ -230,17 +377,49 @@ class DriveDetector(private val settings: Settings) {
         private const val EXIT_MPS = 1.3f         // ~3 mph: near-stopped
         private const val ENTER_MS = 20_000L      // sustained-moderate-speed window to enter
 
-        /** ONE definition of "a sustained stop", used by every latch and by [parked]: five
-         *  minutes stationary. It is the same five minutes `segment.js`/`detail.py` call a park
-         *  (a 5-minute dwell ends a drive), so the live app, the drive log and the phone's own
-         *  segmentation all agree on what a stop is instead of each having its own opinion. */
+        /**
+         * Unambiguously vehicular ground speed (~9 mph): above a run, below any crawl worth
+         * calling traffic. A fix this fast resets the dwell anchors and clears [onFoot].
+         *
+         * A **constant**, though [Settings.onsetSpeedMps] means the same thing and carries the
+         * same default — deliberately, and this is the one place the two must not be shared.
+         * That setting clamps to `1..100` (see `ControlParse.BOUNDS`), and at 1 m/s a *walk*
+         * would read as vehicular, reset the anchors on every step, and reopen the exact bug the
+         * positional dwell exists to close. A tuning knob may not silently disable a correctness
+         * rule; it may only ever make a *fast path* fire less often. Same reasoning as the
+         * `onsetAccelRms <= 0` guard in [confirmEgress].
+         */
+        private const val VEHICLE_MPS = 4.0f
+
+        /** ONE definition of "a sustained stop", used by [parked] and therefore by every latch:
+         *  five minutes. It is the same five minutes `segment.js`/`detail.py` call a park, and —
+         *  now that [updateDwell] measures it the same *way* they do — the live app, the drive log
+         *  and the phone's own segmentation finally agree on what a stop is, rather than sharing a
+         *  number while asking different questions. */
         private const val STOP_MS = 300_000L
+
+        /** Park anchors, ported from `segment.js` (`PARK_ANCHOR_M` / `PARK_DRIFT_M`) — keep them
+         *  in lockstep, or the drive you watched will not be the drive you get. See [updateDwell]. */
+        private const val PARK_ANCHOR_M = 40.0f
+        private const val PARK_DRIFT_M = 100.0f
 
         /** The ceiling on how long [engineRunning] may hold off [parked]. Half an hour of not
          *  moving an inch is a parked car whatever the dongle says — long enough that a real
          *  drive-through, a warm-up or a bad jam still reads as one drive, short enough that a
          *  lying dongle costs half an hour of dense GPS rather than a whole afternoon. */
         private const val ENGINE_HOLD_MAX_MS = 1_800_000L
+
+        /** How long the cheap egress conjuncts must hold before an accelerometer sample is worth
+         *  taking. 90 s rather than 60: the cost of being wrong is a drive split in two (a merge
+         *  — the gas-stop prompt already offers it), and the cost of being slow is 30 extra
+         *  seconds of dense GPS, so the trade is cheap in one direction and annoying in the
+         *  other. Still ~3× faster than waiting out [STOP_MS]. */
+        private const val EGRESS_MS = 90_000L
+
+        /** How far you may relocate inside the egress window and still be "on foot near the car".
+         *  Sized off the tight park anchor: at walking pace this is ~30 s of travel, so milling
+         *  about a shop stays inside it while anything being *carried by a vehicle* leaves it. */
+        private const val EGRESS_MOVE_M = 40.0f
 
         /** How long stationary before the light goes red. This only *labels* — it ends nothing —
          *  so it is deliberately short: long enough that GPS noise and a crawling queue can't

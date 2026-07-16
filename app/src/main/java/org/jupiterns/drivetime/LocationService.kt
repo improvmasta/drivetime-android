@@ -101,6 +101,10 @@ class LocationService : Service() {
     @Volatile private var onsetProbationUntil = 0L
     @Volatile private var onsetTokenSource: CancellationTokenSource? = null
 
+    // Motion-egress (the same accelerometer, at the other end of the drive): one accel sample at
+    // a time while [maybeConfirmEgress] settles whether the driver got out and walked away.
+    @Volatile private var egressSampling = false
+
     /**
      * ## Tier state — confined to the [reconciler] thread
      *
@@ -504,7 +508,13 @@ class LocationService : Service() {
         // but throttled. The max of the two is the honest distance either way.
         val meters = maxOf(LiveState.driveMeters, settings.driveMeters.toDouble())
         if (!DriveEndProcessor.isRealDrive(meters, now - startedAtMs)) return
-        if (settings.notifyDriveComplete) {
+        // TWO prompts ride that one wake-up — "tag this drive" and the route-default backlog
+        // ("apply your usual tags") — so this gate and the worker's own bail-out are two halves
+        // of one decision and must agree. Gating on `notifyDriveComplete` alone (which this did,
+        // from when the worker had only one prompt to post) never scheduled the wake-up for
+        // someone who wanted the backlog prompt *without* the per-drive nag — so the worker's
+        // careful two-prompt bail-out could never run, and `apply_usual` was dead code.
+        if (settings.notifyDriveComplete || settings.notifyApplyUsual) {
             DriveCompleteWorker.schedule(this, startedAtMs, now, meters)
         }
         // This drive as a Leg — null if we never got a fix at one end or the other, in which case
@@ -668,7 +678,8 @@ class LocationService : Service() {
 
         val speed = if (loc.hasSpeed()) loc.speed else 0f
         movingHint = speed >= MOVING_MPS
-        detector.onSpeed(speed, now)
+        detector.onFix(loc.latitude, loc.longitude, speed, now)
+        maybeConfirmEgress()
         // The drive's signal light — green moving, red stopped — plus when the stop began, so
         // the card and the HUD can both count it up. A drive sitting at a pump says so.
         LiveState.moving = detector.isMoving
@@ -927,6 +938,42 @@ class LocationService : Service() {
                     LiveState.onsetState = "idle"
                     requestUpdates(settings.lightIntervalSec * 1000L, Priority.PRIORITY_BALANCED_POWER_ACCURACY)
                     armMotionOnset()
+                }
+            }
+        }
+    }
+
+    /**
+     * The mirror of [onMotionTrigger], at the other end of the drive: [DriveDetector] says the
+     * cheap egress conjuncts have held long enough to be worth an accelerometer sample, so take
+     * one and let [DriveDetector.confirmEgress] settle whether we are on foot.
+     *
+     * Cheap by construction. This is a *confirmation*, not a poll — the detector only raises
+     * `egressPending` after 90 s of on-foot-band speed with no car connection and no vehicle-scale
+     * displacement, a combination a real drive essentially never produces, so the sensor stays
+     * dark on every normal drive. Exactly how significant-motion gates the sample on the way in.
+     *
+     * [egressSampling] is the same one-at-a-time latch [onsetProbing] is, for the same reason:
+     * fixes arrive at ~1 Hz and the sample takes 3 s, so without it every fix in the window would
+     * launch its own coroutine and they would fight over [accelListener]. (The onset probe can't
+     * collide with this one — it only runs in LIGHT, and this only runs in DRIVING.)
+     */
+    private fun maybeConfirmEgress() {
+        reconciler.requireOwnThread("maybeConfirmEgress")
+        if (egressSampling || !detector.egressPending) return
+        if (currentTier != DriveDetector.Tier.DRIVING) return
+        egressSampling = true
+        scope.launch {
+            // Off-thread for the same reason the onset probe is: a 3 s sensor window on the
+            // reconciler thread would stall every fix behind it.
+            val accel = sampleAccelRms()
+            val confirmed = detector.confirmEgress(accel, Clock.now())
+            reconciler.submit(TierReconciler.Trigger.MOTION) {
+                egressSampling = false
+                if (confirmed) {
+                    EventLog.info("Drive ended (egress — on foot, car BT down)")
+                    reevaluate()
+                    StateBroadcaster.emit(this@LocationService, "egress")
                 }
             }
         }

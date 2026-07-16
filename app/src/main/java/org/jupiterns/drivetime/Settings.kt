@@ -338,7 +338,7 @@ class Settings(context: Context) {
     // ---- event notifications (NOTIFICATIONS.md P3) — decision prompts, all default OFF ----
 
     /** Post a system notification when a drive seals still untagged ("drive completed —
-     *  tag it"). Fires 16 min after drive end via [DriveCompleteWorker]. */
+     *  tag it"). Fires 30 min after drive end via [DriveCompleteWorker]. */
     var notifyDriveComplete: Boolean
         get() = prefs.getBoolean("notify_drive_complete", false)
         set(v) = prefs.edit().putBoolean("notify_drive_complete", v).apply()

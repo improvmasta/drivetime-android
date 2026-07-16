@@ -40,21 +40,48 @@ off; when they held DRIVING unconditionally, a parked car pinned the dense tier 
 GPS in a parking lot, phantom drives out of GPS drift, and an app insisting you were driving while
 you sat still). Connection signals are for *starting fast*, not for deciding you never stopped.
 
+**Presence is evidence; absence is not** — the rule the cascade turns on. A connection signal
+proves you are in the car, so it may *hold* a drive open (bounded, above); a signal going *away*
+proves nothing, because Bluetooth drops mid-drive all the time, so **nothing ends a drive because a
+signal vanished**. Only affirmative evidence ends one, and there are two kinds: `parked` **by
+dwell** (the vehicle demonstrably has not gone anywhere) and `parked` **by egress** (you
+demonstrably got out and walked away). Either ends it; neither is required.
+
+**The dwell is POSITIONAL, and that is not a detail.** It is a port of `segment.js`'s dual anchors
+— a tight jitter-proof 40 m (`PARK_ANCHOR_M`, *no* speed condition) plus a wider 100 m drift anchor
+that *does* require stopped speed, either dwelling 5 min. It used to be four near-identical
+`mps < EXIT_MPS` timers, and `EXIT_MPS` is 1.3 m/s — **walking pace**. Park at a shop and walk
+around inside and every one of those timers reset on every step, so the tier never left DRIVING
+while the segmenter, reading the same fixes positionally, had long since ended the drive. The docs
+claimed the two agreed; they shared the five *minutes* and nothing else. A speed reading cannot
+block a park it knows nothing about.
+
+**Egress is `confirmOnset` asked at the other end** (`confirmEgress`). The app always knew how to
+tell a walk from a crawl — a car is *smooth* (low accel RMS), a body on foot is *bouncy* — but only
+ever asked on the way in. Four conjuncts, all required, ~90 s: on-foot speed band + no car BT + no
+`engineRunning` + no vehicle-scale displacement, then one accelerometer sample settles it. The
+conjunction is the safety: no single flaky signal can end a real drive. Note what BT is doing —
+never ending a drive, only *vetoing* the end — and its ~10 m range is the feature (walk into a shop
+and it drops; stand at the pump and it holds). `obdConnected` is deliberately **not** consulted;
+`engineRunning` is the honest half. Known gap: walking away *in a straight line* keeps relocating,
+so it rides on the end of the drive until you stand still and the dwell rule ends it.
+
 Three things the detector keeps deliberately separate — collapsing them is what caused that bug:
 **`isMoving`** (are the wheels turning right now — the drive's green/red signal light, what the UI
 shows), **`tier`** (how fast to sample; holds through a red light, ends at `parked`), and the
 **drive session** (`markDriveStart`, which still ends when the tier leaves DRIVING). `STOP_MS` is
-one 5-minute constant for every latch, the same 5 minutes `segment.js` calls a park, so the live
-app, the drive log and segmentation agree on what a stop is. A plausible OBD rpm (`engineRunning`,
+one 5-minute constant, the same 5 minutes `segment.js` calls a park — and now that the dwell
+measures it the same *way*, the live app, the drive log and segmentation genuinely agree on what a
+stop is. A plausible OBD rpm (`engineRunning`,
 `ObdSession.engineRunning` — a band, **not** `rpm > 0`, which a garbled frame satisfies) is the only
 thing that extends the hold: idling with the engine on is not parked. **That extension is itself
 bounded** (`ENGINE_HOLD_MAX_MS`, 30 min), and the bound is the point — OBD is *additive*, never
 authoritative. An OBD-II port stays powered with the ignition off, so a cheap clone keeps its socket
 and can keep serving a stale nonzero rpm; unbounded, one such frame every five minutes resets
-`parkedSince` forever, so the car never parks, the tier never leaves DRIVING, and the OBD loop
+the stop clock forever, so the car never parks, the tier never leaves DRIVING, and the OBD loop
 (which exits on `!isParked`) never lets go either — a closed loop with no exit, which is the very
-bug `parked` was added to kill. The stationary clock behind the ceiling is driven by motion alone,
-so a *flickering* dongle cannot wind it back. GPS decides whether the wheels turned; OBD only ever
+bug `parked` was added to kill. The dwell behind the ceiling is driven by POSITION alone, so a
+*flickering* dongle cannot wind it back — it gets no vote on where the car is. GPS decides whether the wheels turned; OBD only ever
 adds to what GPS already knows. *(The old
 activity-recognition `TripDetector` is retired — its slow-traffic car/bike guess was the unreliable
 part. The code remains, opt-in behind `auto_trip`, and is not armed by default.)*
