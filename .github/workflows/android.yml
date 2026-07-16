@@ -151,6 +151,14 @@ jobs:
             echo "::notice::PLAY_SERVICE_ACCOUNT_JSON is not set — skipping the Play upload."
           fi
 
+      # `tracks` (plural), NOT `track` — the singular is deprecated and warns on every run. They
+      # are mutually exclusive: setting both is a hard error in the action, so this is a swap.
+      #
+      # Get the key name wrong and this does not fail — it ships to PRODUCTION. The action
+      # defaults to `['production']` when it can find neither input, so a typo here is the one
+      # mistake in this file that reaches real users instead of the 100 internal testers. Internal
+      # is the only channel we publish on (see CLAUDE.md → Distribution); if you ever need a
+      # second, this is comma-separated (`tracks: internal,alpha`).
       - name: Upload to Play (internal testing)
         if: steps.play.outputs.ready == 'true'
         uses: r0adkll/upload-google-play@v1
@@ -158,7 +166,7 @@ jobs:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: org.jupiterns.drivetime
           releaseFiles: app/build/outputs/bundle/playRelease/*.aab
-          track: internal
+          tracks: internal
           status: completed
           whatsNewDirectory: distribution/whatsnew
 
