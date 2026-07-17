@@ -32,13 +32,22 @@ object WebFixBuffer {
         label = "Fix buffer",
     )
 
-    /** Append one fix (called for every recorded fix, in both local and server modes). */
+    /**
+     * Append one fix (called for every recorded fix, in both local and server modes).
+     *
+     * [accuracyM] is the fix's own stated horizontal error, and it rides along because it is the
+     * only thing downstream can use to tell travel from noise. It used to be read at the callsite,
+     * handed to the uploader, and dropped here — so the segmenter, which is what actually draws
+     * the map and counts the miles, could not tell a satellite fix from a cell tower a kilometre
+     * away. Absent means "the provider declined to say", not "perfect".
+     */
     fun append(
         context: Context, lat: Double, lon: Double, epochSec: Long,
-        speedMps: Float?, obd: Elm327Client.ObdSample? = null,
+        speedMps: Float?, accuracyM: Float? = null, obd: Elm327Client.ObdSample? = null,
     ) {
         val o = JSONObject().put("ts", epochSec).put("lat", lat).put("lon", lon)
         if (speedMps != null) o.put("speed_mph", (speedMps * 2.2369362f).toDouble())
+        if (accuracyM != null) o.put("acc_m", accuracyM.toDouble())
         if (obd != null) {
             obd.rpm?.let { o.put("rpm", it) }
             obd.engineLoad?.let { o.put("engine_load", it) }

@@ -642,7 +642,9 @@ class LocationService : Service() {
         // bridge; idempotent on `ts`, independent of upload.
         WebFixBuffer.append(
             this, loc.latitude, loc.longitude, loc.time / 1000,
-            if (loc.hasSpeed()) loc.speed else null, obd
+            if (loc.hasSpeed()) loc.speed else null,
+            if (loc.hasAccuracy()) loc.accuracy else null,
+            obd
         )
         LiveState.logging = true
         LiveState.speedMph = if (loc.hasSpeed()) Math.round(loc.speed * 2.2369362f) else null
@@ -676,9 +678,14 @@ class LocationService : Service() {
         // when a full batch has accumulated, or when connectivity returns.
         if (pendingSinceFlush.incrementAndGet() >= BATCH_FIXES) flushNow()
 
-        val speed = if (loc.hasSpeed()) loc.speed else 0f
-        movingHint = speed >= MOVING_MPS
-        detector.onFix(loc.latitude, loc.longitude, speed, now)
+        // `null`, not 0f: a fix with no Doppler does not know its speed, and saying "0" put the
+        // detector in a closed loop it could not get out of — see the note on [DriveDetector.onFix].
+        // Accuracy rides along because the detector needs it to tell a coarse fix's real travel
+        // from its own error.
+        val speed = if (loc.hasSpeed()) loc.speed else null
+        val acc = if (loc.hasAccuracy()) loc.accuracy else null
+        detector.onFix(loc.latitude, loc.longitude, speed, acc, now)
+        movingHint = detector.isMoving
         maybeConfirmEgress()
         // The drive's signal light — green moving, red stopped — plus when the stop began, so
         // the card and the HUD can both count it up. A drive sitting at a pump says so.

@@ -36,28 +36,55 @@ class DriveDetectorTest {
      */
     private class Track(val d: DriveDetector, var lat: Double = 40.0, val lon: Double = -75.0) {
         private var last = Long.MIN_VALUE
-        private companion object { const val M_PER_DEG_LAT = 111_320.0; const val JITTER_MPS = 1.3f }
+        private companion object {
+            const val M_PER_DEG_LAT = 111_320.0
+            const val JITTER_MPS = 1.3f
+            const val GNSS_ACC_M = 5f     // a clean satellite fix
+            const val COARSE_ACC_M = 1200f // what a cell-tower fix reports about itself
+        }
 
         /** A fix at [mps] that actually covers ground at that speed since the previous fix. */
         fun fix(mps: Float, now: Long) {
+            advance(mps, now)
+            d.onFix(lat, lon, mps, GNSS_ACC_M, now)
+        }
+
+        /**
+         * A LIGHT-tier fix: covers ground at [mps], but reports **no Doppler at all** — which is
+         * what ~99.5% of `PRIORITY_BALANCED_POWER_ACCURACY` fixes actually do. The position is
+         * still good ([GNSS_ACC_M]); only the speed is missing. This is the case that used to
+         * arrive claiming 0 mph and strand a real drive in LIGHT.
+         */
+        fun noDoppler(mps: Float, now: Long) {
+            advance(mps, now)
+            d.onFix(lat, lon, null, GNSS_ACC_M, now)
+        }
+
+        /** A coarse fix that teleports [meters] sideways and *says* it might be that far out —
+         *  no Doppler, error bar the size of the jump. A tower handover, not a drive. */
+        fun teleport(meters: Double, now: Long) {
+            last = now
+            d.onFix(lat + meters / M_PER_DEG_LAT, lon, null, COARSE_ACC_M, now)
+        }
+
+        private fun advance(mps: Float, now: Long) {
             if (last != Long.MIN_VALUE && mps >= JITTER_MPS) {
                 lat += mps * ((now - last) / 1000.0) / M_PER_DEG_LAT
             }
             last = now
-            d.onFix(lat, lon, mps, now)
         }
 
         /** A fix at [mps] that covers no ground — parked, or on foot within a few paces. */
         fun inPlace(mps: Float, now: Long) {
             last = now
-            d.onFix(lat, lon, mps, now)
+            d.onFix(lat, lon, mps, GNSS_ACC_M, now)
         }
 
         /** A fix at [mps] displaced [meters] north of the track's start — for drift and for
          *  walking that genuinely relocates. */
         fun offset(mps: Float, meters: Double, now: Long) {
             last = now
-            d.onFix(lat + meters / M_PER_DEG_LAT, lon, mps, now)
+            d.onFix(lat + meters / M_PER_DEG_LAT, lon, mps, GNSS_ACC_M, now)
         }
     }
 
@@ -108,6 +135,59 @@ class DriveDetectorTest {
         d.obdConnected = true
         assertEquals(DriveDetector.Tier.DRIVING, d.tier())
         assertEquals("OBD", d.reason())
+    }
+
+    /**
+     * The bug that lost eleven minutes of a fifteen-minute drive, and the reason [onFix] takes a
+     * nullable speed. The LIGHT tier asks for coarse fixes and coarse fixes carry no Doppler, so
+     * every fix of a real drive arrived saying "0 mph" — nothing could promote, so we stayed in
+     * the tier that asks for coarse fixes, and the drive was logged at 60 s intervals with its
+     * speeds invented from the positions. A car with no BT and no dongle has no other way out.
+     *
+     * 60 s LIGHT sampling at ~16 mph: under [ENTER_FAST_MPS], so it must promote the *sustained*
+     * way, on the ground track alone.
+     */
+    @Test fun noDopplerDrive_promotesFromGroundTrack() {
+        val d = DriveDetector(settings())
+        val t = Track(d)
+        t.noDoppler(7.2f, 0L)                                    // first LIGHT fix: no prior, no track
+        assertEquals(DriveDetector.Tier.LIGHT, d.tier())
+        t.noDoppler(7.2f, 60_000L)                               // ~430 m covered — a sample at last
+        t.noDoppler(7.2f, 120_000L)                              // sustained past ENTER_MS
+        assertEquals(DriveDetector.Tier.DRIVING, d.tier())
+        assertEquals("speed", d.reason())
+    }
+
+    /** A fix with no Doppler is not a fix at 0 mph: a parked phone must still park. */
+    @Test fun noDopplerParked_staysLight() {
+        val d = DriveDetector(settings())
+        val t = Track(d)
+        for (i in 0..10) t.inPlace(0f, i * 60_000L)
+        assertEquals(DriveDetector.Tier.LIGHT, d.tier())
+        assertTrue(d.isParked)
+    }
+
+    /**
+     * The other half of the accuracy gate. A tower handover jumps a kilometre between two 60 s
+     * fixes — ~37 mph of apparent travel, which would promote on ground track alone — but it
+     * arrives stamped with a kilometre of error, so it cannot clear its own error bar. Reading it
+     * as travel is what put a 100 mph spike on a drive through town.
+     */
+    @Test fun coarseTeleport_doesNotPromote() {
+        val d = DriveDetector(settings())
+        val t = Track(d)
+        t.teleport(0.0, 0L)
+        t.teleport(1000.0, 60_000L)     // a kilometre sideways, ±1200 m
+        t.teleport(0.0, 120_000L)       // and back again
+        assertEquals(DriveDetector.Tier.LIGHT, d.tier())
+    }
+
+    /** A walk relocates, but never at vehicle speed — the ground track must not promote it. */
+    @Test fun walkingWithNoDoppler_staysLight() {
+        val d = DriveDetector(settings())
+        val t = Track(d)
+        for (i in 0..6) t.noDoppler(1.4f, i * 60_000L)   // ~3 mph, 84 m/min
+        assertEquals(DriveDetector.Tier.LIGHT, d.tier())
     }
 
     @Test fun highSingleSpeed_promotesImmediately() {

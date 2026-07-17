@@ -102,6 +102,11 @@ class DriveDetector(private val settings: Settings) {
     private var fastSince = NO_TS
     private var stillSince = NO_TS        // debounce timer for the signal light
 
+    // The previous fix, for [groundMps] — the speed the chip didn't give us.
+    private var lastLat = 0.0
+    private var lastLon = 0.0
+    private var lastTs = NO_TS
+
     // Positional dwell state: the tight jitter-proof anchor and the wider drift anchor.
     private var anchorLat = 0.0
     private var anchorLon = 0.0
@@ -125,9 +130,33 @@ class DriveDetector(private val settings: Settings) {
      * Feed a GPS fix. **Position matters as much as speed here**, which is the whole point of
      * this signature: the old `onSpeed(mps, now)` could only ever ask "is the Doppler low?", and
      * that question cannot tell a 3 mph walk from a 3 mph crawl.
+     *
+     * [mps] is **nullable, and the null is the point**. A fix with no Doppler is a fix that does
+     * not know its speed; it is not a fix at 0 mph. Passing 0f for it — which is what the caller
+     * used to do — is a lie that this detector had no way to see through, and it cost whole
+     * drives: the LIGHT tier asks for `PRIORITY_BALANCED_POWER_ACCURACY`, ~99.5% of the fixes it
+     * gets back are wifi/cell-derived and carry no Doppler at all, so every one of them arrived
+     * here claiming to be stationary. The speed backstop below could therefore never fire from
+     * inside LIGHT — and LIGHT is the only tier that needs it, since a car with no BT pairing and
+     * no dongle has nothing else to promote it. A closed loop: coarse fixes say "stopped", so we
+     * stay in the tier that asks for coarse fixes. Drives ran 10+ minutes before an onset probe
+     * happened to catch a fix above [ENTER_FAST_MPS], and the minutes before that were logged at
+     * 60 s intervals with speeds invented from the coarse positions.
+     *
+     * So when the chip has no Doppler we measure the ground track instead ([groundMps]) — the one
+     * signal LIGHT does deliver. That is the same move [updateDwell] already makes at the other
+     * end of the drive, and for the same reason.
      */
-    fun onFix(lat: Double, lon: Double, mps: Float, now: Long) {
-        val stopped = mps < EXIT_MPS
+    fun onFix(lat: Double, lon: Double, mps: Float?, accuracyM: Float?, now: Long) {
+        // Doppler first — it is a measurement. Ground speed is the fallback, never an override.
+        val v = mps ?: groundMps(lat, lon, accuracyM, now)
+        trackLast(lat, lon, now)
+        // Unknown is not moving *and* not stopped, but the dwell has to start somewhere: an
+        // unmeasurable fix must not hold a parked car in DRIVING, so it reads as stopped. This is
+        // the only place a missing speed is allowed to look like zero, and it is safe here because
+        // the dwell that consumes it is positional — it will not park a car that is going
+        // anywhere, whatever this says.
+        val stopped = (v ?: 0f) < EXIT_MPS
 
         // The drive's signal light. It goes green on the first moving fix — no debounce, pulling
         // away is unambiguous — and red a few seconds into a stop, the delay being only enough
@@ -139,11 +168,12 @@ class DriveDetector(private val settings: Settings) {
             if (now - stillSince >= MOVING_OFF_MS) moving = false
         }
 
-        val dwell = updateDwell(lat, lon, mps, stopped, now)
-        updateEgressCandidacy(lat, lon, mps, now)
+        val dwell = updateDwell(lat, lon, v, stopped, now)
+        updateEgressCandidacy(lat, lon, v, now)
         // A fix at unambiguously vehicular speed says you are back in the car, whatever the
-        // accelerometer concluded a minute ago.
-        if (mps >= VEHICLE_MPS) onFoot = false
+        // accelerometer concluded a minute ago. An unmeasurable fix says nothing, so it may not
+        // clear [onFoot]: this is affirmative evidence or it is not evidence.
+        if (v != null && v >= VEHICLE_MPS) onFoot = false
 
         // The one stop rule. The engine may *extend* the dwell we tolerate — idling is genuinely
         // not parked, which is what makes a drive-through or a long light read as one drive — but
@@ -168,14 +198,58 @@ class DriveDetector(private val settings: Settings) {
         if (!settings.driveBySpeed) { speedDriving = false; fastSince = NO_TS; return }
         // Deliberately after the clear above, so a genuinely fast fix re-latches in the same call
         // and pulling out of a parking space needs no timer to wait out.
+        //
+        // `v == null` is "no speed to judge", so it may neither enter nor reset the window — it
+        // simply is not a sample. Resetting `fastSince` on it would be the old bug wearing a new
+        // hat: at 60 s LIGHT sampling an unmeasurable fix between two fast ones would wipe the
+        // window every time and the backstop could never accumulate.
         when {
-            mps >= ENTER_FAST_MPS -> { speedDriving = true; fastSince = NO_TS }  // unambiguous
-            mps >= ENTER_MPS -> {                 // moderate speed: confirm it's sustained
+            v == null -> {}                       // not a sample; leave the window alone
+            v >= ENTER_FAST_MPS -> { speedDriving = true; fastSince = NO_TS }  // unambiguous
+            v >= ENTER_MPS -> {                   // moderate speed: confirm it's sustained
                 if (fastSince == NO_TS) fastSince = now
                 if (now - fastSince >= ENTER_MS) speedDriving = true
             }
             else -> fastSince = NO_TS             // below the entry bar: only [parked] exits
         }
+    }
+
+    /**
+     * Ground speed (m/s) since the previous fix, or **null when the track cannot answer**.
+     *
+     * This is the entry rule's half of the same insight the dwell rule is built on: *a speed
+     * reading cannot block a park it knows nothing about* — and equally, a speed reading cannot
+     * **start** a drive it knows nothing about. LIGHT has no speed readings, so it must read the
+     * ground.
+     *
+     * The accuracy gate is what makes that safe, and it is doing two jobs at once. A coarse fix
+     * is wrong in two ways simultaneously — no Doppler *and* a position that can be a kilometre
+     * out — so a naive displacement/time would promote on cell-tower noise while the phone sat in
+     * a driveway. Requiring the displacement to dwarf the fix's own stated error ([GROUND_SNR])
+     * separates them cleanly, because the two cases are not close:
+     *
+     *  - a real drive at 25 mph covers ~670 m between two 60 s LIGHT fixes, against wifi error of
+     *    tens of metres — an order of magnitude clear, and it promotes.
+     *  - a tower-to-tower jump covers ~2 km and *says so*: it arrives stamped with ~2 km of
+     *    accuracy, so it cannot clear its own error bar and is rejected as the noise it is.
+     *  - a walk covers ~80 m/min and never reaches [ENTER_MPS] however clean the fix.
+     *
+     * That is why `accuracy` had to be plumbed in for this: the field the pipeline used to throw
+     * away is exactly the one that tells a drive from a teleport. With no accuracy reported at
+     * all we assume [NOMINAL_ACC_M] — the honest reading of a fix that declines to say.
+     */
+    private fun groundMps(lat: Double, lon: Double, accuracyM: Float?, now: Long): Float? {
+        if (lastTs == NO_TS) return null
+        val dtS = (now - lastTs) / 1000f
+        if (dtS <= 0f) return null
+        val d = metersBetween(lastLat, lastLon, lat, lon)
+        // Below its own error bar the fix has not said anything: not "stopped", *unknown*.
+        if (d < (accuracyM ?: NOMINAL_ACC_M) * GROUND_SNR) return null
+        return d / dtS
+    }
+
+    private fun trackLast(lat: Double, lon: Double, now: Long) {
+        lastLat = lat; lastLon = lon; lastTs = now
     }
 
     /**
@@ -202,7 +276,7 @@ class DriveDetector(private val settings: Settings) {
      * lookahead to smooth with. The tight anchor absorbs ordinary jitter (~5–10 m) and the drift
      * anchor absorbs the rest.
      */
-    private fun updateDwell(lat: Double, lon: Double, mps: Float, stopped: Boolean, now: Long): Long {
+    private fun updateDwell(lat: Double, lon: Double, mps: Float?, stopped: Boolean, now: Long): Long {
         // Proof the vehicle is moving resets both anchors outright, rather than waiting to
         // accumulate 40 m of displacement — so pulling away re-promotes on the very next fix.
         // Two things count as proof, and the second one is not optional:
@@ -219,7 +293,7 @@ class DriveDetector(private val settings: Settings) {
         //    accessory power are both stationary, which is what bounds them); this only says a
         //    car that is *rolling* is not parked, whatever a stale clock believes.
         val inCarAndRolling = !stopped && (carConnected || engineRunning)
-        if (mps >= VEHICLE_MPS || inCarAndRolling) {
+        if ((mps != null && mps >= VEHICLE_MPS) || inCarAndRolling) {
             anchorLat = lat; anchorLon = lon; anchorSince = now
             driftLat = lat; driftLon = lon; driftSince = now
             return 0L
@@ -260,8 +334,10 @@ class DriveDetector(private val settings: Settings) {
      * — visible, fixable with a split, and much rarer than the shop case, which is why it buys
      * nothing to chase it with a looser rule that would start ending real drives in traffic.
      */
-    private fun updateEgressCandidacy(lat: Double, lon: Double, mps: Float, now: Long) {
-        val onFootBand = mps >= EXIT_MPS && mps < VEHICLE_MPS
+    private fun updateEgressCandidacy(lat: Double, lon: Double, mps: Float?, now: Long) {
+        // No speed, no band — egress is affirmative evidence that you got out and walked away, and
+        // a fix that cannot measure its own speed is not evidence of anything.
+        val onFootBand = mps != null && mps >= EXIT_MPS && mps < VEHICLE_MPS
         if (!onFootBand || carConnected || engineRunning) {
             egressSince = NO_TS
             egressReady = false
@@ -427,6 +503,18 @@ class DriveDetector(private val settings: Settings) {
         private const val MOVING_OFF_MS = 5_000L
 
         private const val NO_TS = Long.MIN_VALUE  // "timer not started" sentinel (0L is a valid now)
+
+        /** How far a fix must have moved, as a multiple of its own stated accuracy, before the
+         *  displacement counts as travel rather than error. 3× is ~the point where a coarse fix's
+         *  error can no longer manufacture the distance: it lets a 60 s LIGHT step at 25 mph
+         *  (~670 m against tens of metres of wifi error) through, and rejects a tower jump, whose
+         *  displacement and error are the same size by construction. See [groundMps]. */
+        private const val GROUND_SNR = 3.0f
+
+        /** Assumed horizontal error for a fix that reports none. Roughly a clean GNSS fix — if a
+         *  provider won't say, believing it is precise is the risky read, not the safe one, so
+         *  this is deliberately not 0. */
+        private const val NOMINAL_ACC_M = 30.0f
 
         // Motion-onset: below this ground speed nothing vehicular is happening yet (just
         // above a brisk walk, ~3.4 mph), so we don't promote — the re-armed trigger and
