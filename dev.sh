@@ -85,6 +85,10 @@ fi
 
 cycle() {
   "$GRADLE" "${ARGS[@]}"
+  # Force-stop first: installing over a RUNNING instance can leave the old service worker
+  # in control of a live WebView (new SW parks at "waiting", app looks stuck on the old
+  # bundle). A cold start fetches the new sw.js and skipWaiting/clientsClaim take it live.
+  "${DEV[@]}" shell am force-stop "$PKG" >/dev/null 2>&1 || true
   # -r keeps app data across reinstalls; the stable signing key makes it an in-place update.
   "${DEV[@]}" install -r "$APK"
   "${DEV[@]}" shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 || true
