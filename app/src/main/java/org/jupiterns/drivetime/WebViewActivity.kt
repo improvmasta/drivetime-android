@@ -779,6 +779,13 @@ class WebViewActivity : AppCompatActivity() {
         @JavascriptInterface
         fun pullBattery(sinceTs: Double): String = WebBatteryBuffer.pullSince(this@WebViewActivity, sinceTs)
 
+        /** JSON array of accel-extractor events (hard brake / hard launch) at or after
+         *  [sinceTs] (INSIGHTS P3a). The SPA stores them keyed `kind|ts` (idempotent) and
+         *  merges them into the drive's `drive_stats` perf marks at seal. Raw sensor data
+         *  never crosses this bridge — events only. */
+        @JavascriptInterface
+        fun pullEvents(sinceTs: Double): String = WebEventBuffer.pullSince(this@WebViewActivity, sinceTs)
+
         /** JSON array of tracker-liveness rows at or after [sinceTs] — the `down` windows the
          *  logger was NOT running (with why), and the `cond` transitions in what it needs to work
          *  (location services, permissions, power saver). See [Health].

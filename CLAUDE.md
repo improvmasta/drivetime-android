@@ -86,6 +86,17 @@ adds to what GPS already knows. *(The old
 activity-recognition `TripDetector` is retired — its slow-traffic car/bike guess was the unreliable
 part. The code remains, opt-in behind `auto_trip`, and is not armed by default.)*
 
+**The accel extractor + burst tiers (Insights P3).** While the DRIVING tier is active — and
+only then — `AccelExtractor` consumes a batched ~50 Hz accelerometer at the edge (per-second
+peaks of gravity-removed magnitude, O(1) per sample, reconciler-thread confined like all tier
+state). **GPS speed deltas decide events; accel only refines** timestamp/magnitude — a phone
+knocked off its mount is not a hard brake, so accel alone never mints one. Hard brakes /
+hard launches land in `web_events.jsonl` (`WebEventBuffer`, drained by the SPA over
+`pullEvents` into `drive_stats` at seal — raw samples never cross the bridge). An event, or
+an accel spike at standstill (the car is launching before 3 s GPS notices), triggers a 25 s
+burst of 1 s HIGH_ACCURACY fixes (`burstUntil` in `adaptSampling`), then the normal cadence
+restores. Base GPS rate and retention are untouched — density is transient and on-trigger.
+
 **Fixes are durable.** `Uploader` writes an on-disk queue that is atomic, size-capped (16 MB,
 drop-oldest), and ordered; only lines the server actually acked are deleted; failures back off
 exponentially. Flushes fire on a tier-aware cadence (~10 s driving, ~45 s light), on batch-full,

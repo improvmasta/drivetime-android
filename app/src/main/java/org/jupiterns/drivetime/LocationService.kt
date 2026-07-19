@@ -22,6 +22,7 @@ import android.location.Location
 import android.net.ConnectivityManager
 import android.net.Network
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
 import android.os.SystemClock
 import android.widget.RemoteViews
@@ -172,6 +173,13 @@ class LocationService : Service() {
     private var idleMode = false
     private var slowCount = 0
     private var lastMoveLoc: Location? = null
+
+    // Accel event extractor (INSIGHTS P3a) + event-triggered 1 s GPS bursts (P3b). All
+    // reconciler-thread confined, like the tier state: samples are delivered on the
+    // reconciler's looper, fixes originate there, and applyTier starts/stops it there.
+    private var accelExtractor: AccelExtractor? = null
+    private var accelEventListener: SensorEventListener? = null
+    private var burstUntil = 0L // 1 s HIGH_ACCURACY until this wall-clock ms; 0 = no burst
     /** Previous fix, for the running [LiveState.driveMeters] sum. Distinct from lastMoveLoc,
      *  which adaptSampling resets on its own schedule. */
     private var lastDistLoc: Location? = null
@@ -400,8 +408,10 @@ class LocationService : Service() {
                 idleMode = false; slowCount = 0; lastMoveLoc = null
                 disarmMotionOnset()   // already dense; no point waking on motion
                 requestUpdates(drivingIntervalMs(), Priority.PRIORITY_HIGH_ACCURACY)
+                startAccelExtractor() // INSIGHTS P3a: continuous accel while DRIVING only
             }
             DriveDetector.Tier.LIGHT -> {
+                stopAccelExtractor()
                 requestUpdates(settings.lightIntervalSec * 1000L, Priority.PRIORITY_BALANCED_POWER_ACCURACY)
                 armMotionOnset()      // catch the next start within seconds, in any car
             }
@@ -692,12 +702,78 @@ class LocationService : Service() {
         LiveState.moving = detector.isMoving
         LiveState.stoppedSince = detector.stoppedSince
         reevaluate()
-        if (currentTier == DriveDetector.Tier.DRIVING) adaptSampling(loc)
+        if (currentTier == DriveDetector.Tier.DRIVING) {
+            // INSIGHTS P3a: the GPS half of the fusion — the speed delta decides events, the
+            // accel window refines them. Same thread as the samples (reconciler).
+            accelExtractor?.onFix(loc.time / 1000, speed?.let { (it * 2.2369362f).toDouble() })
+            adaptSampling(loc)
+        }
         // Coalesce the drive-card redraw: only re-post when a value the card actually shows has
         // changed (speed int, miles at 0.1, marker count, tier). The elapsed Chronometer ticks
         // natively without a redraw, so a per-fix (~1 Hz) notify() would be pure battery cost for
         // an identical card — this is the cheapest real win of Phase 5.
         maybeUpdateNotification()
+    }
+
+    // ---- accel event extractor + burst tiers (INSIGHTS P3a/P3b) --------------------------
+
+    /**
+     * Start the continuous accelerometer while DRIVING (P3a). Batched — [ACCEL_BATCH_US] of
+     * report latency lets the sensor hub queue samples in hardware FIFO so the CPU naps; the
+     * listener is delivered on the reconciler's looper, where each sample is O(1) peak math
+     * in [AccelExtractor]. Idempotent: already running = no-op.
+     */
+    private fun startAccelExtractor() {
+        reconciler.requireOwnThread("startAccelExtractor")
+        if (accelEventListener != null) return
+        val sm = sensors ?: return
+        val sensor = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) ?: return
+        val extractor = accelExtractor ?: AccelExtractor(
+            onEvent = { ev ->
+                runCatching {
+                    WebEventBuffer.append(this, ev.ts, ev.kind, ev.mag, ev.mphs, ev.fromMph, ev.toMph)
+                }
+                EventLog.debug("Accel event: ${ev.kind} ${ev.mphs} mph/s")
+            },
+            onBurst = { triggerBurst() },
+        ).also { accelExtractor = it }
+        extractor.reset()
+        val l = object : SensorEventListener {
+            override fun onSensorChanged(e: SensorEvent) {
+                // SensorEvent.timestamp is elapsedRealtimeNanos — convert to epoch ms so the
+                // peaks line up with fix timestamps.
+                val epochMs = System.currentTimeMillis() -
+                    (SystemClock.elapsedRealtimeNanos() - e.timestamp) / 1_000_000
+                extractor.onAccelSample(epochMs, e.values[0], e.values[1], e.values[2])
+            }
+            override fun onAccuracyChanged(s: Sensor?, a: Int) {}
+        }
+        accelEventListener = l
+        sm.registerListener(l, sensor, ACCEL_PERIOD_US, ACCEL_BATCH_US, Handler(reconciler.looper))
+    }
+
+    /** Stop the extractor (tier left DRIVING). The sensor goes fully dark between drives. */
+    private fun stopAccelExtractor() {
+        reconciler.requireOwnThread("stopAccelExtractor")
+        burstUntil = 0L
+        accelEventListener?.let { runCatching { sensors?.unregisterListener(it) } }
+        accelEventListener = null
+        accelExtractor?.reset()
+    }
+
+    /**
+     * Event-triggered 1 s GPS burst (P3b): a launch from standstill or a brake event flips
+     * the dense tier to 1 s HIGH_ACCURACY for [BURST_MS], then [adaptSampling] restores the
+     * normal cadence. Upgrades 0-60 from ±1.5 s to ~±0.5 s for seconds-per-drive of extra
+     * GPS; burst fixes flow through the normal fix path (they're just fixes).
+     */
+    private fun triggerBurst() {
+        reconciler.requireOwnThread("triggerBurst")
+        if (currentTier != DriveDetector.Tier.DRIVING) return
+        burstUntil = Clock.now() + BURST_MS
+        idleMode = false
+        slowCount = 0
+        requestUpdates(1000L, Priority.PRIORITY_HIGH_ACCURACY)
     }
 
     /**
@@ -706,6 +782,16 @@ class LocationService : Service() {
      * this no longer ends the trip — it only trades dense for idle.
      */
     private fun adaptSampling(loc: Location) {
+        // An active burst (P3b) pins 1 s sampling; on expiry, restore the dense cadence and
+        // let the ordinary moving/idle logic take over again from the next fix.
+        if (burstUntil != 0L) {
+            if (Clock.now() < burstUntil) {
+                requestUpdates(1000L, Priority.PRIORITY_HIGH_ACCURACY)
+                return
+            }
+            burstUntil = 0L
+            requestUpdates(drivingIntervalMs(), Priority.PRIORITY_HIGH_ACCURACY)
+        }
         val ref = lastMoveLoc
         val moved = if (ref != null) ref.distanceTo(loc) else Float.MAX_VALUE
         val speed = if (loc.hasSpeed()) loc.speed else 0f
@@ -1051,6 +1137,7 @@ class LocationService : Service() {
         disarmMotionOnset()
         runCatching { onsetTokenSource?.cancel() }
         accelListener?.let { runCatching { sensors?.unregisterListener(it) } }
+        accelEventListener?.let { runCatching { sensors?.unregisterListener(it) } }
         // runCatching like every other teardown call here: a throw on the way out would skip the
         // reconciler quit, the OBD close and the final flush below it, and take the drive's last
         // batch with it.
@@ -1359,6 +1446,11 @@ class LocationService : Service() {
 
         // Motion-onset accelerometer sampling window after a significant-motion wake.
         private const val ACCEL_SAMPLE_MS = 3_000L
+
+        // Accel extractor + burst tiers (INSIGHTS P3a/P3b)
+        private const val ACCEL_PERIOD_US = 20_000     // ~50 Hz — well under the permission line
+        private const val ACCEL_BATCH_US = 5_000_000   // 5 s hardware-FIFO batching; the CPU naps
+        private const val BURST_MS = 25_000L           // 1 s HIGH_ACCURACY window after an event
 
         // The OBD probe/retry/wedge cadences now live with the decisions that read them, in
         // ObdSession — a constant whose only reader is a policy belongs next to the policy.
