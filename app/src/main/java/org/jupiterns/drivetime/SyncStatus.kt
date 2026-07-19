@@ -3,7 +3,7 @@ package org.jupiterns.drivetime
 import org.json.JSONObject
 
 /**
- * Assembles the connection/upload status the SPA's Sync tab renders — extracted from
+ * Assembles the connection/upload status the SPA's server block (Settings → Advanced) renders — extracted from
  * WebViewActivity so it's plain, JVM-testable JSON/state code with no Activity in sight.
  */
 class SyncStatus(private val settings: Settings, private val uploader: Uploader) {

@@ -116,7 +116,7 @@ class WebViewActivity : AppCompatActivity() {
     private lateinit var csvSaveLauncher: ActivityResultLauncher<String>
     @Volatile private var pendingSaveAs: ByteArray? = null
 
-    // Last "Test connection" result, surfaced back to the SPA's Sync tab via getStatus().
+    // Last "Test connection" result, surfaced back to the SPA's server block (Settings → Advanced) via getStatus().
     @Volatile private var lastTestMsg: String = ""
     @Volatile private var lastTestKind: String = ""   // "good" | "bad" | "warn" | ""
 
@@ -1158,16 +1158,16 @@ class WebViewActivity : AppCompatActivity() {
             }
         }
 
-        /** Launch the QR pairing scanner (Sync tab). */
+        /** Launch the QR pairing scanner (Settings → Advanced → Server). */
         @JavascriptInterface
         fun scanPairingQr() { ui.post { startPairScan() } }
 
         /** Apply a pasted pairing payload — a `drivetime://pair?…` link or a bare token
-         *  (Sync tab). Keeps any server URL the user already set. */
+         *  (Settings → Advanced → Server). Keeps any server URL the user already set. */
         @JavascriptInterface
         fun pastePairing(payload: String) { ui.post { applyPairing(payload) } }
 
-        /** Probe the configured server and stash the result for [getStatus] (Sync tab). */
+        /** Probe the configured server and stash the result for [getStatus] (Settings → Advanced → Server). */
         @JavascriptInterface
         fun testConnection() { ui.post { this@WebViewActivity.testConnection() } }
 
@@ -1176,11 +1176,11 @@ class WebViewActivity : AppCompatActivity() {
         // 'function'` before every bridge call, so a missing method is a silent no-op, not a
         // crash. Do not add an update method back — the app cannot update itself (Play policy).
 
-        /** Export settings to a file via the system picker (Sync/Backup). */
+        /** Export settings to a file via the system picker (Advanced → Automation). */
         @JavascriptInterface
         fun exportBackup() { ui.post { exportLauncher.launch("drivetime-settings.json") } }
 
-        /** Import settings from a file via the system picker (Sync/Backup). */
+        /** Import settings from a file via the system picker (Advanced → Automation). */
         @JavascriptInterface
         fun importBackup() { ui.post { importLauncher.launch(arrayOf("application/json", "*/*")) } }
 

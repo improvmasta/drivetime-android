@@ -23,7 +23,7 @@
   no credential, so a cloud restore brings a phone back configured, with its drives, and asks only
   that you re-pair and reconnect Drive.
 
-  The full-fidelity path is neither of these: the app's own backup (Settings -> Sync & Backup,
+  The full-fidelity path is neither of these: the app's own backup (Settings -> Backup,
   BACKUP.md) carries settings AND drives AND credentials, and restores a working, paired app.
 -->
 <data-extraction-rules>
